@@ -1,72 +1,64 @@
-"""AVS Migration Analytics — Streamlit application entry point.
+"""AVS Migration Analytics — application assembly.
 
-Run with:  streamlit run app/main.py
-(or double-click the packaged launcher, which does this for you).
+This module is imported by the root-level ``Home.py`` entry point, which is what
+``streamlit run`` executes.  Keeping the entry at the repo root ensures the
+``app`` package is importable and avoids Streamlit's automatic ``pages/``
+discovery (our report views live in ``app/views`` and are wired up explicitly
+via ``st.navigation``).
 """
 from __future__ import annotations
 
+import pandas as pd
 import streamlit as st
 
-# set_page_config must be the first Streamlit call.
-st.set_page_config(page_title="AVS Migration Analytics", page_icon="📈",
-                   layout="wide", initial_sidebar_state="expanded")
 
-import pandas as pd
+def run() -> None:
+    # set_page_config must be the first Streamlit command executed.
+    st.set_page_config(page_title="AVS Migration Analytics", page_icon="📈",
+                       layout="wide", initial_sidebar_state="expanded")
 
-from app import state
-from app.config import APP_NAME, APP_TAGLINE, APP_VERSION
-from app.ui.theme import inject_css
-from app.pages import (accounts_status, approved, approved_trends, avs_to_azure,
-                       closed, column_mapping, data_upload, eos_status, insights_page,
-                       nomination_trends, overview)
+    from app import state
+    from app.config import APP_NAME, APP_TAGLINE, APP_VERSION
+    from app.ui.theme import inject_css
+    from app.views import (accounts_status, approved, approved_trends, avs_to_azure,
+                           closed, column_mapping, data_upload, eos_status, insights_page,
+                           nomination_trends, overview)
 
-
-def _sidebar_brand(ctx) -> None:
-    st.sidebar.markdown(
-        f"<div style='padding:6px 0 2px 0'>"
-        f"<div style='font-size:1.25rem;font-weight:800;color:#0A4C86'>📈 {APP_NAME}</div>"
-        f"<div style='font-size:.78rem;color:#5C6470'>{APP_TAGLINE}</div></div>",
-        unsafe_allow_html=True)
-    st.sidebar.divider()
-
-    # Active dataset + as-of control
-    src = "Sample dataset" if ctx.is_sample else ctx.filename
-    st.sidebar.markdown(f"**Dataset:** {src}  \n**Rows:** {len(ctx.fact):,}")
-    lo = pd.Timestamp(ctx.as_of).date()
-    new_asof = st.sidebar.date_input("Reporting as-of date", value=lo,
-                                     help="Anchors This-Week/Month/Quarter/YTD windows.")
-    if pd.Timestamp(new_asof) != pd.Timestamp(ctx.as_of):
-        state.reload_with(as_of=pd.Timestamp(new_asof))
-        st.rerun()
-    st.sidebar.divider()
-
-
-def main() -> None:
     inject_css()
     ctx = state.ensure_context()
-    _sidebar_brand(ctx)
+    _sidebar_brand(ctx, state, APP_NAME, APP_TAGLINE)
 
+    # url_path must be explicit & unique because every view's callable is `render`.
     nav = st.navigation({
         "Executive": [
-            st.Page(overview.render, title="Overview", icon=":material/dashboard:", default=True),
-            st.Page(insights_page.render, title="Insights & Export", icon=":material/lightbulb:"),
+            st.Page(overview.render, title="Overview", icon=":material/dashboard:",
+                    url_path="overview", default=True),
+            st.Page(insights_page.render, title="Insights & Export",
+                    icon=":material/lightbulb:", url_path="insights"),
         ],
         "Status Reports": [
             st.Page(accounts_status.render, title="Accounts by Migration Status",
-                    icon=":material/donut_large:"),
-            st.Page(approved.render, title="Nominations Approved", icon=":material/task_alt:"),
-            st.Page(closed.render, title="Nominations Closed", icon=":material/check_circle:"),
-            st.Page(eos_status.render, title="AV36 EOS Status", icon=":material/warning:"),
+                    icon=":material/donut_large:", url_path="accounts-by-status"),
+            st.Page(approved.render, title="Nominations Approved", icon=":material/task_alt:",
+                    url_path="approved"),
+            st.Page(closed.render, title="Nominations Closed", icon=":material/check_circle:",
+                    url_path="closed"),
+            st.Page(eos_status.render, title="AV36 EOS Status", icon=":material/warning:",
+                    url_path="eos-status"),
         ],
         "Trend Analysis": [
-            st.Page(nomination_trends.render, title="Nomination Trends", icon=":material/timeline:"),
+            st.Page(nomination_trends.render, title="Nomination Trends",
+                    icon=":material/timeline:", url_path="nomination-trends"),
             st.Page(approved_trends.render, title="Approved Trend Analysis",
-                    icon=":material/trending_up:"),
-            st.Page(avs_to_azure.render, title="AVS → Azure Native", icon=":material/swap_horiz:"),
+                    icon=":material/trending_up:", url_path="approved-trends"),
+            st.Page(avs_to_azure.render, title="AVS to Azure Native",
+                    icon=":material/swap_horiz:", url_path="avs-to-azure"),
         ],
         "Data": [
-            st.Page(data_upload.render, title="Data & Upload", icon=":material/upload_file:"),
-            st.Page(column_mapping.render, title="Column Mapping", icon=":material/table_chart:"),
+            st.Page(data_upload.render, title="Data & Upload", icon=":material/upload_file:",
+                    url_path="data-upload"),
+            st.Page(column_mapping.render, title="Column Mapping",
+                    icon=":material/table_chart:", url_path="column-mapping"),
         ],
     })
 
@@ -75,4 +67,20 @@ def main() -> None:
     st.sidebar.caption(f"v{APP_VERSION} · Runs locally · No data leaves this machine")
 
 
-main()
+def _sidebar_brand(ctx, state, app_name: str, tagline: str) -> None:
+    st.sidebar.markdown(
+        f"<div style='padding:6px 0 2px 0'>"
+        f"<div style='font-size:1.25rem;font-weight:800;color:#0A4C86'>📈 {app_name}</div>"
+        f"<div style='font-size:.78rem;color:#5C6470'>{tagline}</div></div>",
+        unsafe_allow_html=True)
+    st.sidebar.divider()
+
+    src = "Sample dataset" if ctx.is_sample else ctx.filename
+    st.sidebar.markdown(f"**Dataset:** {src}  \n**Rows:** {len(ctx.fact):,}")
+    cur = pd.Timestamp(ctx.as_of).date()
+    new_asof = st.sidebar.date_input("Reporting as-of date", value=cur,
+                                     help="Anchors This-Week/Month/Quarter/YTD windows.")
+    if pd.Timestamp(new_asof) != pd.Timestamp(ctx.as_of):
+        state.reload_with(as_of=pd.Timestamp(new_asof))
+        st.rerun()
+    st.sidebar.divider()

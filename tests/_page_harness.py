@@ -19,5 +19,5 @@ inject_css()
 state.ensure_context()
 
 page = os.environ.get("AVS_PAGE", "overview")
-mod = importlib.import_module(f"app.pages.{page}")
+mod = importlib.import_module(f"app.views.{page}")
 mod.render()
