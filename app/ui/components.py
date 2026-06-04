@@ -109,7 +109,7 @@ def filter_sidebar(ctx: DataContext, fields: list[str], date_field: str | None =
 
     n = analytics.total_rows(con, analytics.build_where(filters))
     st.sidebar.caption(f"**{fmt_int(n)}** of {fmt_int(len(ctx.fact))} nominations in view")
-    if st.sidebar.button("Reset filters", use_container_width=True, key=f"{key_prefix}_reset"):
+    if st.sidebar.button("Reset filters", width="stretch", key=f"{key_prefix}_reset"):
         for k in list(st.session_state.keys()):
             if k.startswith(key_prefix + "_"):
                 del st.session_state[k]
@@ -132,8 +132,30 @@ _NICE.update({
 
 def show_table(df: pd.DataFrame, height: int | None = None, hide_index: bool = True) -> None:
     disp = df.rename(columns={c: _NICE.get(c, c.replace("_", " ").title()) for c in df.columns})
-    st.dataframe(disp, use_container_width=True, height=height, hide_index=hide_index)
+    kwargs = {"width": "stretch", "hide_index": hide_index}
+    if height is not None:
+        kwargs["height"] = height
+    st.dataframe(disp, **kwargs)
 
 
 def empty_state(msg: str = "No records match the current filters.") -> None:
     st.info(msg)
+
+
+# --------------------------------------------------------------------------- #
+# Period KPI row (WTD / MTD / QTD / YTD)
+# --------------------------------------------------------------------------- #
+def period_kpi_row(dates: pd.Series, as_of, verb: str = "") -> None:
+    """Render This-Week/Month/Quarter/YTD counts with vs-prior deltas."""
+    from ..core import metrics
+    counts = metrics.count_in_periods(dates, as_of)
+    defs = [("week", "This Week"), ("month", "This Month"),
+            ("quarter", "This Quarter"), ("ytd", "Year-to-Date")]
+    items = []
+    for key, label in defs:
+        cur = counts[key]
+        prior = metrics.prior_equivalent_count(dates, as_of, key)
+        delta = metrics.pct_delta(cur, prior)
+        items.append({"label": f"{verb} {label}".strip(), "value": fmt_int(cur),
+                      "delta": delta, "delta_label": "vs prior"})
+    kpi_row(items)

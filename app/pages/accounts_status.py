@@ -1,0 +1,83 @@
+"""Report 1 — Accounts by Migration Status."""
+from __future__ import annotations
+
+import streamlit as st
+
+from app import state
+from app.core import analytics
+from app.core.metrics import fmt_int
+from app.ui import charts, components
+from app.ui.theme import page_header, section
+
+
+def render() -> None:
+    ctx = state.ensure_context()
+    page_header("Accounts by Migration Status",
+                "Distribution of accounts and nominations across the migration pipeline.")
+    components.data_quality_banner(ctx)
+
+    filters, where = components.filter_sidebar(
+        ctx, ["ww_region", "region", "migration_status_label", "factory_offering"],
+        date_field="created_date")
+
+    con = ctx.con
+    total = analytics.total_rows(con, where)
+    if total == 0:
+        components.empty_state()
+        return
+    accounts = int(analytics.scalar(con, where, "COUNT(DISTINCT tpid)"))
+    statuses = int(analytics.scalar(con, where, "COUNT(DISTINCT migration_status_label)"))
+
+    components.kpi_row([
+        {"label": "Nominations", "value": fmt_int(total)},
+        {"label": "Distinct Accounts", "value": fmt_int(accounts)},
+        {"label": "Pipeline Stages", "value": fmt_int(statuses)},
+        {"label": "Regions", "value": fmt_int(int(analytics.scalar(con, where, "COUNT(DISTINCT ww_region)")))},
+    ])
+    st.write("")
+
+    section("Status distribution")
+    c1, c2 = st.columns([1, 1.2])
+    with c1:
+        status = analytics.count_by(con, where, "migration_status_label")
+        st.plotly_chart(charts.donut(status, "category", "count",
+                                     title="Nominations by migration status"),
+                        width="stretch")
+    with c2:
+        acct = analytics.distinct_count_by(con, where, "migration_status_label", "tpid")
+        st.plotly_chart(charts.bar(acct, "category", "count", horizontal=True,
+                                   title="Accounts by migration status"),
+                        width="stretch")
+
+    section("Regional breakdown")
+    pivot = analytics.crosstab(con, where, "ww_region", "migration_status_label")
+    c3, c4 = st.columns(2)
+    with c3:
+        if not pivot.empty:
+            mode = st.radio("View", ["Counts", "Share %"], horizontal=True, key="as_mode",
+                            label_visibility="collapsed")
+            st.plotly_chart(
+                charts.stacked_bar(pivot, title="Migration status by region",
+                                   percent=(mode == "Share %")),
+                width="stretch")
+    with c4:
+        if not pivot.empty:
+            st.plotly_chart(charts.heatmap(pivot, title="Region × status heatmap"),
+                            width="stretch")
+
+    section("Drill-down")
+    dim = st.selectbox("Group accounts by",
+                       ["region", "area", "customer_segment", "factory_offering", "phase"],
+                       format_func=lambda x: x.replace("_", " ").title(), key="as_dim")
+    breakdown = analytics.crosstab(con, where, dim, "migration_status_label")
+    if not breakdown.empty:
+        breakdown = breakdown.assign(Total=breakdown.sum(axis=1)).sort_values("Total", ascending=False)
+        components.show_table(breakdown.reset_index().rename(columns={"row": dim}))
+
+    section("Nomination records")
+    cols = ["task_id", "customer_name", "ww_region", "region", "factory_offering",
+            "migration_status_label", "eos_status", "current_state", "total_acr", "created_date"]
+    cols = [c for c in cols if c in ctx.fact.columns]
+    rows = analytics.fetch_rows(con, where, cols, "created_date", True, 500)
+    components.show_table(rows, height=420)
+    st.caption(f"Showing up to 500 of {fmt_int(total)} records.")
