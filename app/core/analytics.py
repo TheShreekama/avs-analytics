@@ -202,6 +202,11 @@ def migration_stage_by_track(con, where: str) -> pd.DataFrame:
     return con.execute(sql).fetchdf()
 
 
+def select_all(con, where: str = "") -> pd.DataFrame:
+    """Fetch the filtered fact frame (for insights / pandas-side calculations)."""
+    return con.execute(f"SELECT * FROM fact {where}").fetchdf()
+
+
 def distinct_values(con, col: str) -> list:
     sql = f'SELECT DISTINCT "{col}" AS v FROM fact WHERE "{col}" IS NOT NULL ORDER BY 1'
     return [r[0] for r in con.execute(sql).fetchall()]
