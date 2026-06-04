@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# App user data & caches
+.avs_data/
+*.duckdb
+.streamlit/secrets.toml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Packaging build artifacts
+packaging/build/
+packaging/dist/
+*.zip
+python-embed*/
+
+# Test/exports
+exports/
+*.tmp
