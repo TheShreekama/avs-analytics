@@ -72,11 +72,12 @@ streamlit run Home.py
 | 1 | **Accounts by Migration Status** | Account/nomination counts by status, regional breakdown, donut + stacked bar + heatmap + drill‑down grid |
 | 2 | **Nominations Approved** | Approved This‑Week/Month/Quarter/YTD, daily/weekly/monthly trends, regional & track comparison, approval latency |
 | 3 | **Nominations Closed** | Closure velocity, closure rate by region, aging, longest‑open & recently‑closed lists |
-| 4 | **AV36 EOS Status** | Derived status taxonomy (On Track / Completed / At Risk / Delayed / Blocked / Cancelled), Region × Status heatmap, aging, risk hotspots |
+| 4 | **AV36 EOS Status** | Scoped to **AV36/EOS** nominations (any wave with an AV36/EOS path); derived status taxonomy (On Track / Completed / At Risk / Delayed / Blocked / Cancelled), Region × Status heatmap, aging, risk hotspots |
 | 5 | **Nomination Trends** | Monthly / quarterly / yearly volume, cumulative, peaks/troughs, seasonality |
 | 6 | **Approved Trend Analysis** | 1/2/3‑year windows, YoY & MoM, cumulative, growth rates (actuals only — no forecasting) |
 | 7 | **AVS → Azure Native** | Sankey flow, track & target distribution, Started/In‑Progress/Completed, completion & backlog, adoption insights |
-| 💡 | **Insights & Export** | Full deterministic insights engine + one‑click executive **PDF** export |
+| 💡 | **Insights** | Full deterministic insights engine, grouped by category |
+| 📄 | **Reports & Export** | Build a comprehensive or module‑specific executive **PDF**; CSV exports |
 
 Every report has **Region / Status / Track / Date‑range filters** and an adjustable
 **"as‑of" date** that anchors all This‑Week/Month/Quarter/YTD windows.
@@ -99,11 +100,33 @@ Rules derived directly from the data, including:
 
 ---
 
-## 📄 Executive PDF Export
+## 🔁 Counting modes & wave deduplication
 
-One click produces a leadership‑ready PDF: cover page, executive summary, KPI grid,
-charts, ranked insights, key tables, and a generation timestamp. Charts are rendered
-locally (bundled Chromium via `kaleido`) — no internet needed.
+A customer often has **multiple waves** (Wave‑1, Wave‑2 …). Counting every wave would
+double‑count the customer, so the app supports two counting modes via a **global toggle**
+in the sidebar:
+
+- **Customer (deduplicated)** — *default*. Each customer counts **once**. Following the
+  agreed rules:
+  - **Category membership = any wave.** A customer is an **AV36 EOS** nomination if *any*
+    of its waves has an AV36/EOS migration path; likewise **AVS → Azure Native** if any
+    wave is a from‑AVS path.
+  - **Approval date = Wave‑1** (the first/lowest‑numbered wave).
+  - **Status = last wave.** If the last wave is done/completed the account is **closed**;
+    otherwise it takes the last wave's operational/EOS status.
+- **Nomination (wave‑level)** — every wave/row counts (raw detail).
+
+This applies across all reports, so headline numbers reflect real accounts rather than
+inflated wave counts. The sidebar shows both totals (e.g. *Waves: 1,240 · Accounts: 815*).
+
+## 📄 Reports & PDF Export
+
+The **Reports** page produces a leadership‑ready PDF. Choose a **comprehensive** report
+(all modules) or **select specific modules** (Overview, Approved, Closed, AV36 EOS, Trends,
+AVS→Azure, Insights, Tables). Every PDF includes a cover, executive summary, KPI grid,
+charts, ranked insights and a generation timestamp. Charts are rendered locally (bundled
+Chromium via `kaleido`) — no internet needed. CSV exports of the cleaned data and insights
+are available too.
 
 ---
 

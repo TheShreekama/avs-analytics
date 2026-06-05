@@ -12,13 +12,16 @@ from app.ui.theme import page_header, section
 
 def render() -> None:
     ctx = state.ensure_context()
+    table = state.active_table()
+    analytics.use_table(table)
+    unit = state.unit_label().title()
     page_header("Executive Overview",
                 "Portfolio-wide view of AVS migration nominations, approvals and delivery health.")
     components.data_quality_banner(ctx)
 
     filters, where = components.filter_sidebar(
         ctx, ["ww_region", "factory_offering", "migration_status_label", "eos_status"],
-        date_field="created_date")
+        date_field="created_date", table=table)
 
     fact = analytics.select_all(ctx.con, where)
     if fact.empty:
@@ -27,7 +30,7 @@ def render() -> None:
     k = headline_kpis(fact)
 
     components.kpi_row([
-        {"label": "Nominations", "value": fmt_int(k["nominations"]), "sub": f'{fmt_int(k["accounts"])} accounts'},
+        {"label": unit, "value": fmt_int(k["nominations"]), "sub": f'{fmt_int(k["accounts"])} accounts'},
         {"label": "Approved", "value": fmt_int(k["approved"]), "tone": "good"},
         {"label": "Closed", "value": fmt_int(k["closed"]),
          "sub": f'{k["closure_rate"]:.0f}% closure rate', "tone": "good"},

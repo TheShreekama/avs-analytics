@@ -76,20 +76,22 @@ _FILTER_LABELS = {f.key: f.label for f in schema.CANONICAL_FIELDS}
 
 
 def filter_sidebar(ctx: DataContext, fields: list[str], date_field: str | None = "created_date",
-                   key_prefix: str = "f") -> tuple[dict, str]:
+                   key_prefix: str = "f", table: str = "fact") -> tuple[dict, str]:
     """Render filter widgets in the sidebar; return (filters_dict, where_clause).
 
     ``fields`` are canonical categorical keys to expose as multiselects.
     ``date_field`` (if given) adds a date-range filter on that column.
+    ``table`` selects the counting grain (``fact`` or ``customer``).
     """
     filters: dict = {}
     con = ctx.con
+    frame = ctx.customer if table == "customer" else ctx.fact
     st.sidebar.markdown("### 🔎 Filters")
 
     for key in fields:
-        if key not in ctx.fact.columns:
+        if key not in frame.columns:
             continue
-        opts = analytics.distinct_values(con, key)
+        opts = analytics.distinct_values(con, key, table=table)
         if not opts:
             continue
         sel = st.sidebar.multiselect(_FILTER_LABELS.get(key, key), opts,
@@ -97,8 +99,8 @@ def filter_sidebar(ctx: DataContext, fields: list[str], date_field: str | None =
         if sel:
             filters[key] = sel
 
-    if date_field and date_field in ctx.fact.columns:
-        lo, hi = analytics.date_bounds(con, date_field)
+    if date_field and date_field in frame.columns:
+        lo, hi = analytics.date_bounds(con, date_field, table=table)
         if lo is not None and hi is not None:
             lo, hi = pd.Timestamp(lo).date(), pd.Timestamp(hi).date()
             label = _FILTER_LABELS.get(date_field, date_field) + " range"
@@ -107,8 +109,9 @@ def filter_sidebar(ctx: DataContext, fields: list[str], date_field: str | None =
             if isinstance(rng, (tuple, list)) and len(rng) == 2:
                 filters["_date"] = {"col": date_field, "start": rng[0], "end": rng[1]}
 
-    n = analytics.total_rows(con, analytics.build_where(filters))
-    st.sidebar.caption(f"**{fmt_int(n)}** of {fmt_int(len(ctx.fact))} nominations in view")
+    n = analytics.total_rows(con, analytics.build_where(filters), table=table)
+    unit = "accounts" if table == "customer" else "nominations"
+    st.sidebar.caption(f"**{fmt_int(n)}** of {fmt_int(len(frame))} {unit} in view")
     if st.sidebar.button("Reset filters", width="stretch", key=f"{key_prefix}_reset"):
         for k in list(st.session_state.keys()):
             if k.startswith(key_prefix + "_"):
@@ -140,6 +143,11 @@ def show_table(df: pd.DataFrame, height: int | None = None, hide_index: bool = T
 
 def empty_state(msg: str = "No records match the current filters.") -> None:
     st.info(msg)
+
+
+def banner_note(text: str) -> None:
+    """Small informational banner (used for mode-specific hints)."""
+    banner(text)
 
 
 # --------------------------------------------------------------------------- #

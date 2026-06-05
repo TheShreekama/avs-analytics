@@ -19,7 +19,8 @@ Closure velocity, closure‑rate gauge, aging, longest‑open & recently‑close
 ![Nominations Closed](screenshots/04_closed.png)
 
 ## 4 · AV36 EOS Status
-Derived status taxonomy, Region × EOS heatmap (risk concentration), trend & aging.
+Scoped to AV36/EOS nominations (deduplicated by customer). Derived status taxonomy,
+Region × EOS heatmap, trend & aging. Note the **counting‑mode toggle** in the sidebar.
 ![AV36 EOS Status](screenshots/05_eos_status.png)
 
 ## 5 · Nomination Trends
@@ -34,9 +35,13 @@ Monthly/quarterly/yearly volume with peak/trough annotations, cumulative, season
 Sankey flow, track & target distribution, Started/In‑Progress/Completed, adoption trend.
 ![AVS to Azure Native](screenshots/08_avs_to_azure.png)
 
-## Insights & Export
-Full deterministic insights engine, grouped by category, with one‑click PDF export.
-![Insights & Export](screenshots/09_insights.png)
+## Insights
+Full deterministic insights engine, grouped by category.
+![Insights](screenshots/09_insights.png)
+
+## Reports & PDF Export
+Build a comprehensive report or pick specific modules; one‑click local PDF + CSV exports.
+![Reports & Export](screenshots/12_reports.png)
 
 ## Data & Upload
 File upload with a per‑column fill/quality profile of the source file.

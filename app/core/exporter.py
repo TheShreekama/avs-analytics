@@ -1,12 +1,13 @@
 """Executive PDF export engine (ReportLab + Plotly/kaleido static images).
 
-Produces a leadership-ready PDF: cover, executive summary, KPI grid, key charts,
-deterministic insights, and key tables, with a generation timestamp.  Fully
-local — no network, no external services.
+Produces a leadership-ready PDF.  The report is assembled from selectable
+*sections* so the Reports page can export a single module or a comprehensive
+report.  Fully local — no network, no external services.
 """
 from __future__ import annotations
 
 import io
+import re
 from datetime import datetime
 
 import pandas as pd
@@ -32,6 +33,19 @@ _SEV_COLOR = {"positive": colors.HexColor(PALETTE["good"]),
               "warning": colors.HexColor(PALETTE["warn"]),
               "critical": colors.HexColor(PALETTE["bad"]),
               "info": _PRIMARY}
+
+# Section keys exposed on the Reports page.
+SECTION_LIBRARY = [
+    ("overview", "Portfolio Overview (status, regions, delivery health)"),
+    ("approved", "Nominations Approved (trend & regional)"),
+    ("closed", "Nominations Closed (closure rate & aging)"),
+    ("eos", "AV36 EOS Status"),
+    ("trends", "Nomination Trends"),
+    ("avs_azure", "AVS → Azure Native"),
+    ("insights", "Insights"),
+    ("tables", "Key operational tables"),
+]
+SECTION_KEYS = [k for k, _ in SECTION_LIBRARY]
 
 
 def _styles():
@@ -67,9 +81,9 @@ def _header_footer(canvas, doc):
     canvas.restoreState()
 
 
-def _kpi_table(kpis: dict, ss) -> Table:
+def _kpi_table(kpis: dict, ss, unit: str) -> Table:
     rows = [
-        ["Nominations", fmt_int(kpis["nominations"]), "Accounts", fmt_int(kpis["accounts"])],
+        [unit.title(), fmt_int(kpis["nominations"]), "Accounts", fmt_int(kpis["accounts"])],
         ["Approved", fmt_int(kpis["approved"]), "Closed", fmt_int(kpis["closed"])],
         ["Open / In-flight", fmt_int(kpis["open"]), "Closure Rate", f'{kpis["closure_rate"]:.0f}%'],
         ["Total ACR", fmt_currency(kpis["total_acr"]), "Total Cores", fmt_int(kpis["total_cores"])],
@@ -118,8 +132,153 @@ def _img(fig, width_cm=17.0, height_px=330, width_px=950):
     return img
 
 
-def build_executive_pdf(ctx, where: str = "", scope_label: str = "All data") -> bytes:
-    """Build the executive PDF and return the bytes."""
+def _strip(text: str) -> str:
+    """Convert markdown bold (**x**) to ReportLab bold tags."""
+    return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", str(text))
+
+
+# --------------------------------------------------------------------------- #
+# Section builders — each returns a list of flowables
+# --------------------------------------------------------------------------- #
+def _sec_overview(con, where, ss) -> list:
+    out = [Paragraph("Portfolio Overview", ss["H1"])]
+    status = analytics.count_by(con, where, "migration_status_label")
+    if not status.empty:
+        out += [Paragraph("By Migration Status", ss["H2"]),
+                _img(charts.donut(status, "category", "count", height=320)), Spacer(1, 0.2 * cm)]
+    reg = analytics.count_by(con, where, "ww_region")
+    if not reg.empty:
+        out += [Paragraph("By Region", ss["H2"]),
+                _img(charts.bar(reg, "category", "count", horizontal=True, height=290))]
+    out.append(PageBreak())
+    return out
+
+
+def _sec_approved(con, where, ss) -> list:
+    w = analytics._where_and(where, '"is_approved" = TRUE')
+    out = [Paragraph("Nominations Approved", ss["H1"])]
+    trend = analytics.timeseries(con, w, "approval_date", "month")
+    if not trend.empty:
+        out += [Paragraph("Monthly Approval Trend", ss["H2"]),
+                _img(charts.line(trend, "period", "value", area=True, height=300))]
+    reg = analytics.count_by(con, w, "ww_region")
+    if not reg.empty:
+        out += [Paragraph("Approvals by Region", ss["H2"]),
+                _img(charts.bar(reg, "category", "count", horizontal=True, height=270))]
+    out.append(PageBreak())
+    return out
+
+
+def _sec_closed(con, where, ss) -> list:
+    out = [Paragraph("Nominations Closed", ss["H1"])]
+    cr = analytics.closure_rate_by(con, where, "ww_region")
+    if not cr.empty:
+        out += [Paragraph("Closure Rate by Region", ss["H2"]),
+                _img(charts.bar(cr, "category", "closure_rate", horizontal=True, height=270))]
+    aging = analytics.aging_buckets(con, where, only_open=True)
+    if not aging.empty:
+        out += [Paragraph("Age of Open Nominations", ss["H2"]),
+                _img(charts.bar(aging.astype({"bucket": str}), "bucket", "count", height=270))]
+    out.append(PageBreak())
+    return out
+
+
+def _sec_eos(con, where, ss) -> list:
+    w = analytics._where_and(where, '"is_av36_eos" = TRUE')
+    out = [Paragraph("AV36 EOS Status", ss["H1"]),
+           Paragraph("Scope: nominations with an AV36/EOS migration path.", ss["Muted"])]
+    dist = analytics.count_by(con, w, "eos_status")
+    if not dist.empty:
+        out += [Paragraph("EOS Status Distribution", ss["H2"]),
+                _img(charts.bar(dist, "category", "count", color_status=True, height=290))]
+    pivot = analytics.crosstab(con, w, "ww_region", "eos_status")
+    if not pivot.empty:
+        out += [Paragraph("Region × EOS Status", ss["H2"]),
+                _img(charts.heatmap(pivot, height=300))]
+    out.append(PageBreak())
+    return out
+
+
+def _sec_trends(con, where, ss) -> list:
+    out = [Paragraph("Nomination Trends", ss["H1"])]
+    ts = analytics.timeseries(con, where, "created_date", "month")
+    if not ts.empty:
+        out += [Paragraph("Monthly Volume", ss["H2"]),
+                _img(charts.line(ts, "period", "value", area=True, height=290)),
+                Paragraph("Cumulative", ss["H2"]),
+                _img(charts.line(ts, "period", "cumulative", height=270, color="#5C2E91"))]
+    out.append(PageBreak())
+    return out
+
+
+def _sec_avs_azure(con, where, ss) -> list:
+    w = analytics._where_and(where, '"migration_direction" = \'AVS → Azure Native\'')
+    out = [Paragraph("AVS → Azure Native", ss["H1"])]
+    tgt = analytics.count_by(con, w, "azure_target")
+    if not tgt.empty:
+        out += [Paragraph("Azure-Native Targets", ss["H2"]),
+                _img(charts.donut(tgt, "category", "count", height=300))]
+    stage = analytics.migration_stage_by_track(con, w)
+    if not stage.empty:
+        out += [Paragraph("Delivery Stage by Track", ss["H2"]),
+                _img(charts.grouped_bar(stage, "track", ["started", "in_progress", "completed"],
+                                        height=290))]
+    out.append(PageBreak())
+    return out
+
+
+def _sec_insights(con, where, ss) -> list:
+    fact = analytics.select_all(con, where)
+    ins = insights_mod.generate_insights(fact)
+    out = [Paragraph("Insights", ss["H1"])]
+    for it in ins:
+        c = _SEV_COLOR.get(it.severity, _PRIMARY)
+        out.append(Paragraph(f'<font color="#{c.hexval()[2:]}">&#9632;</font> '
+                             f'<b>{it.title}.</b> {_strip(it.detail)}', ss["Body2"]))
+        out.append(Spacer(1, 0.12 * cm))
+    out.append(PageBreak())
+    return out
+
+
+def _sec_tables(con, where, ss) -> list:
+    out = [Paragraph("Operational Detail", ss["H1"])]
+    cr = analytics.closure_rate_by(con, where, "ww_region")
+    if not cr.empty:
+        cr = cr.rename(columns={"category": "Region", "total": "Total", "closed": "Closed",
+                                "closure_rate": "Closure %"})
+        out += [Paragraph("Closure Rate by Region", ss["H2"]),
+                _df_table(cr.head(12), ss, col_widths=[7 * cm, 3 * cm, 3 * cm, 4 * cm]),
+                Spacer(1, 0.4 * cm)]
+    cols = ["customer_name", "factory_offering", "ww_region", "eos_status", "aging_days"]
+    longest = analytics.fetch_rows(con, analytics._where_and(where, '"is_open" = TRUE'),
+                                   cols, "aging_days", True, 10)
+    if not longest.empty:
+        longest = longest.rename(columns={"customer_name": "Customer", "factory_offering": "Track",
+                                          "ww_region": "Region", "eos_status": "Status",
+                                          "aging_days": "Age (d)"})
+        out += [Paragraph("Longest-Open Nominations", ss["H2"]),
+                _df_table(longest, ss,
+                          col_widths=[5 * cm, 4.5 * cm, 3.5 * cm, 2.5 * cm, 1.5 * cm])]
+    return out
+
+
+_SECTION_FN = {
+    "overview": _sec_overview, "approved": _sec_approved, "closed": _sec_closed,
+    "eos": _sec_eos, "trends": _sec_trends, "avs_azure": _sec_avs_azure,
+    "insights": _sec_insights, "tables": _sec_tables,
+}
+
+
+# --------------------------------------------------------------------------- #
+# Public builders
+# --------------------------------------------------------------------------- #
+def build_report(ctx, where: str = "", scope_label: str = "All data",
+                 sections: list[str] | None = None, table: str | None = None,
+                 unit_label: str = "Nominations") -> bytes:
+    """Build a PDF containing the selected sections (cover + summary always)."""
+    if table:
+        analytics.use_table(table)
+    sections = sections or SECTION_KEYS
     ss = _styles()
     con = ctx.con
     fact = analytics.select_all(con, where)
@@ -127,110 +286,63 @@ def build_executive_pdf(ctx, where: str = "", scope_label: str = "All data") -> 
     ins = insights_mod.generate_insights(fact)
 
     story: list = []
-
-    # ---- Cover ---------------------------------------------------------- #
+    # Cover
     story += [Spacer(1, 5 * cm),
               Paragraph("AVS Migration Analytics", ss["CoverTitle"]),
-              Paragraph("Executive Summary Report", ss["CoverSub"]),
+              Paragraph("Executive Report", ss["CoverSub"]),
               Spacer(1, 0.8 * cm),
               Paragraph(f"Scope: {scope_label}", ss["CoverSub"]),
-              Paragraph(f"Dataset: {ctx.filename} &nbsp;·&nbsp; As-of {pd.Timestamp(ctx.as_of):%d %b %Y}",
-                        ss["CoverSub"]),
-              Spacer(1, 0.3 * cm),
+              Paragraph(f"Dataset: {ctx.filename} &nbsp;·&nbsp; As-of "
+                        f"{pd.Timestamp(ctx.as_of):%d %b %Y}", ss["CoverSub"]),
               Paragraph(f"Generated {datetime.now():%d %b %Y, %H:%M}", ss["CoverSub"]),
               PageBreak()]
 
-    # ---- Executive summary --------------------------------------------- #
+    # Executive summary (always)
     story.append(Paragraph("Executive Summary", ss["H1"]))
     summary = (
-        f"This report covers <b>{fmt_int(kpis['nominations'])}</b> AVS migration nominations "
+        f"This report covers <b>{fmt_int(kpis['nominations'])}</b> {unit_label.lower()} "
         f"across <b>{fmt_int(kpis['accounts'])}</b> accounts. "
-        f"<b>{fmt_int(kpis['approved'])}</b> are approved and "
-        f"<b>{fmt_int(kpis['closed'])}</b> are closed "
-        f"(closure rate <b>{kpis['closure_rate']:.0f}%</b>), with "
+        f"<b>{fmt_int(kpis['approved'])}</b> approved · "
+        f"<b>{fmt_int(kpis['closed'])}</b> closed "
+        f"(closure rate <b>{kpis['closure_rate']:.0f}%</b>) · "
         f"<b>{fmt_int(kpis['open'])}</b> in flight. "
-        f"Total ACR under management is <b>{fmt_currency(kpis['total_acr'])}</b> "
-        f"across <b>{fmt_int(kpis['total_cores'])}</b> cores. "
-        f"The median open-item age is <b>{kpis['median_age_days']:.0f} days</b>.")
+        f"Total ACR <b>{fmt_currency(kpis['total_acr'])}</b> across "
+        f"<b>{fmt_int(kpis['total_cores'])}</b> cores; median open age "
+        f"<b>{kpis['median_age_days']:.0f} days</b>.")
     story += [Paragraph(summary, ss["Body2"]), Spacer(1, 0.4 * cm),
-              Paragraph("Key Metrics", ss["H2"]), _kpi_table(kpis, ss), Spacer(1, 0.4 * cm)]
-
-    # Top insights
-    story.append(Paragraph("Key Insights", ss["H2"]))
-    for ins_item in ins[:8]:
-        c = _SEV_COLOR.get(ins_item.severity, _PRIMARY)
-        story.append(Paragraph(
-            f'<font color="#{c.hexval()[2:]}">&#9632;</font> '
-            f'<b>{ins_item.title}.</b> {_strip(ins_item.detail)}', ss["Body2"]))
-        story.append(Spacer(1, 0.12 * cm))
+              Paragraph("Key Metrics", ss["H2"]), _kpi_table(kpis, ss, unit_label),
+              Spacer(1, 0.4 * cm), Paragraph("Top Insights", ss["H2"])]
+    for it in ins[:6]:
+        c = _SEV_COLOR.get(it.severity, _PRIMARY)
+        story.append(Paragraph(f'<font color="#{c.hexval()[2:]}">&#9632;</font> '
+                               f'<b>{it.title}.</b> {_strip(it.detail)}', ss["Body2"]))
+        story.append(Spacer(1, 0.1 * cm))
     story.append(PageBreak())
 
-    # ---- Charts --------------------------------------------------------- #
-    story.append(Paragraph("Portfolio Overview", ss["H1"]))
+    # Selected sections
+    for key in sections:
+        fn = _SECTION_FN.get(key)
+        if fn:
+            try:
+                story += fn(con, where, ss)
+            except Exception:  # a thin slice shouldn't break the whole report
+                continue
 
-    status = analytics.count_by(con, where, "migration_status_label")
-    if not status.empty:
-        story += [Paragraph("Nominations by Migration Status", ss["H2"]),
-                  _img(charts.donut(status, "category", "count", height=320)),
-                  Spacer(1, 0.3 * cm)]
+    # Drop a trailing page break for tidiness
+    while story and isinstance(story[-1], PageBreak):
+        story.pop()
 
-    reg = analytics.count_by(con, where, "ww_region")
-    if not reg.empty:
-        story += [Paragraph("Nominations by Region", ss["H2"]),
-                  _img(charts.bar(reg, "category", "count", horizontal=True, height=300)),
-                  Spacer(1, 0.3 * cm)]
-    story.append(PageBreak())
-
-    # EOS heatmap + approval trend
-    pivot = analytics.crosstab(con, where, "ww_region", "eos_status")
-    if not pivot.empty:
-        story += [Paragraph("EOS Status by Region", ss["H2"]),
-                  _img(charts.heatmap(pivot, height=300)), Spacer(1, 0.3 * cm)]
-
-    trend = analytics.timeseries(con, where, "approval_date", "month")
-    if not trend.empty:
-        story += [Paragraph("Monthly Approval Trend", ss["H2"]),
-                  _img(charts.line(trend, "period", "value", area=True, height=300)),
-                  Spacer(1, 0.3 * cm)]
-    story.append(PageBreak())
-
-    # ---- Key tables ----------------------------------------------------- #
-    story.append(Paragraph("Operational Detail", ss["H1"]))
-
-    cr = analytics.closure_rate_by(con, where, "ww_region")
-    if not cr.empty:
-        cr = cr.rename(columns={"category": "Region", "total": "Total", "closed": "Closed",
-                                "closure_rate": "Closure %"})
-        story += [Paragraph("Closure Rate by Region", ss["H2"]),
-                  _df_table(cr.head(10), ss, col_widths=[7 * cm, 3 * cm, 3 * cm, 4 * cm]),
-                  Spacer(1, 0.4 * cm)]
-
-    # Longest open
-    open_cols = ["customer_name", "factory_offering", "ww_region", "eos_status", "aging_days"]
-    open_cols = [c for c in open_cols if c in fact.columns]
-    longest = analytics.fetch_rows(con, _open_where(where), open_cols, "aging_days", True, 8)
-    if not longest.empty:
-        longest = longest.rename(columns={"customer_name": "Customer", "factory_offering": "Track",
-                                          "ww_region": "Region", "eos_status": "Status",
-                                          "aging_days": "Age (d)"})
-        story += [Paragraph("Longest-Open Nominations", ss["H2"]),
-                  _df_table(longest, ss,
-                            col_widths=[5 * cm, 4.5 * cm, 3.5 * cm, 2.5 * cm, 1.5 * cm])]
-
-    doc_buf = io.BytesIO()
-    doc = BaseDocTemplate(doc_buf, pagesize=A4, topMargin=1.6 * cm, bottomMargin=1.4 * cm,
-                          leftMargin=1.6 * cm, rightMargin=1.6 * cm, title="AVS Migration Analytics")
+    buf = io.BytesIO()
+    doc = BaseDocTemplate(buf, pagesize=A4, topMargin=1.6 * cm, bottomMargin=1.4 * cm,
+                          leftMargin=1.6 * cm, rightMargin=1.6 * cm,
+                          title="AVS Migration Analytics")
     frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id="main")
     doc.addPageTemplates([PageTemplate(id="main", frames=[frame], onPage=_header_footer)])
     doc.build(story)
-    return doc_buf.getvalue()
+    return buf.getvalue()
 
 
-def _open_where(where: str) -> str:
-    return analytics._where_and(where, '"is_open" = TRUE')
-
-
-def _strip(text: str) -> str:
-    """Convert markdown bold (**x**) to ReportLab bold tags."""
-    import re
-    return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", str(text))
+# Backwards-compatible comprehensive export.
+def build_executive_pdf(ctx, where: str = "", scope_label: str = "All data",
+                        table: str | None = None, unit_label: str = "Nominations") -> bytes:
+    return build_report(ctx, where, scope_label, SECTION_KEYS, table, unit_label)

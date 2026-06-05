@@ -18,12 +18,18 @@ from app.ui.theme import page_header, section
 
 def render() -> None:
     ctx = state.ensure_context()
+    table = state.active_table()
+    analytics.use_table(table)
     page_header("Approved Trend Analysis",
                 "Year-over-year and month-over-month approval trends from actual data.")
     components.data_quality_banner(ctx)
+    if state.is_customer_mode():
+        components.banner_note("Customer mode: each account contributes once at its "
+                               "<b>Wave-1</b> approval date.")
 
     filters, where = components.filter_sidebar(
-        ctx, ["ww_region", "factory_offering", "migration_direction"], date_field=None)
+        ctx, ["ww_region", "factory_offering", "migration_direction"], date_field=None,
+        table=table)
 
     con = ctx.con
     window = st.radio("Analysis window", ["Last 1 Year", "Last 2 Years", "Last 3 Years", "All"],
@@ -93,7 +99,7 @@ def render() -> None:
     section("Approvals by region over time")
     grain = "year" if years and years > 1 else "month"
     sql = f'''SELECT date_trunc('{grain}', approval_date) AS period, ww_region AS series,
-              COUNT(*) AS value FROM fact {appr_where} GROUP BY 1,2 ORDER BY 1'''
+              COUNT(*) AS value FROM {table} {appr_where} GROUP BY 1,2 ORDER BY 1'''
     long = con.execute(sql).fetchdf()
     if not long.empty:
         long["period"] = pd.to_datetime(long["period"])

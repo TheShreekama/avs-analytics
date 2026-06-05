@@ -138,6 +138,15 @@ def azure_native_target(path: str) -> str:
     return "Azure Native (Other)"
 
 
+def is_av36_eos_path(path) -> bool:
+    """True if a migration path denotes an AV36 / EOS (End-of-Support) nomination.
+
+    Matches the export's 'AVS36 - EGS' as well as AV36 / EOS variants.
+    """
+    norm = re.sub(r"[^a-z0-9]", "", str(path).lower())
+    return any(k in norm for k in ("av36", "avs36", "eos", "egs"))
+
+
 def derive_eos_status(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.Series:
     """Unified operational/EOS status from several raw signals (vectorised).
 
@@ -258,6 +267,10 @@ def build_fact_frame(
         fact["migration_path"].map(azure_native_target),
         pd.NA,
     )
+    # Wave-level flags used by the customer-rollup (dedup) layer.
+    fact["is_av36_eos"] = fact["migration_path"].map(is_av36_eos_path).astype(bool)
+    fact["is_from_avs"] = (fact["migration_direction"] == DIR_FROM_AVS)
+    fact["is_to_avs"] = (fact["migration_direction"] == DIR_TO_AVS)
     code, label = split_migration_status(fact["migration_status"])
     fact["migration_status_code"] = code
     fact["migration_status_label"] = label.fillna("Unknown")

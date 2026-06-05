@@ -180,3 +180,51 @@ def test_insights_empty_safe():
     empty = pd.DataFrame(columns=["tpid", "ww_region", "is_approved"])
     out = insights.generate_insights(empty)
     assert len(out) == 1   # graceful "no data" message
+
+
+# --------------------------------------------------------------------------- #
+# Customer rollup (wave deduplication)
+# --------------------------------------------------------------------------- #
+@pytest.fixture(scope="module")
+def customer(built):
+    from app.core import rollup
+    _, fact, report, _ = built
+    return rollup.build_customer_rollup(fact, report["as_of"])
+
+
+def test_rollup_dedups_customers(customer):
+    # 11 waves collapse to 10 customers (Novanta has 2 waves)
+    assert len(customer) == 10
+    nov = customer[customer["customer_name"].str.contains("Novanta", case=False)]
+    assert len(nov) == 1
+    assert int(nov["n_waves"].iloc[0]) == 2
+
+
+def test_rollup_av36_membership(customer):
+    # exactly one customer (CHUBB) has an AV36/EOS path wave
+    assert int(customer["is_av36_eos"].sum()) == 1
+    assert customer.loc[customer["is_av36_eos"], "customer_name"].iloc[0].upper().startswith("CHUBB")
+
+
+def test_rollup_avs_to_azure_dedup(customer):
+    # 6 from-AVS waves but Novanta's two collapse -> 5 distinct customers
+    assert int(customer["is_avs_to_azure"].sum()) == 5
+
+
+def test_rollup_first_wave_approval(customer):
+    # Novanta's first wave is the lowest wave number (Wave-2) -> 2025-11-12
+    nov = customer[customer["customer_name"].str.contains("Novanta", case=False)].iloc[0]
+    assert pd.Timestamp(nov["approval_date"]) == pd.Timestamp("2025-11-12")
+
+
+def test_rollup_status_from_last_wave(customer):
+    # Novanta's last wave (Wave-3) is blocked
+    nov = customer[customer["customer_name"].str.contains("Novanta", case=False)].iloc[0]
+    assert nov["eos_status"] == "Blocked"
+    assert not bool(nov["is_closed"])
+
+
+def test_av36_eos_path_detector():
+    assert cleaning.is_av36_eos_path("AVS36 - EGS")
+    assert cleaning.is_av36_eos_path("AV36 EOS Migration")
+    assert not cleaning.is_av36_eos_path("SQL Server DB Migration (From AVS)")

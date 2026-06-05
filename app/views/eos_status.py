@@ -19,19 +19,30 @@ from app.ui.theme import banner, page_header, section
 
 def render() -> None:
     ctx = state.ensure_context()
+    table = state.active_table()
+    analytics.use_table(table)
+    unit = state.unit_label()
     page_header("AV36 EOS Nomination Status",
-                "Operational health of EOS / AV36 migration nominations and risk hotspots.")
+                "Operational health of AV36 / EOS (End-of-Support) migration nominations.")
     components.data_quality_banner(ctx)
-    banner("EOS status is derived from Current State, Milestone Status, Migration Status code "
-           "and planned-end vs as-of date. Use the sidebar to focus on the AVS migration track.")
+    scope = ("each customer counts once if <b>any</b> wave has an AV36/EOS migration path; "
+             "status follows the customer's <b>last wave</b>") if state.is_customer_mode() else \
+            "every wave whose migration path is AV36/EOS"
+    banner(f"<b>Scope:</b> AV36 EOS nominations — {scope}. "
+           "EOS status is derived from Current State, Milestone Status, Migration Status code "
+           "and planned-end vs as-of date.")
 
     filters, where = components.filter_sidebar(
-        ctx, ["factory_offering", "ww_region", "region", "eos_status"],
-        date_field="planned_end_date")
+        ctx, ["ww_region", "region", "eos_status", "factory_offering"],
+        date_field="planned_end_date", table=table)
+    # Restrict the whole report to AV36/EOS nominations.
+    where = analytics._where_and(where, '"is_av36_eos" = TRUE')
 
     con = ctx.con
-    if analytics.total_rows(con, where) == 0:
-        components.empty_state()
+    n_av36 = analytics.total_rows(con, where)
+    if n_av36 == 0:
+        components.empty_state("No AV36 / EOS nominations in the current selection. "
+                               "(An AV36/EOS nomination is any with an AV36/EOS migration path.)")
         return
 
     # Status KPI tiles in canonical order
@@ -43,6 +54,8 @@ def render() -> None:
                 "Delayed": "warn", "Blocked": "bad", "Cancelled": ""}.get(s, "")
         items.append({"label": s, "value": fmt_int(counts.get(s, 0)), "tone": tone})
     components.kpi_row(items)
+    st.caption(f"**{fmt_int(n_av36)}** AV36 / EOS {unit} in scope "
+               f"(status taken from each account's last wave).")
     st.write("")
 
     section("Status distribution")
@@ -66,10 +79,9 @@ def render() -> None:
     section("Status trend over time")
     c3, c4 = st.columns(2)
     with c3:
-        # build a status x month long frame via SQL
+        # build a status x month long frame via SQL (where always includes AV36 filter)
         sql = f'''SELECT date_trunc('month', created_date) AS period, eos_status,
-                  COUNT(*) AS value FROM fact {where if where else ''}
-                  {"AND" if where else "WHERE"} created_date IS NOT NULL
+                  COUNT(*) AS value FROM {table} {where} AND created_date IS NOT NULL
                   GROUP BY 1,2 ORDER BY 1'''
         long = con.execute(sql).fetchdf()
         if not long.empty:

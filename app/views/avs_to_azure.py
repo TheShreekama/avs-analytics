@@ -14,15 +14,20 @@ from app.ui.theme import banner, page_header, section
 
 def render() -> None:
     ctx = state.ensure_context()
+    table = state.active_table()
+    analytics.use_table(table)
+    unit = state.unit_label()
     page_header("AVS → Azure Native Migration Trends",
                 "Migrations from AVS to Azure-native services: flow, adoption and completion.")
     components.data_quality_banner(ctx)
-    banner("Scope: nominations whose migration path indicates a move <b>from AVS</b> to an "
-           "Azure-native target (SQL DB/MI/IaaS, OSS DB, Azure VM, AKS, Oracle DB@Azure).")
+    scope = ("each customer counts once if <b>any</b> wave moves from AVS to an Azure-native "
+             "target; status follows the last wave") if state.is_customer_mode() else \
+            "every wave whose migration path moves <b>from AVS</b> to an Azure-native target"
+    banner(f"<b>Scope:</b> {scope} (SQL DB/MI/IaaS, OSS DB, Azure VM, AKS, Oracle DB@Azure).")
 
     filters, where = components.filter_sidebar(
         ctx, ["ww_region", "factory_offering", "azure_target", "eos_status"],
-        date_field="created_date")
+        date_field="created_date", table=table)
 
     con = ctx.con
     # Constrain to AVS → Azure Native
@@ -84,7 +89,7 @@ def render() -> None:
                             width="stretch")
     with c4:
         sql = f'''SELECT date_trunc('month', created_date) AS period, factory_offering AS series,
-                  COUNT(*) AS value FROM fact {base}
+                  COUNT(*) AS value FROM {table} {base}
                   AND created_date IS NOT NULL GROUP BY 1,2 ORDER BY 1'''
         long = con.execute(sql).fetchdf()
         if not long.empty:
@@ -175,7 +180,8 @@ def _migration_insights(con, base, where, n, completed, stage) -> None:
 
 
 def _fastest_growth(con, base):
-    sql = f'''SELECT created_month, factory_offering, COUNT(*) AS c FROM fact {base}
+    sql = f'''SELECT created_month, factory_offering, COUNT(*) AS c
+              FROM {analytics.current_table()} {base}
               AND created_month IS NOT NULL GROUP BY 1,2'''
     df = con.execute(sql).fetchdf()
     if df.empty or df["created_month"].nunique() < 2:

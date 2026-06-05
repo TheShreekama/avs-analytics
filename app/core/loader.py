@@ -50,16 +50,22 @@ def read_raw_path(path) -> pd.DataFrame:
     return read_raw(str(path), data)
 
 
-def make_connection(fact: pd.DataFrame) -> duckdb.DuckDBPyConnection:
-    """Create an in-memory DuckDB connection with the fact frame registered.
+def make_connection(fact: pd.DataFrame,
+                    customer: pd.DataFrame | None = None) -> duckdb.DuckDBPyConnection:
+    """Create an in-memory DuckDB connection with the report tables registered.
 
-    The fact frame is materialised into a real table named ``fact`` so that
-    repeated queries are fast and don't re-scan the pandas object each time.
+    ``fact`` (one row per wave/nomination) is always created.  If a ``customer``
+    rollup is supplied it is materialised as the ``customer`` table so reports
+    can switch counting grain via the global toggle.
     """
     con = duckdb.connect(database=":memory:")
     con.register("fact_view", fact)
     con.execute("CREATE TABLE fact AS SELECT * FROM fact_view")
     con.unregister("fact_view")
+    if customer is not None and not customer.empty:
+        con.register("customer_view", customer)
+        con.execute("CREATE TABLE customer AS SELECT * FROM customer_view")
+        con.unregister("customer_view")
     return con
 
 

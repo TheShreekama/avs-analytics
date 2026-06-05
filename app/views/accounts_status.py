@@ -12,13 +12,15 @@ from app.ui.theme import page_header, section
 
 def render() -> None:
     ctx = state.ensure_context()
+    table = state.active_table()
+    analytics.use_table(table)
     page_header("Accounts by Migration Status",
                 "Distribution of accounts and nominations across the migration pipeline.")
     components.data_quality_banner(ctx)
 
     filters, where = components.filter_sidebar(
         ctx, ["ww_region", "region", "migration_status_label", "factory_offering"],
-        date_field="created_date")
+        date_field="created_date", table=table)
 
     con = ctx.con
     total = analytics.total_rows(con, where)

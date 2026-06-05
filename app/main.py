@@ -22,7 +22,7 @@ def run() -> None:
     from app.ui.theme import inject_css
     from app.views import (accounts_status, approved, approved_trends, avs_to_azure,
                            closed, column_mapping, data_upload, eos_status, insights_page,
-                           nomination_trends, overview)
+                           nomination_trends, overview, reports)
 
     inject_css()
     ctx = state.ensure_context()
@@ -33,8 +33,10 @@ def run() -> None:
         "Executive": [
             st.Page(overview.render, title="Overview", icon=":material/dashboard:",
                     url_path="overview", default=True),
-            st.Page(insights_page.render, title="Insights & Export",
+            st.Page(insights_page.render, title="Insights",
                     icon=":material/lightbulb:", url_path="insights"),
+            st.Page(reports.render, title="Reports & Export",
+                    icon=":material/picture_as_pdf:", url_path="reports"),
         ],
         "Status Reports": [
             st.Page(accounts_status.render, title="Accounts by Migration Status",
@@ -76,11 +78,19 @@ def _sidebar_brand(ctx, state, app_name: str, tagline: str) -> None:
     st.sidebar.divider()
 
     src = "Sample dataset" if ctx.is_sample else ctx.filename
-    st.sidebar.markdown(f"**Dataset:** {src}  \n**Rows:** {len(ctx.fact):,}")
+    n_cust = len(ctx.customer)
+    st.sidebar.markdown(
+        f"**Dataset:** {src}  \n**Waves:** {len(ctx.fact):,} · **Accounts:** {n_cust:,}")
     cur = pd.Timestamp(ctx.as_of).date()
     new_asof = st.sidebar.date_input("Reporting as-of date", value=cur,
                                      help="Anchors This-Week/Month/Quarter/YTD windows.")
     if pd.Timestamp(new_asof) != pd.Timestamp(ctx.as_of):
         state.reload_with(as_of=pd.Timestamp(new_asof))
         st.rerun()
+
+    st.sidebar.radio(
+        "Counting mode", [state.MODE_CUSTOMER, state.MODE_WAVE], key=state.MODE_KEY,
+        help="Customer mode deduplicates waves: each customer counts once, with the "
+             "approval date from Wave-1 and status from the last wave. Wave-level counts "
+             "every nomination row.")
     st.sidebar.divider()

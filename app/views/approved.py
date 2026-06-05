@@ -12,13 +12,18 @@ from app.ui.theme import page_header, section
 
 def render() -> None:
     ctx = state.ensure_context()
+    table = state.active_table()
+    analytics.use_table(table)
     page_header("AVS Nominations Approved",
                 "Approval velocity across calendar windows, trends and regional comparison.")
     components.data_quality_banner(ctx)
+    if state.is_customer_mode():
+        components.banner_note("Customer mode: each account's approval date is its "
+                               "<b>Wave-1</b> approval date.")
 
     filters, where = components.filter_sidebar(
         ctx, ["ww_region", "region", "factory_offering", "migration_direction"],
-        date_field="approval_date")
+        date_field="approval_date", table=table)
 
     con = ctx.con
     # restrict to approved items for this report

@@ -1,13 +1,36 @@
 """DuckDB-backed aggregations and trend builders.
 
-All reporting queries run as SQL against the in-memory ``fact`` table so the app
-stays responsive at the 500k-row / 100-column target.  Filters are compiled to a
-single reusable WHERE clause; charts/tables call the small helper functions here.
+All reporting queries run as SQL against an in-memory table so the app stays
+responsive at the 500k-row / 100-column target.  Two tables are available:
+``fact`` (one row per wave/nomination) and ``customer`` (one row per customer,
+deduplicated across waves).  Every helper takes an optional ``table`` argument;
+when omitted it uses the module's *current table*, which a report sets once via
+``use_table`` based on the global counting-mode toggle.  Tests and the exporter
+can still pass ``table=`` explicitly.
+
+Filters are compiled to a single reusable WHERE clause; charts/tables call the
+small helper functions here.
 """
 from __future__ import annotations
 
-import duckdb
 import pandas as pd
+
+_CURRENT_TABLE = "fact"
+
+
+def use_table(name: str | None) -> None:
+    """Set the default table for subsequent queries in this script run."""
+    global _CURRENT_TABLE
+    _CURRENT_TABLE = name or "fact"
+
+
+def _t(table: str | None) -> str:
+    return table or _CURRENT_TABLE
+
+
+def current_table() -> str:
+    """The table name reports are currently querying (per the counting mode)."""
+    return _CURRENT_TABLE
 
 
 def _q(val: str) -> str:
@@ -52,9 +75,9 @@ def _where_and(where: str, extra: str) -> str:
 # Generic aggregations
 # --------------------------------------------------------------------------- #
 def count_by(con, where: str, dim: str, top: int | None = None,
-             dropna: bool = False) -> pd.DataFrame:
+             dropna: bool = False, table: str | None = None) -> pd.DataFrame:
     extra = "" if dropna is False else f'"{dim}" IS NOT NULL'
-    sql = f'SELECT "{dim}" AS category, COUNT(*) AS count FROM fact ' \
+    sql = f'SELECT "{dim}" AS category, COUNT(*) AS count FROM {_t(table)} ' \
           f'{_where_and(where, extra)} GROUP BY 1 ORDER BY 2 DESC'
     df = con.execute(sql).fetchdf()
     if top:
@@ -62,22 +85,23 @@ def count_by(con, where: str, dim: str, top: int | None = None,
     return df
 
 
-def distinct_count_by(con, where: str, dim: str, distinct_col: str) -> pd.DataFrame:
+def distinct_count_by(con, where: str, dim: str, distinct_col: str,
+                      table: str | None = None) -> pd.DataFrame:
     sql = f'SELECT "{dim}" AS category, COUNT(DISTINCT "{distinct_col}") AS count ' \
-          f'FROM fact {where} GROUP BY 1 ORDER BY 2 DESC'
+          f'FROM {_t(table)} {where} GROUP BY 1 ORDER BY 2 DESC'
     return con.execute(sql).fetchdf()
 
 
-def sum_by(con, where: str, dim: str, measure: str) -> pd.DataFrame:
+def sum_by(con, where: str, dim: str, measure: str, table: str | None = None) -> pd.DataFrame:
     sql = f'SELECT "{dim}" AS category, COALESCE(SUM("{measure}"),0) AS total ' \
-          f'FROM fact {where} GROUP BY 1 ORDER BY 2 DESC'
+          f'FROM {_t(table)} {where} GROUP BY 1 ORDER BY 2 DESC'
     return con.execute(sql).fetchdf()
 
 
-def crosstab(con, where: str, row_dim: str, col_dim: str) -> pd.DataFrame:
+def crosstab(con, where: str, row_dim: str, col_dim: str, table: str | None = None) -> pd.DataFrame:
     """Row×col count matrix (for heatmaps / stacked bars)."""
     sql = f'SELECT "{row_dim}" AS row, "{col_dim}" AS col, COUNT(*) AS count ' \
-          f'FROM fact {where} GROUP BY 1, 2'
+          f'FROM {_t(table)} {where} GROUP BY 1, 2'
     long = con.execute(sql).fetchdf()
     if long.empty:
         return long
@@ -85,15 +109,15 @@ def crosstab(con, where: str, row_dim: str, col_dim: str) -> pd.DataFrame:
                             aggfunc="sum", fill_value=0)
 
 
-def timeseries(con, where: str, date_col: str, grain: str = "month",
-               extra_where: str = "", distinct_col: str | None = None) -> pd.DataFrame:
+def timeseries(con, where: str, date_col: str, grain: str = "month", extra_where: str = "",
+               distinct_col: str | None = None, table: str | None = None) -> pd.DataFrame:
     """Counts over time bucketed by grain (day/week/month/quarter/year)."""
     grain = grain.lower()
     bucket = f'date_trunc({_q(grain)}, "{date_col}")'
     measure = f'COUNT(DISTINCT "{distinct_col}")' if distinct_col else "COUNT(*)"
     w = _where_and(where, f'"{date_col}" IS NOT NULL')
     w = _where_and(w, extra_where) if extra_where else w
-    sql = f'SELECT {bucket} AS period, {measure} AS value FROM fact {w} ' \
+    sql = f'SELECT {bucket} AS period, {measure} AS value FROM {_t(table)} {w} ' \
           f'GROUP BY 1 ORDER BY 1'
     df = con.execute(sql).fetchdf()
     if not df.empty:
@@ -103,27 +127,32 @@ def timeseries(con, where: str, date_col: str, grain: str = "month",
 
 
 def fetch_rows(con, where: str, columns: list[str], order_by: str | None = None,
-               desc: bool = True, limit: int = 100) -> pd.DataFrame:
+               desc: bool = True, limit: int = 100, table: str | None = None) -> pd.DataFrame:
     cols = ", ".join(f'"{c}"' for c in columns)
     order = f' ORDER BY "{order_by}" {"DESC" if desc else "ASC"}' if order_by else ""
-    sql = f'SELECT {cols} FROM fact {where}{order} LIMIT {int(limit)}'
+    sql = f'SELECT {cols} FROM {_t(table)} {where}{order} LIMIT {int(limit)}'
     return con.execute(sql).fetchdf()
 
 
-def scalar(con, where: str, expr: str) -> float:
-    sql = f"SELECT {expr} FROM fact {where}"
+def scalar(con, where: str, expr: str, table: str | None = None) -> float:
+    sql = f"SELECT {expr} FROM {_t(table)} {where}"
     res = con.execute(sql).fetchone()
     return res[0] if res and res[0] is not None else 0
 
 
-def total_rows(con, where: str) -> int:
-    return int(scalar(con, where, "COUNT(*)"))
+def total_rows(con, where: str, table: str | None = None) -> int:
+    return int(scalar(con, where, "COUNT(*)", table=table))
+
+
+def select_all(con, where: str = "", table: str | None = None) -> pd.DataFrame:
+    """Fetch the filtered frame (for insights / pandas-side calculations)."""
+    return con.execute(f"SELECT * FROM {_t(table)} {where}").fetchdf()
 
 
 # --------------------------------------------------------------------------- #
 # Report-specific builders
 # --------------------------------------------------------------------------- #
-def aging_buckets(con, where: str, only_open: bool = True) -> pd.DataFrame:
+def aging_buckets(con, where: str, only_open: bool = True, table: str | None = None) -> pd.DataFrame:
     """Distribution of open-item age into operational buckets."""
     extra = '"is_open" = TRUE' if only_open else ""
     w = _where_and(where, extra) if extra else where
@@ -137,7 +166,7 @@ def aging_buckets(con, where: str, only_open: bool = True) -> pd.DataFrame:
                 WHEN "aging_days" <= 180 THEN '91-180 days'
                 ELSE '180+ days'
             END AS bucket
-            FROM fact {w}
+            FROM {_t(table)} {w}
         ) GROUP BY 1
     """
     df = con.execute(sql).fetchdf()
@@ -146,7 +175,7 @@ def aging_buckets(con, where: str, only_open: bool = True) -> pd.DataFrame:
     return df.sort_values("bucket").reset_index(drop=True)
 
 
-def closure_rate_by(con, where: str, dim: str) -> pd.DataFrame:
+def closure_rate_by(con, where: str, dim: str, table: str | None = None) -> pd.DataFrame:
     """Closure rate (%) per dimension value."""
     sql = f"""
         SELECT "{dim}" AS category,
@@ -154,26 +183,27 @@ def closure_rate_by(con, where: str, dim: str) -> pd.DataFrame:
                SUM(CASE WHEN "is_closed" THEN 1 ELSE 0 END) AS closed,
                ROUND(100.0 * SUM(CASE WHEN "is_closed" THEN 1 ELSE 0 END)
                      / NULLIF(COUNT(*),0), 1) AS closure_rate
-        FROM fact {where} GROUP BY 1 ORDER BY closure_rate DESC
+        FROM {_t(table)} {where} GROUP BY 1 ORDER BY closure_rate DESC
     """
     return con.execute(sql).fetchdf()
 
 
-def approval_rate_by(con, where: str, dim: str) -> pd.DataFrame:
+def approval_rate_by(con, where: str, dim: str, table: str | None = None) -> pd.DataFrame:
     sql = f"""
         SELECT "{dim}" AS category,
                COUNT(*) AS total,
                SUM(CASE WHEN "is_approved" THEN 1 ELSE 0 END) AS approved,
                ROUND(100.0 * SUM(CASE WHEN "is_approved" THEN 1 ELSE 0 END)
                      / NULLIF(COUNT(*),0), 1) AS approval_rate
-        FROM fact {where} GROUP BY 1 ORDER BY approval_rate DESC
+        FROM {_t(table)} {where} GROUP BY 1 ORDER BY approval_rate DESC
     """
     return con.execute(sql).fetchdf()
 
 
-def sankey_avs_to_azure(con, where: str) -> pd.DataFrame:
+def sankey_avs_to_azure(con, where: str, table: str | None = None) -> pd.DataFrame:
     """Flows for the AVS→Azure-Native Sankey: track -> target -> stage."""
     w = _where_and(where, '"migration_direction" = \'AVS → Azure Native\'')
+    w = _where_and(w, '"azure_target" IS NOT NULL')
     sql = f"""
         SELECT "factory_offering" AS track,
                "azure_target" AS target,
@@ -181,37 +211,30 @@ def sankey_avs_to_azure(con, where: str) -> pd.DataFrame:
                     WHEN "actual_start_date" IS NOT NULL THEN 'In Progress'
                     ELSE 'Started' END AS stage,
                COUNT(*) AS count
-        FROM fact {w}
+        FROM {_t(table)} {w}
         GROUP BY 1, 2, 3
     """
     return con.execute(sql).fetchdf()
 
 
-def migration_stage_by_track(con, where: str) -> pd.DataFrame:
+def migration_stage_by_track(con, where: str, table: str | None = None) -> pd.DataFrame:
     """Started / In Progress / Completed counts per migration track."""
     sql = f"""
         SELECT "factory_offering" AS track,
-               SUM(CASE WHEN "is_closed" THEN 0
-                        WHEN "actual_start_date" IS NULL THEN 1 ELSE 0 END) AS started,
-               SUM(CASE WHEN "is_closed" THEN 0
-                        WHEN "actual_start_date" IS NOT NULL THEN 1 ELSE 0 END) AS in_progress,
+               SUM(CASE WHEN "is_open" AND "actual_start_date" IS NULL THEN 1 ELSE 0 END) AS started,
+               SUM(CASE WHEN "is_open" AND "actual_start_date" IS NOT NULL THEN 1 ELSE 0 END) AS in_progress,
                SUM(CASE WHEN "is_closed" THEN 1 ELSE 0 END) AS completed,
                COUNT(*) AS total
-        FROM fact {where} GROUP BY 1 ORDER BY total DESC
+        FROM {_t(table)} {where} GROUP BY 1 ORDER BY total DESC
     """
     return con.execute(sql).fetchdf()
 
 
-def select_all(con, where: str = "") -> pd.DataFrame:
-    """Fetch the filtered fact frame (for insights / pandas-side calculations)."""
-    return con.execute(f"SELECT * FROM fact {where}").fetchdf()
-
-
-def distinct_values(con, col: str) -> list:
-    sql = f'SELECT DISTINCT "{col}" AS v FROM fact WHERE "{col}" IS NOT NULL ORDER BY 1'
+def distinct_values(con, col: str, table: str | None = None) -> list:
+    sql = f'SELECT DISTINCT "{col}" AS v FROM {_t(table)} WHERE "{col}" IS NOT NULL ORDER BY 1'
     return [r[0] for r in con.execute(sql).fetchall()]
 
 
-def date_bounds(con, col: str) -> tuple:
-    res = con.execute(f'SELECT MIN("{col}"), MAX("{col}") FROM fact').fetchone()
+def date_bounds(con, col: str, table: str | None = None) -> tuple:
+    res = con.execute(f'SELECT MIN("{col}"), MAX("{col}") FROM {_t(table)}').fetchone()
     return res[0], res[1]

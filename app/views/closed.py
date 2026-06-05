@@ -12,13 +12,18 @@ from app.ui.theme import page_header, section
 
 def render() -> None:
     ctx = state.ensure_context()
+    table = state.active_table()
+    analytics.use_table(table)
     page_header("AVS Nominations Closed",
                 "Closure velocity, closure-rate by region, aging and operational insight.")
     components.data_quality_banner(ctx)
+    if state.is_customer_mode():
+        components.banner_note("Customer mode: an account is <b>closed</b> when its "
+                               "<b>last wave</b> is done/completed.")
 
     filters, where = components.filter_sidebar(
         ctx, ["ww_region", "region", "factory_offering", "eos_status"],
-        date_field="actual_end_date")
+        date_field="actual_end_date", table=table)
 
     con = ctx.con
     closed_where = analytics._where_and(where, '"is_closed" = TRUE')

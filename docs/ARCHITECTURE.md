@@ -37,7 +37,12 @@ cleaning.build_fact_frame          → tidy "fact" frame + cleaning report
       │   • is_approved / is_closed / is_open, aging, cycle time
       │   • per-row data-quality flags
       ▼
-loader.make_connection             → DuckDB in-memory table `fact`
+rollup.build_customer_rollup       → one row per customer (dedup across waves)
+      │   • membership (AV36 EOS / AVS→Azure) = ANY wave matches
+      │   • approval date = Wave-1; status/closure = last wave
+      │
+loader.make_connection             → DuckDB tables `fact` (waves) + `customer` (dedup)
+      │     a global toggle picks which table reports query (analytics.use_table)
       │
       ├── analytics.*  (SQL aggregations: count_by, crosstab, timeseries,
       │                 closure/approval rate, Sankey, stage-by-track, fetch_rows)
@@ -59,8 +64,9 @@ app/views/*  (11 Streamlit report pages)  ←  app/ui/* (theme, charts, componen
 | `app/core/mapping.py` | Mapping resolution, persistence, coverage |
 | `app/core/metrics.py` | Period maths + KPI bundle + formatters |
 | `app/core/analytics.py` | DuckDB query helpers (the only place SQL lives) |
+| `app/core/rollup.py` | Customer‑level rollup (wave deduplication) |
 | `app/core/insights.py` | Deterministic rule‑based insights |
-| `app/core/exporter.py` | Executive PDF assembly |
+| `app/core/exporter.py` | Section‑based executive PDF assembly |
 | `app/ui/theme.py` | CSS, KPI/insight card HTML, headers/banners |
 | `app/ui/charts.py` | Plotly chart factory + PNG rendering |
 | `app/ui/components.py` | KPI rows, filter sidebar, tables, period KPIs |

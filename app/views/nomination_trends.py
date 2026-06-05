@@ -13,13 +13,15 @@ from app.ui.theme import page_header, section
 
 def render() -> None:
     ctx = state.ensure_context()
+    table = state.active_table()
+    analytics.use_table(table)
     page_header("AVS Nomination Trends",
                 "Nomination volume over time with growth, peaks, troughs and seasonality.")
     components.data_quality_banner(ctx)
 
     filters, where = components.filter_sidebar(
         ctx, ["ww_region", "factory_offering", "migration_direction", "migration_status_label"],
-        date_field="created_date")
+        date_field="created_date", table=table)
 
     con = ctx.con
     view = st.radio("View", ["Monthly", "Quarterly", "Yearly"], horizontal=True, key="nt_view")
@@ -70,7 +72,7 @@ def render() -> None:
                        format_func=lambda x: x.replace("_", " ").title(), key="nt_dim")
     grain = gmap[view]
     sql = f'''SELECT date_trunc('{grain}', created_date) AS period, "{dim}" AS series,
-              COUNT(*) AS value FROM fact {where if where else ''}
+              COUNT(*) AS value FROM {table} {where if where else ''}
               {"AND" if where else "WHERE"} created_date IS NOT NULL
               GROUP BY 1,2 ORDER BY 1'''
     long = con.execute(sql).fetchdf()
@@ -80,10 +82,10 @@ def render() -> None:
                         width="stretch")
 
     # Seasonality (month-of-year profile) for monthly view
-    if view == "Monthly" and ctx.fact["created_date"].notna().sum() >= 12:
+    if view == "Monthly" and state.active_frame(ctx)["created_date"].notna().sum() >= 12:
         section("Seasonality (month-of-year profile)")
         sql2 = f'''SELECT EXTRACT(month FROM created_date) AS m, COUNT(*) AS value
-                   FROM fact {where if where else ''}
+                   FROM {table} {where if where else ''}
                    {"AND" if where else "WHERE"} created_date IS NOT NULL GROUP BY 1 ORDER BY 1'''
         seas = con.execute(sql2).fetchdf()
         if not seas.empty:
