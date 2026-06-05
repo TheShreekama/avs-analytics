@@ -138,40 +138,36 @@ def azure_native_target(path: str) -> str:
     return "Azure Native (Other)"
 
 
-def _derive_eos_status(row: pd.Series, as_of: pd.Timestamp) -> str:
-    """Unified operational/EOS status from several raw signals.
+def derive_eos_status(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.Series:
+    """Unified operational/EOS status from several raw signals (vectorised).
 
-    Priority: terminal states first (Completed / Cancelled), then Blocked,
-    then schedule-driven (Delayed / At Risk), else On Track.
+    Priority (first match wins): Completed → Cancelled → Blocked → deferred
+    (At Risk) → schedule-overdue (Delayed) → waiting/follow-up overdue (At Risk)
+    → On Track.  Vectorised with ``np.select`` so it scales to 500k+ rows.
     """
-    code = row.get("migration_status_code")
-    label = str(row.get("migration_status_label") or "").lower()
-    state = str(row.get("current_state") or "").strip().lower()
-    milestone = str(row.get("milestone_status") or "").strip().lower()
-    aend = row.get("actual_end_date")
-    pend = row.get("planned_end_date")
-    followup = row.get("next_followup_date")
+    code = fact["migration_status_code"]
+    label = fact["migration_status_label"].astype("string").str.lower().fillna("")
+    state = fact["current_state"].astype("string").str.strip().str.lower().fillna("")
+    milestone = fact["milestone_status"].astype("string").str.strip().str.lower().fillna("")
+    aend = fact["actual_end_date"]
+    pend = fact["planned_end_date"]
+    followup = fact["next_followup_date"]
 
-    completed = (
-        code == 7 or "complete" in label or "done" in state
-        or milestone == "completed" or pd.notna(aend)
-    )
-    if completed:
-        return "Completed"
-    if code == 6 or "cancel" in label or "archiv" in label or milestone == "cancelled":
-        return "Cancelled"
-    if state.startswith("blocked") or "blocked" in state:
-        return "Blocked"
-    if code == 5 or "defer" in label or "defer" in state:
-        return "At Risk"
-    # Schedule-driven risk
-    if pd.notna(pend) and pd.isna(aend) and pend < as_of:
-        return "Delayed"
-    if pd.notna(followup) and followup < as_of:
-        return "At Risk"
-    if state.startswith("waiting"):
-        return "At Risk"
-    return "On Track"
+    completed = (code.eq(7) | label.str.contains("complete", na=False)
+                 | state.str.contains("done", na=False) | milestone.eq("completed")
+                 | aend.notna())
+    cancelled = (code.eq(6) | label.str.contains("cancel|archiv", regex=True, na=False)
+                 | milestone.eq("cancelled"))
+    blocked = state.str.contains("blocked", na=False)
+    deferred = (code.eq(5) | label.str.contains("defer", na=False)
+                | state.str.contains("defer", na=False))
+    delayed = pend.notna() & aend.isna() & (pend < as_of)
+    waiting = (followup.notna() & (followup < as_of)) | state.str.startswith("waiting", na=False)
+
+    return pd.Series(np.select(
+        [completed, cancelled, blocked, deferred, delayed, waiting],
+        ["Completed", "Cancelled", "Blocked", "At Risk", "Delayed", "At Risk"],
+        default="On Track"), index=fact.index)
 
 
 # --------------------------------------------------------------------------- #
@@ -275,7 +271,7 @@ def build_fact_frame(
     report["as_of"] = as_of
 
     # 6) Operational / EOS status.
-    fact["eos_status"] = fact.apply(lambda r: _derive_eos_status(r, as_of), axis=1)
+    fact["eos_status"] = derive_eos_status(fact, as_of)
 
     # 7) Approval / closure / open flags + aging.
     fact["is_approved"] = (
