@@ -226,7 +226,16 @@ avs-analytics/
 
 ## 🆘 Troubleshooting
 
-- **Browser didn't open** → manually visit http://localhost:8501.
+- **"Connection refused" / the tab shows `https://localhost:8501`** → your browser
+  force‑upgraded the local address to HTTPS, which a local app cannot serve. Open
+  **`http://127.0.0.1:8501`** instead — a bare IP is never upgraded or HSTS‑pinned. The
+  Windows launchers already bind to and open `127.0.0.1` for this reason.
+- **Browser didn't open** → manually visit **http://127.0.0.1:8501**.
+- **First run looks stuck** → on a corporate laptop, antivirus may scan every package
+  during the one‑time install; give it a few minutes. The launcher waits for the server to
+  answer before opening the browser.
+- **`pip install` fails behind a proxy** → set `HTTPS_PROXY` / `HTTP_PROXY` (ask IT for the
+  address) and re‑run, e.g. `set HTTPS_PROXY=http://your-proxy:port`.
 - **Port already in use** → set a different port: `AVS_PORT=8600 ./run_local.sh` (or edit the launcher).
 - **"Page not found" on deep links** → use the sidebar navigation; the home page is at `/`.
 - **Required fields unmapped after upload** → open **Column Mapping** and map the fields marked •.
