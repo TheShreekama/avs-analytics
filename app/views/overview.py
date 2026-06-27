@@ -4,6 +4,7 @@ from __future__ import annotations
 import streamlit as st
 
 from app import state
+from app.config import EOS_STATUS_ORDER, SCOPE_PRIMARY
 from app.core import analytics, insights as insights_mod
 from app.core.metrics import fmt_currency, fmt_int, headline_kpis
 from app.ui import charts, components
@@ -18,10 +19,13 @@ def render() -> None:
     page_header("Executive Overview",
                 "Portfolio-wide view of AVS migration nominations, approvals and delivery health.")
     components.data_quality_banner(ctx)
+    components.banner_note("<b>Scope:</b> AVS Migration Nominations (onboarding to AVS). "
+                           "AVS → Azure Native '(From AVS)' offerings are reported on their "
+                           "own pages.")
 
     filters, where = components.filter_sidebar(
-        ctx, ["ww_region", "factory_offering", "migration_status_label", "eos_status"],
-        date_field="created_date", table=table)
+        ctx, ["region_geo", "migration_path", "migration_status_label", "eos_status"],
+        date_field="created_date", table=table, scope=SCOPE_PRIMARY)
 
     fact = analytics.select_all(ctx.con, where)
     if fact.empty:
@@ -51,24 +55,28 @@ def render() -> None:
                                      title="Nominations by Migration Status"),
                         width="stretch")
     with c2:
-        reg = analytics.distinct_count_by(ctx.con, where, "ww_region", "tpid")
+        reg = analytics.distinct_count_by(ctx.con, where, "region_geo", "tpid")
         st.plotly_chart(charts.bar(reg, "category", "count", horizontal=True,
                                    title="Accounts by Region"), width="stretch")
 
-    # Row 2: stacked status x region + EOS heatmap
+    # Row 2: operational status (x=status, stacked by region) + path × status heatmap
     section("Delivery health")
     c3, c4 = st.columns(2)
     with c3:
-        pivot = analytics.crosstab(ctx.con, where, "ww_region", "eos_status")
+        # x-axis = operational status; bars stacked by region.
+        pivot = analytics.crosstab(ctx.con, where, "eos_status", "region_geo")
         if not pivot.empty:
-            cols = [c for c in ["On Track", "Completed", "At Risk", "Delayed", "Blocked", "Cancelled"]
-                    if c in pivot.columns]
-            st.plotly_chart(charts.stacked_bar(pivot[cols], title="Operational status by region"),
+            order = [s for s in EOS_STATUS_ORDER if s in pivot.index]
+            st.plotly_chart(charts.stacked_bar(pivot.reindex(order),
+                                               title="Operational status by region"),
                             width="stretch")
     with c4:
-        pivot2 = analytics.crosstab(ctx.con, where, "factory_offering", "eos_status")
+        # AVS Migration Nominations broken out by migration path × status.
+        pivot2 = analytics.crosstab(ctx.con, where, "migration_path", "eos_status")
         if not pivot2.empty:
-            st.plotly_chart(charts.heatmap(pivot2, title="Track × status heatmap"),
+            cols = [c for c in EOS_STATUS_ORDER if c in pivot2.columns]
+            st.plotly_chart(charts.heatmap(pivot2[cols] if cols else pivot2,
+                                           title="Migration path × status heatmap"),
                             width="stretch")
 
     # Trend

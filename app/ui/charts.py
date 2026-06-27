@@ -15,7 +15,7 @@ _FONT = dict(family="Segoe UI, sans-serif", color=PALETTE["ink"], size=13)
 
 
 def _base_layout(fig: go.Figure, height: int = 360, title: str | None = None,
-                 showlegend: bool = True) -> go.Figure:
+                 showlegend: bool = True, int_y: bool = True) -> go.Figure:
     fig.update_layout(
         height=height,
         title=dict(text=title, font=dict(size=15, color=PALETTE["ink"])) if title else None,
@@ -29,6 +29,9 @@ def _base_layout(fig: go.Figure, height: int = 360, title: str | None = None,
     )
     fig.update_xaxes(showgrid=False, zeroline=False, linecolor=PALETTE["border"])
     fig.update_yaxes(showgrid=True, gridcolor="#EEF1F5", zeroline=False)
+    if int_y:
+        # Counts are whole numbers — never label the value axis with decimals.
+        fig.update_yaxes(tickformat=",d")
     return fig
 
 
@@ -60,11 +63,13 @@ def bar(df: pd.DataFrame, x: str, y: str, title: str | None = None, horizontal: 
             text=df[y] if text else None, textposition="outside",
             hovertemplate="%{y}: %{x}<extra></extra>"))
         fig.update_yaxes(autorange="reversed")
-    else:
-        fig = go.Figure(go.Bar(
-            x=df[x], y=df[y], marker_color=colors,
-            text=df[y] if text else None, textposition="outside",
-            hovertemplate="%{x}: %{y}<extra></extra>"))
+        fig = _base_layout(fig, height, title, showlegend=False, int_y=False)
+        fig.update_xaxes(tickformat=",d")   # value axis is horizontal here
+        return fig
+    fig = go.Figure(go.Bar(
+        x=df[x], y=df[y], marker_color=colors,
+        text=df[y] if text else None, textposition="outside",
+        hovertemplate="%{x}: %{y}<extra></extra>"))
     return _base_layout(fig, height, title, showlegend=False)
 
 

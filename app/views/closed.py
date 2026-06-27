@@ -4,6 +4,7 @@ from __future__ import annotations
 import streamlit as st
 
 from app import state
+from app.config import SCOPE_PRIMARY
 from app.core import analytics
 from app.core.metrics import fmt_int
 from app.ui import charts, components
@@ -22,8 +23,8 @@ def render() -> None:
                                "<b>last wave</b> is done/completed.")
 
     filters, where = components.filter_sidebar(
-        ctx, ["ww_region", "region", "factory_offering", "eos_status"],
-        date_field="actual_end_date", table=table)
+        ctx, ["region_geo", "migration_path", "eos_status"],
+        date_field="actual_end_date", table=table, scope=SCOPE_PRIMARY)
 
     con = ctx.con
     closed_where = analytics._where_and(where, '"is_closed" = TRUE')
@@ -62,7 +63,7 @@ def render() -> None:
         else:
             components.empty_state("No closure dates available in selection.")
     with c2:
-        cr = analytics.closure_rate_by(con, where, "ww_region")
+        cr = analytics.closure_rate_by(con, where, "region_geo")
         if not cr.empty:
             st.plotly_chart(charts.bar(cr, "category", "closure_rate", horizontal=True,
                                        title="Closure rate by region (%)"),
@@ -80,13 +81,13 @@ def render() -> None:
     with c3:
         st.markdown("**⏳ Longest-open nominations**")
         open_where = analytics._where_and(where, '"is_open" = TRUE')
-        cols = ["customer_name", "factory_offering", "ww_region", "eos_status", "aging_days"]
+        cols = ["customer_name", "migration_path", "region_geo", "eos_status", "aging_days"]
         cols = [c for c in cols if c in ctx.fact.columns]
         components.show_table(
             analytics.fetch_rows(con, open_where, cols, "aging_days", True, 15), height=380)
     with c4:
-        st.markdown("**✅ Recently closed nominations**")
-        cols2 = ["customer_name", "factory_offering", "ww_region", "cycle_time_days", "closure_date"]
+        st.markdown("**✅ Closed in selected range**")
+        cols2 = ["customer_name", "migration_path", "region_geo", "cycle_time_days", "closure_date"]
         cols2 = [c for c in cols2 if c in ctx.fact.columns]
         components.show_table(
-            analytics.fetch_rows(con, closed_where, cols2, "closure_date", True, 15), height=380)
+            analytics.fetch_rows(con, closed_where, cols2, "closure_date", True, 50), height=380)

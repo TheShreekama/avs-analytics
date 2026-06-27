@@ -70,17 +70,30 @@ streamlit run Home.py
 |---|--------|---------------|
 | 🏠 | **Overview** | Portfolio KPIs, status & regional distribution, delivery health, top insights |
 | 1 | **Accounts by Migration Status** | Account/nomination counts by status, regional breakdown, donut + stacked bar + heatmap + drill‑down grid |
-| 2 | **Nominations Approved** | Approved This‑Week/Month/Quarter/YTD, daily/weekly/monthly trends, regional & track comparison, approval latency |
-| 3 | **Nominations Closed** | Closure velocity, closure rate by region, aging, longest‑open & recently‑closed lists |
+| 2 | **Nominations Approved** | Approved This‑Week/Month/Quarter/YTD, daily/weekly/monthly trends, regional & path comparison, approval latency |
+| 3 | **Nominations Closed** | Closure velocity, closure rate by region, aging, longest‑open & range‑filtered closed lists |
 | 4 | **AV36 EOS Status** | Scoped to **AV36/EOS** nominations (any wave with an AV36/EOS path); derived status taxonomy (On Track / Completed / At Risk / Delayed / Blocked / Cancelled), Region × Status heatmap, aging, risk hotspots |
-| 5 | **Nomination Trends** | Monthly / quarterly / yearly volume, cumulative, peaks/troughs, seasonality |
-| 6 | **Approved Trend Analysis** | 1/2/3‑year windows, YoY & MoM, cumulative, growth rates (actuals only — no forecasting) |
-| 7 | **AVS → Azure Native** | Sankey flow, track & target distribution, Started/In‑Progress/Completed, completion & backlog, adoption insights |
+| 5 | **AVS → Azure Native — Status** | Dedicated home for the **"(From AVS)"** offerings (SQL / OSS DB / Windows / Linux migrations). Status, targets, operational health, records — **shown here only**, never mixed into the primary reports |
+| 6 | **Nomination Trends** | Monthly / quarterly / yearly volume, cumulative, peaks/troughs, seasonality |
+| 7 | **Approved Trend Analysis** | 1/2/3‑year windows, YoY & MoM, cumulative, growth rates (actuals only — no forecasting) |
+| 8 | **AVS → Azure Native — Trends** | Sankey flow, path & target distribution, Started/In‑Progress/Completed, completion & backlog, adoption insights |
 | 💡 | **Insights** | Full deterministic insights engine, grouped by category |
 | 📄 | **Reports & Export** | Build a comprehensive or module‑specific executive **PDF**; CSV exports |
+| 📖 | **Methodology & Logic** | Plain‑language reference for every metric, status, scope and insight rule |
 
-Every report has **Region / Status / Track / Date‑range filters** and an adjustable
-**"as‑of" date** that anchors all This‑Week/Month/Quarter/YTD windows.
+Every report has **Region / Status / path filters** and a **date‑range preset**
+(This/Last week, This/Last month, Last 3/6 months, This FY, All time, Custom — default
+**Last week**), plus an adjustable **"as‑of" date** that anchors the presets and all
+This‑Week/Month/Quarter/YTD windows.
+
+### Reporting scope (AVS‑centric)
+
+The dashboard's primary focus is **AVS Migration Nominations** (onboarding *to* AVS).
+Offerings whose migration path is **"(From AVS)"** — i.e. migrating *away* from AVS to an
+Azure‑native service — are a different motion and are **quarantined to their own two pages**
+(*AVS → Azure Native — Status* and *— Trends*). They never appear in any other status or
+trend report, so the primary numbers stay clean. **Region** is shown as geography only
+(Americas / EMEA / ASIA); the segment lives in **Customer Segment**.
 
 ---
 
@@ -90,9 +103,10 @@ Rules derived directly from the data, including:
 
 - Highest / lowest approval‑rate region
 - Fastest‑closing region & overall closure rate
-- Largest migration backlog & oldest open nomination
+- Approval velocity (median created→approved latency, slowest region)
+- Oldest open nomination
 - Most common migration status
-- Fastest‑growing migration track (period‑over‑period)
+- Fastest‑growing migration path (period‑over‑period)
 - Top Azure‑native destination & completion rate
 - EOS risk hotspots
 - ACR concentration

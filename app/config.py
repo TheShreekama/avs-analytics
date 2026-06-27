@@ -78,6 +78,28 @@ DIR_TO_AVS = "Onboard to AVS"
 DIR_FROM_AVS = "AVS → Azure Native"
 DIR_OTHER = "Other / Unclassified"
 
+# --------------------------------------------------------------------------- #
+# Reporting scope
+# --------------------------------------------------------------------------- #
+# The dashboard's primary focus is *AVS Migration Nominations* (onboarding to
+# AVS).  Offerings whose migration path is "(From AVS)" — i.e. AVS → Azure
+# Native — are quarantined to their own dedicated pages and never mixed into the
+# primary status/trend reports.
+SCOPE_PRIMARY = "primary"      # is_from_avs = FALSE  (AVS onboarding nominations)
+SCOPE_FROM_AVS = "from_avs"    # is_from_avs = TRUE   (AVS → Azure Native)
+
+# --------------------------------------------------------------------------- #
+# Date-range presets (anchored on the reporting as-of date)
+# --------------------------------------------------------------------------- #
+# Microsoft fiscal year starts in July.
+FY_START_MONTH = int(os.environ.get("AVS_FY_START_MONTH", "7"))
+
+DATE_PRESETS = [
+    "This week", "Last week", "This month", "Last month",
+    "Last 3 months", "Last 6 months", "This FY", "All time", "Custom",
+]
+DEFAULT_DATE_PRESET = "Last week"
+
 # Default network settings for the local server.
 DEFAULT_PORT = int(os.environ.get("AVS_PORT", "8501"))
 

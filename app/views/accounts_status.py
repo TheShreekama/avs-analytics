@@ -4,6 +4,7 @@ from __future__ import annotations
 import streamlit as st
 
 from app import state
+from app.config import SCOPE_PRIMARY
 from app.core import analytics
 from app.core.metrics import fmt_int
 from app.ui import charts, components
@@ -17,10 +18,11 @@ def render() -> None:
     page_header("Accounts by Migration Status",
                 "Distribution of accounts and nominations across the migration pipeline.")
     components.data_quality_banner(ctx)
+    components.banner_note("<b>Scope:</b> AVS Migration Nominations (onboarding to AVS).")
 
     filters, where = components.filter_sidebar(
-        ctx, ["ww_region", "region", "migration_status_label", "factory_offering"],
-        date_field="created_date", table=table)
+        ctx, ["region_geo", "migration_status_label", "migration_path"],
+        date_field="created_date", table=table, scope=SCOPE_PRIMARY)
 
     con = ctx.con
     total = analytics.total_rows(con, where)
@@ -34,7 +36,7 @@ def render() -> None:
         {"label": "Nominations", "value": fmt_int(total)},
         {"label": "Distinct Accounts", "value": fmt_int(accounts)},
         {"label": "Pipeline Stages", "value": fmt_int(statuses)},
-        {"label": "Regions", "value": fmt_int(int(analytics.scalar(con, where, "COUNT(DISTINCT ww_region)")))},
+        {"label": "Regions", "value": fmt_int(int(analytics.scalar(con, where, "COUNT(DISTINCT region_geo)")))},
     ])
     st.write("")
 
@@ -52,7 +54,8 @@ def render() -> None:
                         width="stretch")
 
     section("Regional breakdown")
-    pivot = analytics.crosstab(con, where, "ww_region", "migration_status_label")
+    # x-axis = migration status; bars stacked by region.
+    pivot = analytics.crosstab(con, where, "migration_status_label", "region_geo")
     c3, c4 = st.columns(2)
     with c3:
         if not pivot.empty:
@@ -63,13 +66,15 @@ def render() -> None:
                                    percent=(mode == "Share %")),
                 width="stretch")
     with c4:
-        if not pivot.empty:
-            st.plotly_chart(charts.heatmap(pivot, title="Region × status heatmap"),
+        # region × status heatmap
+        heat = analytics.crosstab(con, where, "region_geo", "migration_status_label")
+        if not heat.empty:
+            st.plotly_chart(charts.heatmap(heat, title="Region × status heatmap"),
                             width="stretch")
 
     section("Drill-down")
     dim = st.selectbox("Group accounts by",
-                       ["region", "area", "customer_segment", "factory_offering", "phase"],
+                       ["region_geo", "customer_segment", "migration_path", "phase"],
                        format_func=lambda x: x.replace("_", " ").title(), key="as_dim")
     breakdown = analytics.crosstab(con, where, dim, "migration_status_label")
     if not breakdown.empty:
@@ -77,7 +82,7 @@ def render() -> None:
         components.show_table(breakdown.reset_index().rename(columns={"row": dim}))
 
     section("Nomination records")
-    cols = ["task_id", "customer_name", "ww_region", "region", "factory_offering",
+    cols = ["task_id", "customer_name", "region_geo", "migration_path",
             "migration_status_label", "eos_status", "current_state", "total_acr", "created_date"]
     cols = [c for c in cols if c in ctx.fact.columns]
     rows = analytics.fetch_rows(con, where, cols, "created_date", True, 500)

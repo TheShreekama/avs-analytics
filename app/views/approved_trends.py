@@ -10,6 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from app import state
+from app.config import SCOPE_PRIMARY
 from app.core import analytics
 from app.core.metrics import fmt_int, pct_delta
 from app.ui import charts, components
@@ -28,8 +29,8 @@ def render() -> None:
                                "<b>Wave-1</b> approval date.")
 
     filters, where = components.filter_sidebar(
-        ctx, ["ww_region", "factory_offering", "migration_direction"], date_field=None,
-        table=table)
+        ctx, ["region_geo", "migration_path"], date_field=None,
+        table=table, scope=SCOPE_PRIMARY)
 
     con = ctx.con
     window = st.radio("Analysis window", ["Last 1 Year", "Last 2 Years", "Last 3 Years", "All"],
@@ -98,7 +99,7 @@ def render() -> None:
 
     section("Approvals by region over time")
     grain = "year" if years and years > 1 else "month"
-    sql = f'''SELECT date_trunc('{grain}', approval_date) AS period, ww_region AS series,
+    sql = f'''SELECT date_trunc('{grain}', approval_date) AS period, region_geo AS series,
               COUNT(*) AS value FROM {table} {appr_where} GROUP BY 1,2 ORDER BY 1'''
     long = con.execute(sql).fetchdf()
     if not long.empty:

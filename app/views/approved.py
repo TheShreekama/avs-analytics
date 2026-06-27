@@ -4,6 +4,7 @@ from __future__ import annotations
 import streamlit as st
 
 from app import state
+from app.config import SCOPE_PRIMARY
 from app.core import analytics
 from app.core.metrics import fmt_int
 from app.ui import charts, components
@@ -22,8 +23,8 @@ def render() -> None:
                                "<b>Wave-1</b> approval date.")
 
     filters, where = components.filter_sidebar(
-        ctx, ["ww_region", "region", "factory_offering", "migration_direction"],
-        date_field="approval_date", table=table)
+        ctx, ["region_geo", "migration_path", "migration_status_label"],
+        date_field="approval_date", table=table, scope=SCOPE_PRIMARY)
 
     con = ctx.con
     # restrict to approved items for this report
@@ -52,16 +53,16 @@ def render() -> None:
                                         title="Cumulative approvals", color="#107C41"),
                             width="stretch")
 
-    section("Regional & track comparison")
+    section("Regional & path comparison")
     c3, c4 = st.columns(2)
     with c3:
-        reg = analytics.count_by(con, appr_where, "ww_region")
+        reg = analytics.count_by(con, appr_where, "region_geo")
         st.plotly_chart(charts.bar(reg, "category", "count", horizontal=True,
                                    title="Approvals by region"), width="stretch")
     with c4:
-        trk = analytics.count_by(con, appr_where, "factory_offering")
+        trk = analytics.count_by(con, appr_where, "migration_path")
         st.plotly_chart(charts.bar(trk, "category", "count", horizontal=True,
-                                   title="Approvals by migration track"),
+                                   title="Approvals by migration path"),
                         width="stretch")
 
     section("Approval latency")
@@ -79,9 +80,10 @@ def render() -> None:
         st.plotly_chart(charts.bar(lat, "period", "value", title="Approved per month"),
                         width="stretch")
 
-    section("Recently approved")
-    cols = ["task_id", "customer_name", "ww_region", "factory_offering",
+    section("Approved nominations in selected range")
+    cols = ["task_id", "customer_name", "region_geo", "migration_path",
             "migration_status_label", "approval_date", "approval_latency_days", "total_acr"]
     cols = [c for c in cols if c in ctx.fact.columns]
-    rows = analytics.fetch_rows(con, appr_where, cols, "approval_date", True, 200)
+    rows = analytics.fetch_rows(con, appr_where, cols, "approval_date", True, 500)
     components.show_table(rows, height=360)
+    st.caption("Reflects the date range selected in the sidebar (most recent first).")

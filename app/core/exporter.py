@@ -141,12 +141,13 @@ def _strip(text: str) -> str:
 # Section builders — each returns a list of flowables
 # --------------------------------------------------------------------------- #
 def _sec_overview(con, where, ss) -> list:
-    out = [Paragraph("Portfolio Overview", ss["H1"])]
+    out = [Paragraph("Portfolio Overview", ss["H1"]),
+           Paragraph("Scope: AVS Migration Nominations (onboarding to AVS).", ss["Muted"])]
     status = analytics.count_by(con, where, "migration_status_label")
     if not status.empty:
         out += [Paragraph("By Migration Status", ss["H2"]),
                 _img(charts.donut(status, "category", "count", height=320)), Spacer(1, 0.2 * cm)]
-    reg = analytics.count_by(con, where, "ww_region")
+    reg = analytics.count_by(con, where, "region_geo")
     if not reg.empty:
         out += [Paragraph("By Region", ss["H2"]),
                 _img(charts.bar(reg, "category", "count", horizontal=True, height=290))]
@@ -161,7 +162,7 @@ def _sec_approved(con, where, ss) -> list:
     if not trend.empty:
         out += [Paragraph("Monthly Approval Trend", ss["H2"]),
                 _img(charts.line(trend, "period", "value", area=True, height=300))]
-    reg = analytics.count_by(con, w, "ww_region")
+    reg = analytics.count_by(con, w, "region_geo")
     if not reg.empty:
         out += [Paragraph("Approvals by Region", ss["H2"]),
                 _img(charts.bar(reg, "category", "count", horizontal=True, height=270))]
@@ -171,7 +172,7 @@ def _sec_approved(con, where, ss) -> list:
 
 def _sec_closed(con, where, ss) -> list:
     out = [Paragraph("Nominations Closed", ss["H1"])]
-    cr = analytics.closure_rate_by(con, where, "ww_region")
+    cr = analytics.closure_rate_by(con, where, "region_geo")
     if not cr.empty:
         out += [Paragraph("Closure Rate by Region", ss["H2"]),
                 _img(charts.bar(cr, "category", "closure_rate", horizontal=True, height=270))]
@@ -191,7 +192,7 @@ def _sec_eos(con, where, ss) -> list:
     if not dist.empty:
         out += [Paragraph("EOS Status Distribution", ss["H2"]),
                 _img(charts.bar(dist, "category", "count", color_status=True, height=290))]
-    pivot = analytics.crosstab(con, w, "ww_region", "eos_status")
+    pivot = analytics.crosstab(con, w, "region_geo", "eos_status")
     if not pivot.empty:
         out += [Paragraph("Region × EOS Status", ss["H2"]),
                 _img(charts.heatmap(pivot, height=300))]
@@ -212,15 +213,16 @@ def _sec_trends(con, where, ss) -> list:
 
 
 def _sec_avs_azure(con, where, ss) -> list:
-    w = analytics._where_and(where, '"migration_direction" = \'AVS → Azure Native\'')
-    out = [Paragraph("AVS → Azure Native", ss["H1"])]
-    tgt = analytics.count_by(con, w, "azure_target")
+    # ``where`` is already scoped to AVS → Azure Native by build_report.
+    out = [Paragraph("AVS → Azure Native", ss["H1"]),
+           Paragraph("Scope: offerings migrating away from AVS ('(From AVS)').", ss["Muted"])]
+    tgt = analytics.count_by(con, where, "azure_target")
     if not tgt.empty:
         out += [Paragraph("Azure-Native Targets", ss["H2"]),
                 _img(charts.donut(tgt, "category", "count", height=300))]
-    stage = analytics.migration_stage_by_track(con, w)
+    stage = analytics.migration_stage_by_track(con, where, track_dim="migration_path")
     if not stage.empty:
-        out += [Paragraph("Delivery Stage by Track", ss["H2"]),
+        out += [Paragraph("Delivery Stage by Migration Path", ss["H2"]),
                 _img(charts.grouped_bar(stage, "track", ["started", "in_progress", "completed"],
                                         height=290))]
     out.append(PageBreak())
@@ -242,19 +244,19 @@ def _sec_insights(con, where, ss) -> list:
 
 def _sec_tables(con, where, ss) -> list:
     out = [Paragraph("Operational Detail", ss["H1"])]
-    cr = analytics.closure_rate_by(con, where, "ww_region")
+    cr = analytics.closure_rate_by(con, where, "region_geo")
     if not cr.empty:
         cr = cr.rename(columns={"category": "Region", "total": "Total", "closed": "Closed",
                                 "closure_rate": "Closure %"})
         out += [Paragraph("Closure Rate by Region", ss["H2"]),
                 _df_table(cr.head(12), ss, col_widths=[7 * cm, 3 * cm, 3 * cm, 4 * cm]),
                 Spacer(1, 0.4 * cm)]
-    cols = ["customer_name", "factory_offering", "ww_region", "eos_status", "aging_days"]
+    cols = ["customer_name", "migration_path", "region_geo", "eos_status", "aging_days"]
     longest = analytics.fetch_rows(con, analytics._where_and(where, '"is_open" = TRUE'),
                                    cols, "aging_days", True, 10)
     if not longest.empty:
-        longest = longest.rename(columns={"customer_name": "Customer", "factory_offering": "Track",
-                                          "ww_region": "Region", "eos_status": "Status",
+        longest = longest.rename(columns={"customer_name": "Customer", "migration_path": "Path",
+                                          "region_geo": "Region", "eos_status": "Status",
                                           "aging_days": "Age (d)"})
         out += [Paragraph("Longest-Open Nominations", ss["H2"]),
                 _df_table(longest, ss,
@@ -281,7 +283,10 @@ def build_report(ctx, where: str = "", scope_label: str = "All data",
     sections = sections or SECTION_KEYS
     ss = _styles()
     con = ctx.con
-    fact = analytics.select_all(con, where)
+    # The cover/summary KPIs reflect the primary AVS-onboarding scope; the
+    # AVS → Azure Native section reports the "(From AVS)" offerings separately.
+    primary_where = analytics.apply_scope(where, "primary")
+    fact = analytics.select_all(con, primary_where)
     kpis = headline_kpis(fact)
     ins = insights_mod.generate_insights(fact)
 
@@ -319,12 +324,15 @@ def build_report(ctx, where: str = "", scope_label: str = "All data",
         story.append(Spacer(1, 0.1 * cm))
     story.append(PageBreak())
 
-    # Selected sections
+    # Selected sections — each scoped to its reporting motion so "(From AVS)"
+    # offerings only ever appear in the AVS → Azure Native section.
     for key in sections:
         fn = _SECTION_FN.get(key)
         if fn:
+            sec_scope = "from_avs" if key == "avs_azure" else "primary"
+            sec_where = analytics.apply_scope(where, sec_scope)
             try:
-                story += fn(con, where, ss)
+                story += fn(con, sec_where, ss)
             except Exception:  # a thin slice shouldn't break the whole report
                 continue
 

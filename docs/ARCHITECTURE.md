@@ -43,14 +43,16 @@ rollup.build_customer_rollup       → one row per customer (dedup across waves)
       │
 loader.make_connection             → DuckDB tables `fact` (waves) + `customer` (dedup)
       │     a global toggle picks which table reports query (analytics.use_table)
+      │     a reporting *scope* (analytics.apply_scope) keeps "(From AVS)" offerings
+      │     out of every primary report (enforced once in the filter sidebar)
       │
       ├── analytics.*  (SQL aggregations: count_by, crosstab, timeseries,
       │                 closure/approval rate, Sankey, stage-by-track, fetch_rows)
-      ├── metrics.*    (WTD/MTD/QTD/YTD periods, headline KPIs, formatting)
+      ├── metrics.*    (WTD/MTD/QTD/YTD periods, date-range presets, KPIs, formatting)
       ├── insights.*   (deterministic rules → Insight cards)
       └── exporter.*   (ReportLab PDF + local Plotly→PNG via kaleido)
       ▼
-app/views/*  (11 Streamlit report pages)  ←  app/ui/* (theme, charts, components)
+app/views/*  (13 Streamlit report pages)  ←  app/ui/* (theme, charts, components)
 ```
 
 ## Module map
@@ -72,7 +74,7 @@ app/views/*  (11 Streamlit report pages)  ←  app/ui/* (theme, charts, componen
 | `app/ui/components.py` | KPI rows, filter sidebar, tables, period KPIs |
 | `app/state.py` | Session `DataContext`, cached build steps |
 | `app/main.py` | Navigation + sidebar assembly (`run()`) |
-| `app/views/*` | The 11 report pages |
+| `app/views/*` | The 13 report pages |
 | `Home.py` | Entry point (root‑level; keeps `app` importable, avoids `pages/` magic) |
 
 ## The canonical schema
@@ -84,6 +86,11 @@ screen — never in code. `auto_map` matches headers by exact → normalized →
 containment, so the standard export and close variants map with zero clicks.
 
 ### Key derivations
+- **Reporting scope:** `is_from_avs` splits the data — primary reports show AVS Migration
+  Nominations (`is_from_avs = FALSE`); the two AVS → Azure Native pages show the
+  `"(From AVS)"` offerings (`is_from_avs = TRUE`). Nothing crosses over.
+- **Region (geography):** `region_geo` = the part of WW Region before the first " - "
+  (Americas / EMEA / ASIA); the segment stays in Customer Segment.
 - **Migration direction:** `"… (From AVS)"` → *AVS → Azure Native*; `to AVS` / `EGS` /
   `AV36` / `ODAA` → *Onboard to AVS*.
 - **Azure‑native target:** path → destination service (e.g. *SQL Server MI Migration* →
@@ -121,8 +128,8 @@ pre‑installed, plus the app, into `AVS_Analytics_Portable.zip`. The launcher
 
 ## Testing
 
-- `tests/test_core.py` — 20 assertions on parsing, derivations, DuckDB queries, metrics and
-  insights, validated against the sample.
+- `tests/test_core.py` — assertions on parsing, derivations, region geography, reporting
+  scope, date‑range presets, DuckDB queries, metrics and insights, validated against the sample.
+- `tests/test_app.py` — renders every page (both counting modes) under Streamlit's `AppTest`
+  runtime via `tests/_page_harness.py` and asserts no render errors.
 - `tests/stress_test.py` — synthetic 500k‑row performance check.
-- `tests/_page_harness.py` — renders any view under Streamlit's `AppTest` runtime (used to
-  smoke‑test all 11 pages for render errors).

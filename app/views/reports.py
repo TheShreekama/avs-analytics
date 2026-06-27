@@ -22,9 +22,10 @@ def render() -> None:
                 "Everything is rendered locally.")
     components.data_quality_banner(ctx)
 
+    # No reporting scope here: the PDF splits primary vs AVS→Azure per-section,
+    # so the sidebar filters stay scope-agnostic (region / status only).
     filters, where = components.filter_sidebar(
-        ctx, ["ww_region", "factory_offering", "eos_status"], date_field="created_date",
-        table=table)
+        ctx, ["region_geo", "eos_status"], date_field="created_date", table=table)
     scope = "Filtered view" if where else "All data"
     n = analytics.total_rows(ctx.con, where)
 

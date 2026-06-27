@@ -38,6 +38,41 @@ def standard_periods(as_of: pd.Timestamp) -> dict[str, Period]:
     }
 
 
+def fiscal_year_start(as_of: pd.Timestamp, fy_start_month: int = 7) -> pd.Timestamp:
+    """Start of the fiscal year containing ``as_of`` (Microsoft FY starts July)."""
+    as_of = pd.Timestamp(as_of)
+    y = as_of.year if as_of.month >= fy_start_month else as_of.year - 1
+    return pd.Timestamp(year=y, month=fy_start_month, day=1)
+
+
+def date_preset_range(as_of: pd.Timestamp, name: str,
+                      fy_start_month: int = 7) -> tuple[pd.Timestamp, pd.Timestamp] | None:
+    """Resolve a named date-range preset to (start, end) anchored on ``as_of``.
+
+    Returns ``None`` for "All time" / "Custom" (no fixed range).
+    """
+    as_of = pd.Timestamp(as_of).normalize()
+    wk_start = as_of - pd.Timedelta(days=int(as_of.weekday()))  # Monday of this week
+    if name == "This week":
+        return wk_start, as_of
+    if name == "Last week":
+        return wk_start - pd.Timedelta(days=7), wk_start - pd.Timedelta(days=1)
+    if name == "This month":
+        return as_of.replace(day=1), as_of
+    if name == "Last month":
+        prev_end = as_of.replace(day=1) - pd.Timedelta(days=1)
+        return prev_end.replace(day=1), prev_end
+    if name == "Last 3 months":
+        return as_of - pd.DateOffset(months=3) + pd.Timedelta(days=1), as_of
+    if name == "Last 6 months":
+        return as_of - pd.DateOffset(months=6) + pd.Timedelta(days=1), as_of
+    if name == "This FY":
+        return fiscal_year_start(as_of, fy_start_month), as_of
+    if name == "Year to date":
+        return as_of.replace(month=1, day=1), as_of
+    return None  # All time / Custom
+
+
 def count_in_periods(dates: pd.Series, as_of: pd.Timestamp) -> dict[str, int]:
     """Count non-null dates falling inside each standard period."""
     dates = pd.to_datetime(dates, errors="coerce")
