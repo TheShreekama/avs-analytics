@@ -182,10 +182,6 @@ def _rgba(hex_color: str, alpha: float) -> str:
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return f"rgba({r},{g},{b},{alpha})"
 
-
-def to_png(fig: go.Figure, width: int = 900, height: int = 380, scale: float = 2.0) -> bytes:
-    """Render a figure to PNG bytes (used by the PDF exporter).
-
-    Uses kaleido 0.2.1, which bundles its own Chromium and runs fully offline.
-    """
-    return fig.to_image(format="png", width=width, height=height, scale=scale)
+# Note: static image rendering for the PDF lives in app/ui/pdf_charts.py
+# (matplotlib).  Plotly figures here are only rendered interactively in the
+# browser, so no bundled image-export engine (kaleido/Chromium) is needed.

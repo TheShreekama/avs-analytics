@@ -50,7 +50,7 @@ loader.make_connection             → DuckDB tables `fact` (waves) + `customer`
       │                 closure/approval rate, Sankey, stage-by-track, fetch_rows)
       ├── metrics.*    (WTD/MTD/QTD/YTD periods, date-range presets, KPIs, formatting)
       ├── insights.*   (deterministic rules → Insight cards)
-      └── exporter.*   (ReportLab PDF + local Plotly→PNG via kaleido)
+      └── exporter.*   (ReportLab PDF + matplotlib static charts — no bundled browser)
       ▼
 app/views/*  (13 Streamlit report pages)  ←  app/ui/* (theme, charts, components)
 ```
@@ -119,12 +119,14 @@ sample include numeric‑prefixed WW Region values, a column‑shifted row (a da
 a currency in Total Cores), and an invalid Customer Segment. These surface in the
 **Insights** page and the data‑quality banner rather than silently corrupting metrics.
 
-## Packaging
+## Deployment (corporate‑friendly)
 
-`packaging/build_windows.ps1` assembles a private embeddable‑Python runtime with all wheels
-pre‑installed, plus the app, into `AVS_Analytics_Portable.zip`. The launcher
-`Start_AVS_Analytics.bat` runs `runtime\python.exe -m streamlit run Home.py` bound to
-`localhost` and opens the browser. See [`INSTALL.md`](INSTALL.md).
+The app runs from source — **no compiled launcher, no `.bat`/`.ps1` scripts, and no bundled
+browser binary** — which keeps it easy on strict antivirus/EDR policies. You install Python
+3.11, create a `.venv`, `pip install -r requirements.txt`, and `streamlit run Home.py`; the
+server binds to `127.0.0.1` (loopback) and you open `http://127.0.0.1:8501`. PDF charts are
+rendered with matplotlib (not kaleido/Chromium). Full copy‑paste Windows instructions are in
+[`INSTALL.md`](INSTALL.md).
 
 ## Testing
 

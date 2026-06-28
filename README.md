@@ -18,49 +18,42 @@ This application is **standalone and self‑sufficient. It does not talk to the 
 - ❌ **No AI / no LLM** — the insights engine is 100% deterministic rules.
 - ❌ **No telemetry, no tracking, no outbound calls** of any kind.
 - ✅ **All processing is local** — your data never leaves the machine.
-- ✅ The only "server" is a **local web server bound to `localhost`** that draws the
-  dashboard in your browser (this is how every browser app works). It is **not reachable
+- ✅ The only "server" is a **local web server bound to `127.0.0.1`** (loopback) that draws
+  the dashboard in your browser (this is how every browser app works). It is **not reachable
   from your network or the internet** and exchanges data only between your browser and
   your own computer.
 
-The only time an internet connection is used is **once, by the person building the
-package**, to download the Python libraries into the bundle. After that, the bundle is
-fully self‑contained and runs in an air‑gapped environment.
+The only time an internet connection is used is **once, when you install the Python
+libraries** (`pip install`). After that, the app runs fully offline / air‑gapped.
 
 > Want to verify? There isn't a single `requests`, `urllib`, `httpx`, `socket`, cloud SDK
 > or AI client anywhere in the code. The only third‑party libraries are `streamlit`,
-> `pandas`, `numpy`, `duckdb`, `plotly`, and `reportlab` — all local compute.
+> `pandas`, `numpy`, `duckdb`, `plotly`, `reportlab` and `matplotlib` — all local compute,
+> **no bundled browser/Chromium** and no compiled launcher.
 
 ---
 
 ## 🚀 Quick Start
 
-### For end users (Windows — no installation required)
+You install Python once, then run two commands. There are **no `.bat`/`.exe` launchers and
+no PowerShell download scripts** — this keeps it friendly to strict corporate
+antivirus/EDR. Full step‑by‑step (Windows, copy‑paste): **[`docs/INSTALL.md`](docs/INSTALL.md)**.
 
-1. Extract `AVS_Analytics_Portable.zip`.
-2. Double‑click **`Start_AVS_Analytics.bat`**.
-3. Your browser opens at **http://localhost:8501**.
-
-That's it. **No Python, Node, Docker, Java, or database to install** — a private Python
-runtime is bundled inside the ZIP.
-
-### For developers / from source
-
-**Windows:** double‑click `run_local.bat`
-**macOS:** double‑click `Start_AVS_Analytics.command`
-**macOS / Linux (terminal):**
+**Prerequisite:** Python 3.11 from [python.org](https://www.python.org/downloads/windows/)
+(tick *“Add python.exe to PATH”*). Then, from the project folder:
 
 ```bash
-./run_local.sh
-```
-
-These create a self‑contained virtual environment on first run (requires Python 3.10+),
-then launch the app and open your browser. Or run it manually:
-
-```bash
+python -m venv .venv
+# Windows (PowerShell):  .\.venv\Scripts\Activate.ps1
+# macOS / Linux:         source .venv/bin/activate
 pip install -r requirements.txt
 streamlit run Home.py
 ```
+
+Then open **http://127.0.0.1:8501** (use `http://` and `127.0.0.1`, not `https`/`localhost`).
+
+> **macOS / Linux** also have an optional one‑command launcher that creates the venv for
+> you: `./run_local.sh` (or double‑click `Start_AVS_Analytics.command` on macOS).
 
 ---
 
@@ -138,9 +131,9 @@ inflated wave counts. The sidebar shows both totals (e.g. *Waves: 1,240 · Accou
 The **Reports** page produces a leadership‑ready PDF. Choose a **comprehensive** report
 (all modules) or **select specific modules** (Overview, Approved, Closed, AV36 EOS, Trends,
 AVS→Azure, Insights, Tables). Every PDF includes a cover, executive summary, KPI grid,
-charts, ranked insights and a generation timestamp. Charts are rendered locally (bundled
-Chromium via `kaleido`) — no internet needed. CSV exports of the cleaned data and insights
-are available too.
+charts, ranked insights and a generation timestamp. Charts are rendered locally with
+**matplotlib** (no bundled browser) — no internet needed. CSV exports of the cleaned data
+and insights are available too.
 
 ---
 
@@ -172,7 +165,7 @@ Supported uploads: **CSV, XLSX, XLS**. First row must be headers.
 Browser (localhost:8501)
         │  (local only)
         ▼
-Streamlit UI  ──►  app/views/*   (11 report pages, st.navigation)
+Streamlit UI  ──►  app/views/*   (13 report pages, st.navigation)
         │
         ▼
 app/core/   loader → cleaning → DuckDB fact table
@@ -190,18 +183,19 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
 ---
 
-## 📦 Building the portable Windows bundle
+## 🏢 Corporate / locked‑down laptops
 
-On any Windows machine with internet access (one‑time):
+This app is deliberately easy on antivirus/EDR policies:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
-```
+- **No compiled executables and no launcher scripts** (`.bat`/`.ps1`) — you run plain
+  Python source (`streamlit run Home.py`).
+- **No bundled browser/Chromium** — PDF charts use matplotlib; the dashboard uses Plotly
+  inside your own browser.
+- **User‑space only** — Python + the `.venv` live in your profile; no admin, no registry.
+- **Loopback only** — the server binds to `127.0.0.1`; nothing is exposed to the network.
 
-This downloads embeddable Python, installs the dependencies into a private `runtime\`
-folder, copies the app, and produces **`dist\AVS_Analytics_Portable.zip`**. Ship that ZIP.
-
-See [`docs/INSTALL.md`](docs/INSTALL.md) for full packaging & deployment instructions.
+See **[`docs/INSTALL.md`](docs/INSTALL.md)** for the full copy‑paste Windows setup, proxy
+tips, and troubleshooting.
 
 ---
 
@@ -217,23 +211,20 @@ See [`docs/INSTALL.md`](docs/INSTALL.md) for full packaging & deployment instruc
 
 ```
 avs-analytics/
-├── Home.py                     # Streamlit entry point (run this)
-├── run_local.sh / .bat         # developer launchers (venv)
-├── Start_AVS_Analytics.command # macOS launcher
+├── Home.py                     # Streamlit entry point (streamlit run Home.py)
+├── run_local.sh                # optional macOS/Linux launcher (creates .venv)
+├── Start_AVS_Analytics.command # optional macOS double-click launcher
 ├── requirements.txt
 ├── app/
 │   ├── main.py                 # navigation + sidebar assembly
-│   ├── config.py               # palette, paths, constants
-│   ├── core/                   # schema, loader, cleaning, mapping,
+│   ├── config.py               # palette, paths, scope & date-preset constants
+│   ├── core/                   # schema, loader, cleaning, rollup, mapping,
 │   │                           #   metrics, analytics, insights, exporter
-│   ├── ui/                     # theme, charts, components
-│   └── views/                  # the 11 report pages
+│   ├── ui/                     # theme, charts (Plotly), pdf_charts (matplotlib), components
+│   └── views/                  # the 13 report pages
 ├── sample_data/avs_raw_data.csv
-├── packaging/
-│   ├── Start_AVS_Analytics.bat # user launcher (ships in the bundle)
-│   └── build_windows.ps1       # builds the portable ZIP
 ├── tests/                      # core + app smoke tests
-└── docs/                       # INSTALL, ARCHITECTURE, screenshots
+└── docs/                       # INSTALL (Windows setup), ARCHITECTURE, screenshots
 ```
 
 ---

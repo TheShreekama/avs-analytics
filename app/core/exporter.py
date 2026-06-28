@@ -1,8 +1,9 @@
-"""Executive PDF export engine (ReportLab + Plotly/kaleido static images).
+"""Executive PDF export engine (ReportLab + matplotlib static images).
 
 Produces a leadership-ready PDF.  The report is assembled from selectable
 *sections* so the Reports page can export a single module or a comprehensive
-report.  Fully local — no network, no external services.
+report.  Fully local — no network, no external services, and no bundled browser
+binary (charts are rasterised with matplotlib, not kaleido/Chromium).
 """
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ from reportlab.platypus import (BaseDocTemplate, Frame, Image, PageBreak, PageTe
                                 Paragraph, Spacer, Table, TableStyle)
 
 from ..config import APP_NAME, APP_VERSION, PALETTE
-from ..ui import charts
+from ..ui import pdf_charts as pc
 from . import analytics, insights as insights_mod
 from .metrics import fmt_currency, fmt_int, headline_kpis
 
@@ -124,11 +125,12 @@ def _df_table(df: pd.DataFrame, ss, col_widths=None, header_bg=_PRIMARY) -> Tabl
     return t
 
 
-def _img(fig, width_cm=17.0, height_px=330, width_px=950):
-    png = charts.to_png(fig, width=width_px, height=height_px, scale=2.0)
+def _img(png: bytes, width_cm=17.0):
+    """Wrap PNG bytes (from app.ui.pdf_charts) in a ReportLab Image, aspect-preserved."""
     img = Image(io.BytesIO(png))
+    ratio = (img.imageHeight / img.imageWidth) if img.imageWidth else 0.36
     img.drawWidth = width_cm * cm
-    img.drawHeight = width_cm * cm * (height_px / width_px)
+    img.drawHeight = width_cm * cm * ratio
     return img
 
 
@@ -146,11 +148,11 @@ def _sec_overview(con, where, ss) -> list:
     status = analytics.count_by(con, where, "migration_status_label")
     if not status.empty:
         out += [Paragraph("By Migration Status", ss["H2"]),
-                _img(charts.donut(status, "category", "count", height=320)), Spacer(1, 0.2 * cm)]
+                _img(pc.donut_png(status, "category", "count", height_px=320)), Spacer(1, 0.2 * cm)]
     reg = analytics.count_by(con, where, "region_geo")
     if not reg.empty:
         out += [Paragraph("By Region", ss["H2"]),
-                _img(charts.bar(reg, "category", "count", horizontal=True, height=290))]
+                _img(pc.bar_png(reg, "category", "count", horizontal=True, height_px=290))]
     out.append(PageBreak())
     return out
 
@@ -161,11 +163,11 @@ def _sec_approved(con, where, ss) -> list:
     trend = analytics.timeseries(con, w, "approval_date", "month")
     if not trend.empty:
         out += [Paragraph("Monthly Approval Trend", ss["H2"]),
-                _img(charts.line(trend, "period", "value", area=True, height=300))]
+                _img(pc.line_png(trend, "period", "value", area=True, height_px=300))]
     reg = analytics.count_by(con, w, "region_geo")
     if not reg.empty:
         out += [Paragraph("Approvals by Region", ss["H2"]),
-                _img(charts.bar(reg, "category", "count", horizontal=True, height=270))]
+                _img(pc.bar_png(reg, "category", "count", horizontal=True, height_px=270))]
     out.append(PageBreak())
     return out
 
@@ -175,11 +177,11 @@ def _sec_closed(con, where, ss) -> list:
     cr = analytics.closure_rate_by(con, where, "region_geo")
     if not cr.empty:
         out += [Paragraph("Closure Rate by Region", ss["H2"]),
-                _img(charts.bar(cr, "category", "closure_rate", horizontal=True, height=270))]
+                _img(pc.bar_png(cr, "category", "closure_rate", horizontal=True, height_px=270))]
     aging = analytics.aging_buckets(con, where, only_open=True)
     if not aging.empty:
         out += [Paragraph("Age of Open Nominations", ss["H2"]),
-                _img(charts.bar(aging.astype({"bucket": str}), "bucket", "count", height=270))]
+                _img(pc.bar_png(aging.astype({"bucket": str}), "bucket", "count", height_px=270))]
     out.append(PageBreak())
     return out
 
@@ -191,11 +193,11 @@ def _sec_eos(con, where, ss) -> list:
     dist = analytics.count_by(con, w, "eos_status")
     if not dist.empty:
         out += [Paragraph("EOS Status Distribution", ss["H2"]),
-                _img(charts.bar(dist, "category", "count", color_status=True, height=290))]
+                _img(pc.bar_png(dist, "category", "count", color_status=True, height_px=290))]
     pivot = analytics.crosstab(con, w, "region_geo", "eos_status")
     if not pivot.empty:
         out += [Paragraph("Region × EOS Status", ss["H2"]),
-                _img(charts.heatmap(pivot, height=300))]
+                _img(pc.heatmap_png(pivot, cmap="RdYlGn_r", height_px=300))]
     out.append(PageBreak())
     return out
 
@@ -205,9 +207,9 @@ def _sec_trends(con, where, ss) -> list:
     ts = analytics.timeseries(con, where, "created_date", "month")
     if not ts.empty:
         out += [Paragraph("Monthly Volume", ss["H2"]),
-                _img(charts.line(ts, "period", "value", area=True, height=290)),
+                _img(pc.line_png(ts, "period", "value", area=True, height_px=290)),
                 Paragraph("Cumulative", ss["H2"]),
-                _img(charts.line(ts, "period", "cumulative", height=270, color="#5C2E91"))]
+                _img(pc.line_png(ts, "period", "cumulative", height_px=270, color="#5C2E91"))]
     out.append(PageBreak())
     return out
 
@@ -219,12 +221,12 @@ def _sec_avs_azure(con, where, ss) -> list:
     tgt = analytics.count_by(con, where, "azure_target")
     if not tgt.empty:
         out += [Paragraph("Azure-Native Targets", ss["H2"]),
-                _img(charts.donut(tgt, "category", "count", height=300))]
+                _img(pc.donut_png(tgt, "category", "count", height_px=300))]
     stage = analytics.migration_stage_by_track(con, where, track_dim="migration_path")
     if not stage.empty:
         out += [Paragraph("Delivery Stage by Migration Path", ss["H2"]),
-                _img(charts.grouped_bar(stage, "track", ["started", "in_progress", "completed"],
-                                        height=290))]
+                _img(pc.grouped_bar_png(stage, "track", ["started", "in_progress", "completed"],
+                                        height_px=290))]
     out.append(PageBreak())
     return out
 
