@@ -33,7 +33,7 @@ def render() -> None:
            "and planned-end vs as-of date.")
 
     filters, where = components.filter_sidebar(
-        ctx, ["ww_region", "region", "eos_status", "factory_offering"],
+        ctx, ["region_geo", "eos_status", "migration_path"],
         date_field="planned_end_date", table=table)
     # Restrict the whole report to AV36/EOS nominations.
     where = analytics._where_and(where, '"is_av36_eos" = TRUE')
@@ -69,7 +69,7 @@ def render() -> None:
                                    title="EOS status counts"), width="stretch")
 
     section("Region vs EOS status (heatmap)")
-    pivot = analytics.crosstab(con, where, "ww_region", "eos_status")
+    pivot = analytics.crosstab(con, where, "region_geo", "eos_status")
     if not pivot.empty:
         ordered = [c for c in EOS_STATUS_ORDER if c in pivot.columns]
         st.plotly_chart(charts.heatmap(pivot[ordered], colorscale="RdYlGn_r",
@@ -89,11 +89,11 @@ def render() -> None:
                                               title="EOS status by month"),
                             width="stretch")
     with c4:
-        pivot2 = analytics.crosstab(con, where, "factory_offering", "eos_status")
+        pivot2 = analytics.crosstab(con, where, "migration_path", "eos_status")
         if not pivot2.empty:
             ordered2 = [c for c in EOS_STATUS_ORDER if c in pivot2.columns]
             st.plotly_chart(charts.stacked_bar(pivot2[ordered2], horizontal=True,
-                                               title="EOS status by track"),
+                                               title="EOS status by migration path"),
                             width="stretch")
 
     section("Aging analysis (open & at-risk items)")
@@ -106,7 +106,7 @@ def render() -> None:
                             width="stretch")
     with c6:
         risk_where = analytics._where_and(where, "eos_status IN ('At Risk','Delayed','Blocked')")
-        cols = ["customer_name", "ww_region", "eos_status", "aging_days"]
+        cols = ["customer_name", "region_geo", "eos_status", "aging_days"]
         cols = [c for c in cols if c in ctx.fact.columns]
         st.markdown("**🚩 At-risk / blocked items**")
         components.show_table(

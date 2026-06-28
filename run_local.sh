@@ -12,7 +12,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PORT="${AVS_PORT:-8501}"
-URL="http://localhost:${PORT}"
+URL="http://127.0.0.1:${PORT}"
 VENV=".venv"
 PY="python3"
 
@@ -51,6 +51,6 @@ echo ""
 
 exec python -m streamlit run Home.py \
     --server.port "$PORT" \
-    --server.address localhost \
+    --server.address 127.0.0.1 \
     --server.headless true \
     --browser.gatherUsageStats false

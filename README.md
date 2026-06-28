@@ -18,49 +18,42 @@ This application is **standalone and self‑sufficient. It does not talk to the 
 - ❌ **No AI / no LLM** — the insights engine is 100% deterministic rules.
 - ❌ **No telemetry, no tracking, no outbound calls** of any kind.
 - ✅ **All processing is local** — your data never leaves the machine.
-- ✅ The only "server" is a **local web server bound to `localhost`** that draws the
-  dashboard in your browser (this is how every browser app works). It is **not reachable
+- ✅ The only "server" is a **local web server bound to `127.0.0.1`** (loopback) that draws
+  the dashboard in your browser (this is how every browser app works). It is **not reachable
   from your network or the internet** and exchanges data only between your browser and
   your own computer.
 
-The only time an internet connection is used is **once, by the person building the
-package**, to download the Python libraries into the bundle. After that, the bundle is
-fully self‑contained and runs in an air‑gapped environment.
+The only time an internet connection is used is **once, when you install the Python
+libraries** (`pip install`). After that, the app runs fully offline / air‑gapped.
 
 > Want to verify? There isn't a single `requests`, `urllib`, `httpx`, `socket`, cloud SDK
 > or AI client anywhere in the code. The only third‑party libraries are `streamlit`,
-> `pandas`, `numpy`, `duckdb`, `plotly`, and `reportlab` — all local compute.
+> `pandas`, `numpy`, `duckdb`, `plotly`, `reportlab` and `matplotlib` — all local compute,
+> **no bundled browser/Chromium** and no compiled launcher.
 
 ---
 
 ## 🚀 Quick Start
 
-### For end users (Windows — no installation required)
+You install Python once, then run two commands. There are **no `.bat`/`.exe` launchers and
+no PowerShell download scripts** — this keeps it friendly to strict corporate
+antivirus/EDR. Full step‑by‑step (Windows, copy‑paste): **[`docs/INSTALL.md`](docs/INSTALL.md)**.
 
-1. Extract `AVS_Analytics_Portable.zip`.
-2. Double‑click **`Start_AVS_Analytics.bat`**.
-3. Your browser opens at **http://localhost:8501**.
-
-That's it. **No Python, Node, Docker, Java, or database to install** — a private Python
-runtime is bundled inside the ZIP.
-
-### For developers / from source
-
-**Windows:** double‑click `run_local.bat`
-**macOS:** double‑click `Start_AVS_Analytics.command`
-**macOS / Linux (terminal):**
+**Prerequisite:** Python 3.11 from [python.org](https://www.python.org/downloads/windows/)
+(tick *“Add python.exe to PATH”*). Then, from the project folder:
 
 ```bash
-./run_local.sh
-```
-
-These create a self‑contained virtual environment on first run (requires Python 3.10+),
-then launch the app and open your browser. Or run it manually:
-
-```bash
+python -m venv .venv
+# Windows (PowerShell):  .\.venv\Scripts\Activate.ps1
+# macOS / Linux:         source .venv/bin/activate
 pip install -r requirements.txt
 streamlit run Home.py
 ```
+
+Then open **http://127.0.0.1:8501** (use `http://` and `127.0.0.1`, not `https`/`localhost`).
+
+> **macOS / Linux** also have an optional one‑command launcher that creates the venv for
+> you: `./run_local.sh` (or double‑click `Start_AVS_Analytics.command` on macOS).
 
 ---
 
@@ -70,17 +63,30 @@ streamlit run Home.py
 |---|--------|---------------|
 | 🏠 | **Overview** | Portfolio KPIs, status & regional distribution, delivery health, top insights |
 | 1 | **Accounts by Migration Status** | Account/nomination counts by status, regional breakdown, donut + stacked bar + heatmap + drill‑down grid |
-| 2 | **Nominations Approved** | Approved This‑Week/Month/Quarter/YTD, daily/weekly/monthly trends, regional & track comparison, approval latency |
-| 3 | **Nominations Closed** | Closure velocity, closure rate by region, aging, longest‑open & recently‑closed lists |
+| 2 | **Nominations Approved** | Approved This‑Week/Month/Quarter/YTD, daily/weekly/monthly trends, regional & path comparison, approval latency |
+| 3 | **Nominations Closed** | Closure velocity, closure rate by region, aging, longest‑open & range‑filtered closed lists |
 | 4 | **AV36 EOS Status** | Scoped to **AV36/EOS** nominations (any wave with an AV36/EOS path); derived status taxonomy (On Track / Completed / At Risk / Delayed / Blocked / Cancelled), Region × Status heatmap, aging, risk hotspots |
-| 5 | **Nomination Trends** | Monthly / quarterly / yearly volume, cumulative, peaks/troughs, seasonality |
-| 6 | **Approved Trend Analysis** | 1/2/3‑year windows, YoY & MoM, cumulative, growth rates (actuals only — no forecasting) |
-| 7 | **AVS → Azure Native** | Sankey flow, track & target distribution, Started/In‑Progress/Completed, completion & backlog, adoption insights |
+| 5 | **AVS → Azure Native — Status** | Dedicated home for the **"(From AVS)"** offerings (SQL / OSS DB / Windows / Linux migrations). Status, targets, operational health, records — **shown here only**, never mixed into the primary reports |
+| 6 | **Nomination Trends** | Monthly / quarterly / yearly volume, cumulative, peaks/troughs, seasonality |
+| 7 | **Approved Trend Analysis** | 1/2/3‑year windows, YoY & MoM, cumulative, growth rates (actuals only — no forecasting) |
+| 8 | **AVS → Azure Native — Trends** | Sankey flow, path & target distribution, Started/In‑Progress/Completed, completion & backlog, adoption insights |
 | 💡 | **Insights** | Full deterministic insights engine, grouped by category |
 | 📄 | **Reports & Export** | Build a comprehensive or module‑specific executive **PDF**; CSV exports |
+| 📖 | **Methodology & Logic** | Plain‑language reference for every metric, status, scope and insight rule |
 
-Every report has **Region / Status / Track / Date‑range filters** and an adjustable
-**"as‑of" date** that anchors all This‑Week/Month/Quarter/YTD windows.
+Every report has **Region / Status / path filters** and a **date‑range preset**
+(This/Last week, This/Last month, Last 3/6 months, This FY, All time, Custom — default
+**Last week**), plus an adjustable **"as‑of" date** that anchors the presets and all
+This‑Week/Month/Quarter/YTD windows.
+
+### Reporting scope (AVS‑centric)
+
+The dashboard's primary focus is **AVS Migration Nominations** (onboarding *to* AVS).
+Offerings whose migration path is **"(From AVS)"** — i.e. migrating *away* from AVS to an
+Azure‑native service — are a different motion and are **quarantined to their own two pages**
+(*AVS → Azure Native — Status* and *— Trends*). They never appear in any other status or
+trend report, so the primary numbers stay clean. **Region** is shown as geography only
+(Americas / EMEA / ASIA); the segment lives in **Customer Segment**.
 
 ---
 
@@ -90,9 +96,10 @@ Rules derived directly from the data, including:
 
 - Highest / lowest approval‑rate region
 - Fastest‑closing region & overall closure rate
-- Largest migration backlog & oldest open nomination
+- Approval velocity (median created→approved latency, slowest region)
+- Oldest open nomination
 - Most common migration status
-- Fastest‑growing migration track (period‑over‑period)
+- Fastest‑growing migration path (period‑over‑period)
 - Top Azure‑native destination & completion rate
 - EOS risk hotspots
 - ACR concentration
@@ -124,9 +131,9 @@ inflated wave counts. The sidebar shows both totals (e.g. *Waves: 1,240 · Accou
 The **Reports** page produces a leadership‑ready PDF. Choose a **comprehensive** report
 (all modules) or **select specific modules** (Overview, Approved, Closed, AV36 EOS, Trends,
 AVS→Azure, Insights, Tables). Every PDF includes a cover, executive summary, KPI grid,
-charts, ranked insights and a generation timestamp. Charts are rendered locally (bundled
-Chromium via `kaleido`) — no internet needed. CSV exports of the cleaned data and insights
-are available too.
+charts, ranked insights and a generation timestamp. Charts are rendered locally with
+**matplotlib** (no bundled browser) — no internet needed. CSV exports of the cleaned data
+and insights are available too.
 
 ---
 
@@ -158,7 +165,7 @@ Supported uploads: **CSV, XLSX, XLS**. First row must be headers.
 Browser (localhost:8501)
         │  (local only)
         ▼
-Streamlit UI  ──►  app/views/*   (11 report pages, st.navigation)
+Streamlit UI  ──►  app/views/*   (13 report pages, st.navigation)
         │
         ▼
 app/core/   loader → cleaning → DuckDB fact table
@@ -176,18 +183,19 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for details.
 
 ---
 
-## 📦 Building the portable Windows bundle
+## 🏢 Corporate / locked‑down laptops
 
-On any Windows machine with internet access (one‑time):
+This app is deliberately easy on antivirus/EDR policies:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
-```
+- **No compiled executables and no launcher scripts** (`.bat`/`.ps1`) — you run plain
+  Python source (`streamlit run Home.py`).
+- **No bundled browser/Chromium** — PDF charts use matplotlib; the dashboard uses Plotly
+  inside your own browser.
+- **User‑space only** — Python + the `.venv` live in your profile; no admin, no registry.
+- **Loopback only** — the server binds to `127.0.0.1`; nothing is exposed to the network.
 
-This downloads embeddable Python, installs the dependencies into a private `runtime\`
-folder, copies the app, and produces **`dist\AVS_Analytics_Portable.zip`**. Ship that ZIP.
-
-See [`docs/INSTALL.md`](docs/INSTALL.md) for full packaging & deployment instructions.
+See **[`docs/INSTALL.md`](docs/INSTALL.md)** for the full copy‑paste Windows setup, proxy
+tips, and troubleshooting.
 
 ---
 
@@ -203,23 +211,20 @@ See [`docs/INSTALL.md`](docs/INSTALL.md) for full packaging & deployment instruc
 
 ```
 avs-analytics/
-├── Home.py                     # Streamlit entry point (run this)
-├── run_local.sh / .bat         # developer launchers (venv)
-├── Start_AVS_Analytics.command # macOS launcher
+├── Home.py                     # Streamlit entry point (streamlit run Home.py)
+├── run_local.sh                # optional macOS/Linux launcher (creates .venv)
+├── Start_AVS_Analytics.command # optional macOS double-click launcher
 ├── requirements.txt
 ├── app/
 │   ├── main.py                 # navigation + sidebar assembly
-│   ├── config.py               # palette, paths, constants
-│   ├── core/                   # schema, loader, cleaning, mapping,
+│   ├── config.py               # palette, paths, scope & date-preset constants
+│   ├── core/                   # schema, loader, cleaning, rollup, mapping,
 │   │                           #   metrics, analytics, insights, exporter
-│   ├── ui/                     # theme, charts, components
-│   └── views/                  # the 11 report pages
+│   ├── ui/                     # theme, charts (Plotly), pdf_charts (matplotlib), components
+│   └── views/                  # the 13 report pages
 ├── sample_data/avs_raw_data.csv
-├── packaging/
-│   ├── Start_AVS_Analytics.bat # user launcher (ships in the bundle)
-│   └── build_windows.ps1       # builds the portable ZIP
 ├── tests/                      # core + app smoke tests
-└── docs/                       # INSTALL, ARCHITECTURE, screenshots
+└── docs/                       # INSTALL (Windows setup), ARCHITECTURE, screenshots
 ```
 
 ---

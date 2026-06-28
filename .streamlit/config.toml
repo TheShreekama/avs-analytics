@@ -7,8 +7,10 @@ textColor = "#1B1B1F"
 font = "sans serif"
 
 [server]
-# Bind to loopback only — the app is never exposed on the network.
-address = "localhost"
+# Bind to the loopback IP only — the app is never exposed on the network.
+# We use 127.0.0.1 (not "localhost") so corporate browsers that force-upgrade
+# localhost to HTTPS can't break the local HTTP app — a bare IP is never upgraded.
+address = "127.0.0.1"
 headless = true
 port = 8501
 enableXsrfProtection = true
@@ -18,7 +20,7 @@ fileWatcherType = "none"
 [browser]
 # No telemetry / usage stats — nothing is sent anywhere.
 gatherUsageStats = false
-serverAddress = "localhost"
+serverAddress = "127.0.0.1"
 
 [client]
 toolbarMode = "minimal"

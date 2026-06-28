@@ -4,12 +4,14 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from app.config import DIR_FROM_AVS
+from app.config import SCOPE_FROM_AVS
 from app import state
 from app.core import analytics
 from app.core.metrics import fmt_int, pct_delta
 from app.ui import charts, components
 from app.ui.theme import banner, page_header, section
+
+_TRACK = "migration_path"   # full offering names, e.g. "SQL Server MI Migration (From AVS)"
 
 
 def render() -> None:
@@ -26,18 +28,18 @@ def render() -> None:
     banner(f"<b>Scope:</b> {scope} (SQL DB/MI/IaaS, OSS DB, Azure VM, AKS, Oracle DB@Azure).")
 
     filters, where = components.filter_sidebar(
-        ctx, ["ww_region", "factory_offering", "azure_target", "eos_status"],
-        date_field="created_date", table=table)
+        ctx, ["region_geo", "migration_path", "azure_target", "eos_status"],
+        date_field="created_date", table=table, scope=SCOPE_FROM_AVS)
 
     con = ctx.con
-    # Constrain to AVS → Azure Native
-    base = analytics._where_and(where, f'"migration_direction" = \'{DIR_FROM_AVS}\'')
+    # The sidebar scope already constrains to AVS → Azure Native ("(From AVS)").
+    base = where
     n = analytics.total_rows(con, base)
     if n == 0:
         components.empty_state("No AVS→Azure-Native migrations in the current selection.")
         return
 
-    stage = analytics.migration_stage_by_track(con, base)
+    stage = analytics.migration_stage_by_track(con, base, track_dim=_TRACK)
     completed = int(stage["completed"].sum())
     in_prog = int(stage["in_progress"].sum())
     started = int(stage["started"].sum())
@@ -53,7 +55,7 @@ def render() -> None:
     st.write("")
 
     section("Migration flow (AVS → target service → stage)")
-    flow = analytics.sankey_avs_to_azure(con, where)
+    flow = analytics.sankey_avs_to_azure(con, base, track_dim=_TRACK)
     if not flow.empty:
         nodes, links, node_colors = _build_sankey(flow)
         st.plotly_chart(charts.sankey(nodes, links, node_colors=node_colors,
@@ -63,9 +65,9 @@ def render() -> None:
     section("Track & target distribution")
     c1, c2 = st.columns(2)
     with c1:
-        trk = analytics.count_by(con, base, "factory_offering")
+        trk = analytics.count_by(con, base, _TRACK)
         st.plotly_chart(charts.bar(trk, "category", "count", horizontal=True,
-                                   title="Nominations by migration track"),
+                                   title="Nominations by migration path (offering)"),
                         width="stretch")
     with c2:
         tgt = analytics.count_by(con, base, "azure_target")
@@ -88,14 +90,14 @@ def render() -> None:
                                         title="Cumulative AVS→Azure nominations", color="#5C2E91"),
                             width="stretch")
     with c4:
-        sql = f'''SELECT date_trunc('month', created_date) AS period, factory_offering AS series,
+        sql = f'''SELECT date_trunc('month', created_date) AS period, {_TRACK} AS series,
                   COUNT(*) AS value FROM {table} {base}
                   AND created_date IS NOT NULL GROUP BY 1,2 ORDER BY 1'''
         long = con.execute(sql).fetchdf()
         if not long.empty:
             long["period"] = pd.to_datetime(long["period"])
             st.plotly_chart(charts.multi_line(long, "period", "series", "value",
-                                              title="Track adoption per month"),
+                                              title="Path adoption per month"),
                             width="stretch")
 
     # Insights
@@ -104,7 +106,7 @@ def render() -> None:
 
     section("Backlog — open AVS→Azure migrations")
     open_where = analytics._where_and(base, '"is_open" = TRUE')
-    cols = ["customer_name", "factory_offering", "azure_target", "ww_region", "eos_status", "aging_days"]
+    cols = ["customer_name", "migration_path", "azure_target", "region_geo", "eos_status", "aging_days"]
     cols = [c for c in cols if c in ctx.fact.columns]
     components.show_table(analytics.fetch_rows(con, open_where, cols, "aging_days", True, 50),
                           height=360)
@@ -156,7 +158,7 @@ def _migration_insights(con, base, where, n, completed, stage) -> None:
                              "positive"))
 
     # Region driving adoption
-    reg = analytics.count_by(con, base, "ww_region")
+    reg = analytics.count_by(con, base, "region_geo")
     if not reg.empty:
         cards.append(Insight("Azure Native", "Region driving adoption",
                              f"**{reg.iloc[0]['category']}** drives the most AVS→Azure migrations "
@@ -180,7 +182,7 @@ def _migration_insights(con, base, where, n, completed, stage) -> None:
 
 
 def _fastest_growth(con, base):
-    sql = f'''SELECT created_month, factory_offering, COUNT(*) AS c
+    sql = f'''SELECT created_month, {_TRACK} AS track, COUNT(*) AS c
               FROM {analytics.current_table()} {base}
               AND created_month IS NOT NULL GROUP BY 1,2'''
     df = con.execute(sql).fetchdf()
@@ -188,8 +190,8 @@ def _fastest_growth(con, base):
         return None
     months = sorted(df["created_month"].unique())
     cur_m, prev_m = months[-1], months[-2]
-    cur = df[df["created_month"] == cur_m].set_index("factory_offering")["c"]
-    prev = df[df["created_month"] == prev_m].set_index("factory_offering")["c"]
+    cur = df[df["created_month"] == cur_m].set_index("track")["c"]
+    prev = df[df["created_month"] == prev_m].set_index("track")["c"]
     best = None
     for t in set(cur.index) | set(prev.index):
         c, p = int(cur.get(t, 0)), int(prev.get(t, 0))

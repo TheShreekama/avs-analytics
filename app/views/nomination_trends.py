@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from app import state
+from app.config import SCOPE_PRIMARY
 from app.core import analytics
 from app.core.metrics import fmt_int, pct_delta
 from app.ui import charts, components
@@ -18,10 +19,11 @@ def render() -> None:
     page_header("AVS Nomination Trends",
                 "Nomination volume over time with growth, peaks, troughs and seasonality.")
     components.data_quality_banner(ctx)
+    components.banner_note("<b>Scope:</b> AVS Migration Nominations (onboarding to AVS).")
 
     filters, where = components.filter_sidebar(
-        ctx, ["ww_region", "factory_offering", "migration_direction", "migration_status_label"],
-        date_field="created_date", table=table)
+        ctx, ["region_geo", "migration_path", "migration_status_label"],
+        date_field="created_date", table=table, scope=SCOPE_PRIMARY)
 
     con = ctx.con
     view = st.radio("View", ["Monthly", "Quarterly", "Yearly"], horizontal=True, key="nt_view")
@@ -68,7 +70,7 @@ def render() -> None:
                                 title="Cumulative nominations"), width="stretch")
 
     section("Trend by dimension")
-    dim = st.selectbox("Break down by", ["ww_region", "factory_offering", "migration_direction"],
+    dim = st.selectbox("Break down by", ["region_geo", "migration_path", "migration_status_label"],
                        format_func=lambda x: x.replace("_", " ").title(), key="nt_dim")
     grain = gmap[view]
     sql = f'''SELECT date_trunc('{grain}', created_date) AS period, "{dim}" AS series,

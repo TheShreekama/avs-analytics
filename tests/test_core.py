@@ -228,3 +228,67 @@ def test_av36_eos_path_detector():
     assert cleaning.is_av36_eos_path("AVS36 - EGS")
     assert cleaning.is_av36_eos_path("AV36 EOS Migration")
     assert not cleaning.is_av36_eos_path("SQL Server DB Migration (From AVS)")
+
+
+# --------------------------------------------------------------------------- #
+# Region geography + reporting scope
+# --------------------------------------------------------------------------- #
+def test_region_geo_strips_segment(built):
+    _, fact, _, _ = built
+    # ww_region keeps the full value; region_geo is geography only.
+    assert set(fact["region_geo"].unique()) <= {"Americas", "EMEA", "ASIA", "Unknown"}
+    assert (fact["ww_region"].str.contains(" - ")).any()       # segment retained in ww_region
+    assert not (fact["region_geo"].str.contains(" - ")).any()  # but not in region_geo
+
+
+def test_scope_clause():
+    assert analytics.scope_clause("primary") == '"is_from_avs" = FALSE'
+    assert analytics.scope_clause("from_avs") == '"is_from_avs" = TRUE'
+    assert analytics.scope_clause(None) == ""
+
+
+def test_scope_splits_offerings(built):
+    _, _, _, con = built
+    primary = analytics.total_rows(con, analytics.apply_scope("", "primary"))
+    from_avs = analytics.total_rows(con, analytics.apply_scope("", "from_avs"))
+    assert primary == 5 and from_avs == 6 and primary + from_avs == 11
+    # primary scope is exactly the "AVS Migration Nominations" offering
+    offerings = analytics.distinct_values(con, "factory_offering",
+                                          where=analytics.apply_scope("", "primary"))
+    assert offerings == ["AVS Migration Nominations"]
+    # from-AVS scope never includes it
+    from_offerings = analytics.distinct_values(con, "factory_offering",
+                                               where=analytics.apply_scope("", "from_avs"))
+    assert "AVS Migration Nominations" not in from_offerings
+
+
+def test_scope_on_customer_table(built):
+    from app.core import rollup
+    _, fact, report, _ = built
+    cust = rollup.build_customer_rollup(fact, report["as_of"])
+    assert "is_from_avs" in cust.columns
+    assert "region_geo" in cust.columns
+    # uniform flag matches the AVS→Azure membership column
+    assert bool((cust["is_from_avs"] == cust["is_avs_to_azure"]).all())
+
+
+# --------------------------------------------------------------------------- #
+# Date-range presets
+# --------------------------------------------------------------------------- #
+def test_date_preset_ranges():
+    as_of = pd.Timestamp("2026-06-17")   # a Wednesday
+    wk = metrics.date_preset_range(as_of, "This week")
+    assert wk[0] == pd.Timestamp("2026-06-15") and wk[1] == as_of   # Monday-based
+    lw = metrics.date_preset_range(as_of, "Last week")
+    assert lw[0] == pd.Timestamp("2026-06-08") and lw[1] == pd.Timestamp("2026-06-14")
+    lm = metrics.date_preset_range(as_of, "Last month")
+    assert lm[0] == pd.Timestamp("2026-05-01") and lm[1] == pd.Timestamp("2026-05-31")
+    # Microsoft FY starts in July: June 2026 is still FY2026 (started Jul 2025).
+    fy = metrics.date_preset_range(as_of, "This FY", 7)
+    assert fy[0] == pd.Timestamp("2025-07-01")
+    assert metrics.date_preset_range(as_of, "All time") is None
+
+
+def test_fiscal_year_start():
+    assert metrics.fiscal_year_start(pd.Timestamp("2026-06-30"), 7) == pd.Timestamp("2025-07-01")
+    assert metrics.fiscal_year_start(pd.Timestamp("2026-07-01"), 7) == pd.Timestamp("2026-07-01")

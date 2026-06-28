@@ -15,7 +15,7 @@ _FONT = dict(family="Segoe UI, sans-serif", color=PALETTE["ink"], size=13)
 
 
 def _base_layout(fig: go.Figure, height: int = 360, title: str | None = None,
-                 showlegend: bool = True) -> go.Figure:
+                 showlegend: bool = True, int_y: bool = True) -> go.Figure:
     fig.update_layout(
         height=height,
         title=dict(text=title, font=dict(size=15, color=PALETTE["ink"])) if title else None,
@@ -29,6 +29,9 @@ def _base_layout(fig: go.Figure, height: int = 360, title: str | None = None,
     )
     fig.update_xaxes(showgrid=False, zeroline=False, linecolor=PALETTE["border"])
     fig.update_yaxes(showgrid=True, gridcolor="#EEF1F5", zeroline=False)
+    if int_y:
+        # Counts are whole numbers — never label the value axis with decimals.
+        fig.update_yaxes(tickformat=",d")
     return fig
 
 
@@ -60,11 +63,13 @@ def bar(df: pd.DataFrame, x: str, y: str, title: str | None = None, horizontal: 
             text=df[y] if text else None, textposition="outside",
             hovertemplate="%{y}: %{x}<extra></extra>"))
         fig.update_yaxes(autorange="reversed")
-    else:
-        fig = go.Figure(go.Bar(
-            x=df[x], y=df[y], marker_color=colors,
-            text=df[y] if text else None, textposition="outside",
-            hovertemplate="%{x}: %{y}<extra></extra>"))
+        fig = _base_layout(fig, height, title, showlegend=False, int_y=False)
+        fig.update_xaxes(tickformat=",d")   # value axis is horizontal here
+        return fig
+    fig = go.Figure(go.Bar(
+        x=df[x], y=df[y], marker_color=colors,
+        text=df[y] if text else None, textposition="outside",
+        hovertemplate="%{x}: %{y}<extra></extra>"))
     return _base_layout(fig, height, title, showlegend=False)
 
 
@@ -177,10 +182,6 @@ def _rgba(hex_color: str, alpha: float) -> str:
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return f"rgba({r},{g},{b},{alpha})"
 
-
-def to_png(fig: go.Figure, width: int = 900, height: int = 380, scale: float = 2.0) -> bytes:
-    """Render a figure to PNG bytes (used by the PDF exporter).
-
-    Uses kaleido 0.2.1, which bundles its own Chromium and runs fully offline.
-    """
-    return fig.to_image(format="png", width=width, height=height, scale=scale)
+# Note: static image rendering for the PDF lives in app/ui/pdf_charts.py
+# (matplotlib).  Plotly figures here are only rendered interactively in the
+# browser, so no bundled image-export engine (kaleido/Chromium) is needed.

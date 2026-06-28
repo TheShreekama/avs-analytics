@@ -20,9 +20,9 @@ def run() -> None:
     from app import state
     from app.config import APP_NAME, APP_TAGLINE, APP_VERSION
     from app.ui.theme import inject_css
-    from app.views import (accounts_status, approved, approved_trends, avs_to_azure,
-                           closed, column_mapping, data_upload, eos_status, insights_page,
-                           nomination_trends, overview, reports)
+    from app.views import (accounts_status, approved, approved_trends, avs_native_status,
+                           avs_to_azure, closed, column_mapping, data_upload, eos_status,
+                           insights_page, methodology, nomination_trends, overview, reports)
 
     inject_css()
     ctx = state.ensure_context()
@@ -47,13 +47,15 @@ def run() -> None:
                     url_path="closed"),
             st.Page(eos_status.render, title="AV36 EOS Status", icon=":material/warning:",
                     url_path="eos-status"),
+            st.Page(avs_native_status.render, title="AVS → Azure Native Status",
+                    icon=":material/cloud_sync:", url_path="avs-native-status"),
         ],
         "Trend Analysis": [
             st.Page(nomination_trends.render, title="Nomination Trends",
                     icon=":material/timeline:", url_path="nomination-trends"),
             st.Page(approved_trends.render, title="Approved Trend Analysis",
                     icon=":material/trending_up:", url_path="approved-trends"),
-            st.Page(avs_to_azure.render, title="AVS to Azure Native",
+            st.Page(avs_to_azure.render, title="AVS → Azure Native Trends",
                     icon=":material/swap_horiz:", url_path="avs-to-azure"),
         ],
         "Data": [
@@ -61,6 +63,10 @@ def run() -> None:
                     url_path="data-upload"),
             st.Page(column_mapping.render, title="Column Mapping",
                     icon=":material/table_chart:", url_path="column-mapping"),
+        ],
+        "Reference": [
+            st.Page(methodology.render, title="Methodology & Logic",
+                    icon=":material/menu_book:", url_path="methodology"),
         ],
     })
 
@@ -83,7 +89,8 @@ def _sidebar_brand(ctx, state, app_name: str, tagline: str) -> None:
         f"**Dataset:** {src}  \n**Waves:** {len(ctx.fact):,} · **Accounts:** {n_cust:,}")
     cur = pd.Timestamp(ctx.as_of).date()
     new_asof = st.sidebar.date_input("Reporting as-of date", value=cur,
-                                     help="Anchors This-Week/Month/Quarter/YTD windows.")
+                                     help="Anchors all date-range presets and the "
+                                          "This-Week/Month/Quarter/YTD windows.")
     if pd.Timestamp(new_asof) != pd.Timestamp(ctx.as_of):
         state.reload_with(as_of=pd.Timestamp(new_asof))
         st.rerun()

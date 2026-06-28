@@ -2,14 +2,23 @@
 from __future__ import annotations
 
 import html
+import re
 
 import pandas as pd
 import streamlit as st
 
-from ..core import analytics, schema
+from ..config import DATE_PRESETS, DEFAULT_DATE_PRESET, FY_START_MONTH
+from ..core import analytics, metrics, schema
 from ..core.metrics import fmt_int
 from ..state import DataContext
 from .theme import banner
+
+# Render **bold** spans (markdown) inside HTML insight cards as <b> tags.
+_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+
+
+def _md_bold(text: str) -> str:
+    return _BOLD_RE.sub(r"<b>\1</b>", str(text))
 
 
 # --------------------------------------------------------------------------- #
@@ -50,7 +59,7 @@ def insight_cards(insights, columns: int = 2) -> None:
             st.markdown(
                 f'<div class="insight {ins.severity}"><div class="cat">{html.escape(ins.category)}</div>'
                 f'<div class="title">{html.escape(ins.title)}{metric}</div>'
-                f'<div class="detail">{ins.detail}</div></div>',
+                f'<div class="detail">{_md_bold(ins.detail)}</div></div>',
                 unsafe_allow_html=True)
 
 
@@ -73,52 +82,84 @@ def data_quality_banner(ctx: DataContext) -> None:
 # Filter sidebar
 # --------------------------------------------------------------------------- #
 _FILTER_LABELS = {f.key: f.label for f in schema.CANONICAL_FIELDS}
+_FILTER_LABELS.update({"region_geo": "Region", "migration_direction": "Direction",
+                       "azure_target": "Azure Target", "eos_status": "EOS Status",
+                       "migration_status_label": "Migration Status"})
 
 
 def filter_sidebar(ctx: DataContext, fields: list[str], date_field: str | None = "created_date",
-                   key_prefix: str = "f", table: str = "fact") -> tuple[dict, str]:
+                   key_prefix: str = "f", table: str = "fact",
+                   scope: str | None = None) -> tuple[dict, str]:
     """Render filter widgets in the sidebar; return (filters_dict, where_clause).
 
-    ``fields`` are canonical categorical keys to expose as multiselects.
-    ``date_field`` (if given) adds a date-range filter on that column.
+    ``fields`` are categorical column keys to expose as multiselects.
+    ``date_field`` (if given) adds a date-range *preset* selector on that column.
     ``table`` selects the counting grain (``fact`` or ``customer``).
+    ``scope`` (``primary`` | ``from_avs`` | ``None``) restricts every query — and
+    the filter option lists — to that reporting scope, so "(From AVS)" offerings
+    never leak into the primary reports (and vice-versa).
     """
     filters: dict = {}
     con = ctx.con
     frame = ctx.customer if table == "customer" else ctx.fact
+    scope_where = analytics.apply_scope("", scope)
     st.sidebar.markdown("### 🔎 Filters")
 
     for key in fields:
         if key not in frame.columns:
             continue
-        opts = analytics.distinct_values(con, key, table=table)
+        opts = analytics.distinct_values(con, key, table=table, where=scope_where)
         if not opts:
             continue
-        sel = st.sidebar.multiselect(_FILTER_LABELS.get(key, key), opts,
-                                     key=f"{key_prefix}_{key}")
+        sel = st.sidebar.multiselect(_FILTER_LABELS.get(key, key.replace("_", " ").title()),
+                                     opts, key=f"{key_prefix}_{key}")
         if sel:
             filters[key] = sel
 
     if date_field and date_field in frame.columns:
-        lo, hi = analytics.date_bounds(con, date_field, table=table)
-        if lo is not None and hi is not None:
-            lo, hi = pd.Timestamp(lo).date(), pd.Timestamp(hi).date()
-            label = _FILTER_LABELS.get(date_field, date_field) + " range"
-            rng = st.sidebar.date_input(label, value=(lo, hi), min_value=lo, max_value=hi,
-                                        key=f"{key_prefix}_date_{date_field}")
-            if isinstance(rng, (tuple, list)) and len(rng) == 2:
-                filters["_date"] = {"col": date_field, "start": rng[0], "end": rng[1]}
+        _date_preset_widget(ctx, filters, date_field, key_prefix)
 
-    n = analytics.total_rows(con, analytics.build_where(filters), table=table)
+    where = analytics.apply_scope(analytics.build_where(filters), scope)
+    n = analytics.total_rows(con, where, table=table)
+    base_n = analytics.total_rows(con, scope_where, table=table)
     unit = "accounts" if table == "customer" else "nominations"
-    st.sidebar.caption(f"**{fmt_int(n)}** of {fmt_int(len(frame))} {unit} in view")
+    st.sidebar.caption(f"**{fmt_int(n)}** of {fmt_int(base_n)} {unit} in view")
     if st.sidebar.button("Reset filters", width="stretch", key=f"{key_prefix}_reset"):
         for k in list(st.session_state.keys()):
             if k.startswith(key_prefix + "_"):
                 del st.session_state[k]
         st.rerun()
 
-    return filters, analytics.build_where(filters)
+    return filters, where
+
+
+def _date_preset_widget(ctx: DataContext, filters: dict, date_field: str, key_prefix: str) -> None:
+    """Date-range preset selector (This/Last week, This/Last month, 3/6 months, FY, …)."""
+    label = _FILTER_LABELS.get(date_field, date_field.replace("_", " ").title())
+    preset = st.sidebar.selectbox(
+        f"{label} range", DATE_PRESETS,
+        index=DATE_PRESETS.index(DEFAULT_DATE_PRESET), key=f"{key_prefix}_preset_{date_field}",
+        help="Windows are anchored on the reporting as-of date in the sidebar.")
+
+    start = end = None
+    if preset == "Custom":
+        lo, hi = analytics.date_bounds(ctx.con, date_field)
+        if lo is not None and hi is not None:
+            lo, hi = pd.Timestamp(lo).date(), pd.Timestamp(hi).date()
+            rng = st.sidebar.date_input("Custom range", value=(lo, hi), min_value=lo,
+                                        max_value=hi, key=f"{key_prefix}_custom_{date_field}")
+            if isinstance(rng, (tuple, list)) and len(rng) == 2:
+                start, end = rng
+    elif preset == "All time":
+        start = end = None
+    else:
+        rng = metrics.date_preset_range(ctx.as_of, preset, FY_START_MONTH)
+        if rng:
+            start, end = rng[0].date(), rng[1].date()
+
+    if start is not None and end is not None:
+        filters["_date"] = {"col": date_field, "start": start, "end": end}
+        st.sidebar.caption(f"📅 {start:%d %b %Y} → {end:%d %b %Y}")
 
 
 # --------------------------------------------------------------------------- #
@@ -130,6 +171,7 @@ _NICE.update({
     "aging_days": "Age (days)", "cycle_time_days": "Cycle Time (days)",
     "migration_status_label": "Migration Status", "dq_flags": "Data Quality Notes",
     "approval_latency_days": "Approval Latency (days)", "is_open": "Open", "is_closed": "Closed",
+    "region_geo": "Region", "migration_path": "Migration Path (offering)",
 })
 
 

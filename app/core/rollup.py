@@ -64,6 +64,7 @@ def build_customer_rollup(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFra
     out["migration_status_label"] = last["migration_status_label"]
     out["migration_status_code"] = last["migration_status_code"]
     out["ww_region"] = last["ww_region"]
+    out["region_geo"] = last["region_geo"]
     out["region"] = last["region"]
     out["area"] = last["area"]
     out["customer_segment"] = last["customer_segment"]
@@ -81,6 +82,7 @@ def build_customer_rollup(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFra
     # Category membership = ANY wave.
     out["is_av36_eos"] = g["is_av36_eos"].any()
     out["is_avs_to_azure"] = g["is_from_avs"].any()
+    out["is_from_avs"] = out["is_avs_to_azure"]   # uniform scope flag (matches fact)
     out["is_onboard"] = g["is_to_avs"].any()
     out["is_approved"] = g["is_approved"].any()
     out["is_declined"] = g["is_declined"].any()

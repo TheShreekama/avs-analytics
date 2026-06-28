@@ -72,6 +72,27 @@ def _where_and(where: str, extra: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Reporting scope (primary AVS onboarding vs AVS → Azure Native)
+# --------------------------------------------------------------------------- #
+def scope_clause(scope: str | None) -> str:
+    """SQL predicate for a reporting scope (``''`` when unscoped).
+
+    ``primary``  -> AVS Migration Nominations (onboarding); excludes "(From AVS)".
+    ``from_avs`` -> AVS → Azure Native only ("(From AVS)" offerings).
+    """
+    if scope == "primary":
+        return '"is_from_avs" = FALSE'
+    if scope == "from_avs":
+        return '"is_from_avs" = TRUE'
+    return ""
+
+
+def apply_scope(where: str, scope: str | None) -> str:
+    """AND the scope predicate onto an existing WHERE clause."""
+    return _where_and(where, scope_clause(scope))
+
+
+# --------------------------------------------------------------------------- #
 # Generic aggregations
 # --------------------------------------------------------------------------- #
 def count_by(con, where: str, dim: str, top: int | None = None,
@@ -200,12 +221,13 @@ def approval_rate_by(con, where: str, dim: str, table: str | None = None) -> pd.
     return con.execute(sql).fetchdf()
 
 
-def sankey_avs_to_azure(con, where: str, table: str | None = None) -> pd.DataFrame:
+def sankey_avs_to_azure(con, where: str, table: str | None = None,
+                        track_dim: str = "factory_offering") -> pd.DataFrame:
     """Flows for the AVS→Azure-Native Sankey: track -> target -> stage."""
     w = _where_and(where, '"migration_direction" = \'AVS → Azure Native\'')
     w = _where_and(w, '"azure_target" IS NOT NULL')
     sql = f"""
-        SELECT "factory_offering" AS track,
+        SELECT "{track_dim}" AS track,
                "azure_target" AS target,
                CASE WHEN "is_closed" THEN 'Completed'
                     WHEN "actual_start_date" IS NOT NULL THEN 'In Progress'
@@ -217,10 +239,11 @@ def sankey_avs_to_azure(con, where: str, table: str | None = None) -> pd.DataFra
     return con.execute(sql).fetchdf()
 
 
-def migration_stage_by_track(con, where: str, table: str | None = None) -> pd.DataFrame:
+def migration_stage_by_track(con, where: str, table: str | None = None,
+                             track_dim: str = "factory_offering") -> pd.DataFrame:
     """Started / In Progress / Completed counts per migration track."""
     sql = f"""
-        SELECT "factory_offering" AS track,
+        SELECT "{track_dim}" AS track,
                SUM(CASE WHEN "is_open" AND "actual_start_date" IS NULL THEN 1 ELSE 0 END) AS started,
                SUM(CASE WHEN "is_open" AND "actual_start_date" IS NOT NULL THEN 1 ELSE 0 END) AS in_progress,
                SUM(CASE WHEN "is_closed" THEN 1 ELSE 0 END) AS completed,
@@ -230,8 +253,10 @@ def migration_stage_by_track(con, where: str, table: str | None = None) -> pd.Da
     return con.execute(sql).fetchdf()
 
 
-def distinct_values(con, col: str, table: str | None = None) -> list:
-    sql = f'SELECT DISTINCT "{col}" AS v FROM {_t(table)} WHERE "{col}" IS NOT NULL ORDER BY 1'
+def distinct_values(con, col: str, table: str | None = None, where: str = "") -> list:
+    """Distinct non-null values of a column, optionally restricted by a scope/where."""
+    w = _where_and(where, f'"{col}" IS NOT NULL')
+    sql = f'SELECT DISTINCT "{col}" AS v FROM {_t(table)} {w} ORDER BY 1'
     return [r[0] for r in con.execute(sql).fetchall()]
 
 

@@ -40,12 +40,15 @@ def _rate_by(fact: pd.DataFrame, dim: str, flag: str, min_total: int = 3) -> pd.
     return g
 
 
-def generate_insights(fact: pd.DataFrame, region_dim: str = "ww_region") -> list[Insight]:
+def generate_insights(fact: pd.DataFrame, region_dim: str = "region_geo") -> list[Insight]:
     out: list[Insight] = []
     n = len(fact)
     if n == 0:
         return [Insight("Data", "No data in current selection",
                         "Adjust filters to see insights.", INFO)]
+    # Fall back gracefully if the preferred region column isn't present.
+    if region_dim not in fact.columns:
+        region_dim = "ww_region" if "ww_region" in fact.columns else fact.columns[0]
 
     # ---- Volume / coverage ------------------------------------------------ #
     accounts = fact["tpid"].nunique(dropna=True) if "tpid" in fact else n
@@ -101,24 +104,31 @@ def generate_insights(fact: pd.DataFrame, region_dim: str = "ww_region") -> list
                 f"(median {med.min():.0f} days vs {med.median():.0f} overall).",
                 POSITIVE, f"{med.min():.0f}d"))
 
-    # ---- Largest backlog -------------------------------------------------- #
-    open_fact = fact[fact["is_open"]]
-    if not open_fact.empty:
-        by_track = open_fact["factory_offering"].value_counts()
+    # ---- Approval velocity ------------------------------------------------ #
+    appr_lat = fact[fact["is_approved"] & fact["approval_latency_days"].notna()]
+    appr_lat = appr_lat[appr_lat["approval_latency_days"] >= 0]
+    if len(appr_lat) >= 3:
+        med_all = float(appr_lat["approval_latency_days"].median())
+        grp = appr_lat.groupby(region_dim)["approval_latency_days"]
+        by_reg = grp.median()[grp.size() >= 2]
+        slow = ""
+        if not by_reg.empty:
+            slow = f" Slowest region: **{by_reg.idxmax()}** ({by_reg.max():.0f}d median)."
         out.append(Insight(
-            "Backlog", "Largest open backlog by track",
-            f"**{by_track.index[0]}** has the largest backlog with "
-            f"{fmt_int(int(by_track.iloc[0]))} open nominations "
-            f"({fmt_int(len(open_fact))} open overall).", WARNING, fmt_int(int(by_track.iloc[0]))))
-        # oldest open
-        if open_fact["aging_days"].notna().any():
-            oldest = open_fact.loc[open_fact["aging_days"].idxmax()]
-            out.append(Insight(
-                "Backlog", "Oldest open nomination",
-                f"**{oldest.get('customer_name','?')}** "
-                f"({oldest.get('factory_offering','?')}) has been open "
-                f"{fmt_int(oldest['aging_days'])} days.", WARNING,
-                f"{fmt_int(oldest['aging_days'])}d"))
+            "Approvals", "Approval velocity",
+            f"Median time from creation to approval is {med_all:.0f} days.{slow}",
+            POSITIVE if med_all <= 14 else INFO, f"{med_all:.0f}d"))
+
+    # ---- Oldest open nomination ------------------------------------------- #
+    open_fact = fact[fact["is_open"]]
+    if not open_fact.empty and open_fact["aging_days"].notna().any():
+        oldest = open_fact.loc[open_fact["aging_days"].idxmax()]
+        out.append(Insight(
+            "Backlog", "Oldest open nomination",
+            f"**{oldest.get('customer_name','?')}** "
+            f"({oldest.get('factory_offering','?')}) has been open "
+            f"{fmt_int(oldest['aging_days'])} days.", WARNING,
+            f"{fmt_int(oldest['aging_days'])}d"))
 
     # ---- Most common migration status ------------------------------------ #
     if fact["migration_status_label"].notna().any():

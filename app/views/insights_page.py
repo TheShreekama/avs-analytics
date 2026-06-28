@@ -4,6 +4,7 @@ from __future__ import annotations
 import streamlit as st
 
 from app import state
+from app.config import SCOPE_PRIMARY
 from app.core import analytics, insights as insights_mod
 from app.ui import components
 from app.ui.theme import page_header, section
@@ -18,8 +19,8 @@ def render() -> None:
     components.data_quality_banner(ctx)
 
     filters, where = components.filter_sidebar(
-        ctx, ["ww_region", "factory_offering", "eos_status"], date_field="created_date",
-        table=table)
+        ctx, ["region_geo", "migration_path", "eos_status"], date_field="created_date",
+        table=table, scope=SCOPE_PRIMARY)
 
     fact = analytics.select_all(ctx.con, where)
     if fact.empty:
