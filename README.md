@@ -33,27 +33,35 @@ libraries** (`pip install`). After that, the app runs fully offline / air‑gapp
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick Start (Windows)
 
-You install Python once, then run two commands. There are **no `.bat`/`.exe` launchers and
-no PowerShell download scripts** — this keeps it friendly to strict corporate
-antivirus/EDR. Full step‑by‑step (Windows, copy‑paste): **[`docs/INSTALL.md`](docs/INSTALL.md)**.
+Install Python once, then run **one command** whenever you want the app. There are **no
+`.bat`/`.exe` launchers and no scripts** — which keeps it friendly to strict corporate
+antivirus/EDR.
 
-**Prerequisite:** Python 3.11 from [python.org](https://www.python.org/downloads/windows/)
-(tick *“Add python.exe to PATH”*). Then, from the project folder:
+**1. Install Python 3.11 (one time).** Download it from
+[python.org](https://www.python.org/downloads/windows/); on the first installer screen tick
+**“Add python.exe to PATH”**, then click **Install Now** (no admin rights needed).
 
-```bash
+**2. Set up the app (one time).** Open **Command Prompt**, `cd` into the project folder, and run:
+
+```bat
 python -m venv .venv
-# Windows (PowerShell):  .\.venv\Scripts\Activate.ps1
-# macOS / Linux:         source .venv/bin/activate
-pip install -r requirements.txt
-streamlit run Home.py
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-Then open **http://127.0.0.1:8501** (use `http://` and `127.0.0.1`, not `https`/`localhost`).
+**3. Run the app (every time).** From the same folder:
 
-> **macOS / Linux** also have an optional one‑command launcher that creates the venv for
-> you: `./run_local.sh` (or double‑click `Start_AVS_Analytics.command` on macOS).
+```bat
+.venv\Scripts\python.exe -m streamlit run Home.py
+```
+
+**4. Open your browser** at **http://127.0.0.1:8501**
+(use `http://` and `127.0.0.1` — **not** `https`, **not** `localhost`).
+
+Keep the terminal window open while using the app; close it or press **Ctrl+C** to stop.
+No activation step, no admin, no registry changes. Full walk‑through with proxy tips and
+troubleshooting: **[`docs/INSTALL.md`](docs/INSTALL.md)**.
 
 ---
 
@@ -211,9 +219,7 @@ tips, and troubleshooting.
 
 ```
 avs-analytics/
-├── Home.py                     # Streamlit entry point (streamlit run Home.py)
-├── run_local.sh                # optional macOS/Linux launcher (creates .venv)
-├── Start_AVS_Analytics.command # optional macOS double-click launcher
+├── Home.py                     # Streamlit entry point (run this)
 ├── requirements.txt
 ├── app/
 │   ├── main.py                 # navigation + sidebar assembly
@@ -231,18 +237,20 @@ avs-analytics/
 
 ## 🆘 Troubleshooting
 
-- **"Connection refused" / the tab shows `https://localhost:8501`** → your browser
-  force‑upgraded the local address to HTTPS, which a local app cannot serve. Open
-  **`http://127.0.0.1:8501`** instead — a bare IP is never upgraded or HSTS‑pinned. The
-  Windows launchers already bind to and open `127.0.0.1` for this reason.
-- **Browser didn't open** → manually visit **http://127.0.0.1:8501**.
-- **First run looks stuck** → on a corporate laptop, antivirus may scan every package
-  during the one‑time install; give it a few minutes. The launcher waits for the server to
-  answer before opening the browser.
-- **`pip install` fails behind a proxy** → set `HTTPS_PROXY` / `HTTP_PROXY` (ask IT for the
-  address) and re‑run, e.g. `set HTTPS_PROXY=http://your-proxy:port`.
-- **Port already in use** → set a different port: `AVS_PORT=8600 ./run_local.sh` (or edit the launcher).
-- **"Page not found" on deep links** → use the sidebar navigation; the home page is at `/`.
+- **`python` is not recognized** → Python isn't on PATH. Re‑run the installer and tick
+  **“Add python.exe to PATH”**, then open a new Command Prompt.
+- **`python` opens the Microsoft Store** → install from
+  [python.org](https://www.python.org/downloads/windows/) instead, then reopen the terminal.
+- **"Connection refused" / the tab shows `https://…`** → your browser force‑upgraded the
+  address to HTTPS, which a local app cannot serve. Open **`http://127.0.0.1:8501`**
+  (with `http://` and the `127.0.0.1` IP) — a bare IP is never upgraded or HSTS‑pinned.
+- **Browser didn't open** → open **http://127.0.0.1:8501** manually.
+- **First run looks slow** → on a corporate laptop, antivirus may scan every package during
+  the one‑time `pip install`; give it a few minutes.
+- **`pip install` fails behind a proxy** → set the proxy, then re‑run the install command:
+  `set HTTPS_PROXY=http://your-proxy:port` (ask IT for the address).
+- **Port 8501 already in use** → `.venv\Scripts\python.exe -m streamlit run Home.py --server.port 8600`
+  then open `http://127.0.0.1:8600`.
 - **Required fields unmapped after upload** → open **Column Mapping** and map the fields marked •.
 
 ---
