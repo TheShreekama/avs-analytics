@@ -43,7 +43,9 @@ def build_where(filters: dict | None) -> str:
 
     Recognised keys:
       * ``<column>: [values]``         -> column IN (...)
-      * ``_date: {col, start, end}``   -> inclusive date range on a column
+      * ``_date: {col, start, end, include_null?}`` -> inclusive date range on a
+        column; ``include_null`` keeps rows whose date is missing (they are
+        excluded by a range filter otherwise)
       * ``_flags: {col: bool}``        -> boolean column equals value
     """
     if not filters:
@@ -52,10 +54,16 @@ def build_where(filters: dict | None) -> str:
     for key, val in filters.items():
         if key == "_date" and val and val.get("col"):
             col, start, end = val["col"], val.get("start"), val.get("end")
+            parts = []
             if start is not None:
-                clauses.append(f'"{col}" >= {_q(pd.Timestamp(start).date())}')
+                parts.append(f'"{col}" >= {_q(pd.Timestamp(start).date())}')
             if end is not None:
-                clauses.append(f'"{col}" <= {_q(pd.Timestamp(end).date())}')
+                parts.append(f'"{col}" <= {_q(pd.Timestamp(end).date())}')
+            if parts:
+                clause = "(" + " AND ".join(parts) + ")"
+                if val.get("include_null"):
+                    clause = f'({clause} OR "{col}" IS NULL)'
+                clauses.append(clause)
         elif key == "_flags" and val:
             for col, flag in val.items():
                 clauses.append(f'"{col}" = {str(bool(flag)).upper()}')

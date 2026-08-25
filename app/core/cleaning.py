@@ -158,6 +158,19 @@ def is_av36_eos_path(path) -> bool:
     return any(k in norm for k in ("av36", "avs36", "eos", "egs"))
 
 
+def _as_bool(cond) -> np.ndarray:
+    """Coerce a (possibly nullable) boolean condition to a plain numpy bool array.
+
+    ``np.select`` rejects pandas' nullable ``boolean`` dtype, which any comparison
+    against a column containing <NA> yields — e.g. a "Migration Status" with no
+    numeric prefix ("Cancelled", "On Hold", blank) leaves ``migration_status_code``
+    null, and ``code.eq(7)`` then carries <NA>.  Missing means "condition not met".
+    """
+    if isinstance(cond, pd.Series):
+        return cond.fillna(False).to_numpy(dtype=bool)
+    return np.asarray(cond, dtype=bool)
+
+
 def derive_eos_status(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.Series:
     """Unified operational/EOS status from several raw signals (vectorised).
 
@@ -185,7 +198,7 @@ def derive_eos_status(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.Series:
     waiting = (followup.notna() & (followup < as_of)) | state.str.startswith("waiting", na=False)
 
     return pd.Series(np.select(
-        [completed, cancelled, blocked, deferred, delayed, waiting],
+        [_as_bool(c) for c in (completed, cancelled, blocked, deferred, delayed, waiting)],
         ["Completed", "Cancelled", "Blocked", "At Risk", "Delayed", "At Risk"],
         default="On Track"), index=fact.index)
 

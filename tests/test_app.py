@@ -40,8 +40,33 @@ def _render(page: str, mode: str) -> AppTest:
     return at
 
 
+def _render_default(page: str, mode: str) -> AppTest:
+    """Render a page with the *default* filter state (no widening)."""
+    os.environ["AVS_PAGE"] = page
+    at = AppTest.from_file(_HARNESS, default_timeout=60)
+    at.session_state["count_mode"] = mode
+    at.run()
+    return at
+
+
 @pytest.mark.parametrize("page", PAGES)
 @pytest.mark.parametrize("mode", ["Customer (deduplicated)", "Nomination (wave-level)"])
 def test_page_renders_without_error(page, mode):
     at = _render(page, mode)
     assert not at.exception, f"{page} [{mode}] raised: {at.exception}"
+
+
+# Regression: the default date preset used to be a one-week window, which left
+# almost every page showing "No records match the current filters" on first open.
+_REPORT_PAGES = [p for p in PAGES if p not in ("methodology", "data_upload", "column_mapping")]
+
+
+@pytest.mark.parametrize("page", _REPORT_PAGES)
+@pytest.mark.parametrize("mode", ["Customer (deduplicated)", "Nomination (wave-level)"])
+def test_page_has_records_with_default_filters(page, mode):
+    at = _render_default(page, mode)
+    assert not at.exception, f"{page} [{mode}] raised: {at.exception}"
+    in_view = [m.value for m in at.sidebar.caption if "in view" in m.value]
+    assert in_view, f"{page} [{mode}] rendered no filter summary"
+    assert not any(c.startswith("**0** of") for c in in_view), \
+        f"{page} [{mode}] is empty with default filters: {in_view}"

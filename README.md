@@ -84,7 +84,7 @@ troubleshooting: **[`docs/INSTALL.md`](docs/INSTALL.md)**.
 
 Every report has **Region / Status / path filters** and a **date‑range preset**
 (This/Last week, This/Last month, Last 3/6 months, This FY, All time, Custom — default
-**Last week**), plus an adjustable **"as‑of" date** that anchors the presets and all
+**All time**, so every report opens on the whole dataset), plus an adjustable **"as‑of" date** that anchors the presets and all
 This‑Week/Month/Quarter/YTD windows.
 
 ### Reporting scope (AVS‑centric)

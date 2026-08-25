@@ -292,3 +292,33 @@ def test_date_preset_ranges():
 def test_fiscal_year_start():
     assert metrics.fiscal_year_start(pd.Timestamp("2026-06-30"), 7) == pd.Timestamp("2025-07-01")
     assert metrics.fiscal_year_start(pd.Timestamp("2026-07-01"), 7) == pd.Timestamp("2026-07-01")
+
+
+# --------------------------------------------------------------------------- #
+# Robustness against real-world exports
+# --------------------------------------------------------------------------- #
+def test_eos_status_survives_uncoded_migration_status(raw):
+    """A Migration Status with no numeric prefix must not break the build.
+
+    ``migration_status_code`` is null for values like "Cancelled" / "On Hold",
+    which makes every comparison a *nullable* boolean — ``np.select`` used to
+    raise TypeError and take every page down with it.
+    """
+    mp = mapping.resolve_mapping(list(raw.columns))
+    df = raw.copy()
+    df[mp["migration_status"]] = ["Cancelled", "On Hold", ""] * 3 + ["7 - Completed", None]
+    fact, _ = cleaning.build_fact_frame(df, mp)
+    assert len(fact) == len(raw)
+    assert fact["eos_status"].notna().all()
+    assert set(fact["eos_status"]) <= {"Completed", "Cancelled", "Blocked", "At Risk",
+                                       "Delayed", "On Track"}
+
+
+def test_auto_map_does_not_claim_month_columns_as_dates():
+    """Date fields only fall back onto headers that are actually dates."""
+    headers = ["Task ID", "Customer Name", "Factory Offering", "WW Region",
+               "Nomination Status", "Migration Status", "Nom. Created Date",
+               "Milestone Estimated Completion Month"]
+    m = schema.auto_map(headers)
+    assert m["created_date"] == "Nom. Created Date"
+    assert m["eta_date"] is None

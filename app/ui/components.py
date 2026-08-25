@@ -117,23 +117,89 @@ def filter_sidebar(ctx: DataContext, fields: list[str], date_field: str | None =
             filters[key] = sel
 
     if date_field and date_field in frame.columns:
-        _date_preset_widget(ctx, filters, date_field, key_prefix)
+        _date_preset_widget(ctx, filters, date_field, key_prefix, table, scope_where)
 
     where = analytics.apply_scope(analytics.build_where(filters), scope)
     n = analytics.total_rows(con, where, table=table)
     base_n = analytics.total_rows(con, scope_where, table=table)
     unit = "accounts" if table == "customer" else "nominations"
     st.sidebar.caption(f"**{fmt_int(n)}** of {fmt_int(base_n)} {unit} in view")
+
+    _record_diagnostics(ctx, filters, scope_where, table, n, base_n, unit)
+    if n == 0 and base_n:
+        _empty_selection_help(filters, key_prefix)
+
     if st.sidebar.button("Reset filters", width="stretch", key=f"{key_prefix}_reset"):
-        for k in list(st.session_state.keys()):
-            if k.startswith(key_prefix + "_"):
-                del st.session_state[k]
+        _clear_filter_state(key_prefix)
         st.rerun()
 
     return filters, where
 
 
-def _date_preset_widget(ctx: DataContext, filters: dict, date_field: str, key_prefix: str) -> None:
+# --------------------------------------------------------------------------- #
+# Why-is-this-empty diagnostics
+# --------------------------------------------------------------------------- #
+# ``filter_sidebar`` stashes what the active filters removed so that a page's
+# ``empty_state`` can tell the user *which* filter emptied the report (almost
+# always the date window) instead of a bare "no records match".
+_DIAG_KEY = "_avs_filter_diag"
+
+
+def _clear_filter_state(key_prefix: str) -> None:
+    for k in list(st.session_state.keys()):
+        if k.startswith(key_prefix + "_"):
+            del st.session_state[k]
+
+
+def _record_diagnostics(ctx: DataContext, filters: dict, scope_where: str, table: str,
+                        n: int, base_n: int, unit: str) -> None:
+    """Measure each filter group's contribution and stash it for ``empty_state``."""
+    con = ctx.con
+    cats = {k: v for k, v in filters.items() if not k.startswith("_")}
+    date_f = filters.get("_date")
+
+    # Everything the user picked *except* the date window, so we can attribute
+    # an empty result to the date range vs. the categorical selections.
+    scope_pred = scope_where.replace("WHERE ", "", 1) if scope_where else ""
+    cats_only = analytics._where_and(analytics.build_where(cats), scope_pred)
+    n_cats_only = analytics.total_rows(con, cats_only, table=table)
+
+    n_missing_date = 0
+    if date_f and date_f.get("col"):
+        col = date_f["col"]
+        n_missing_date = analytics.total_rows(
+            con, analytics._where_and(cats_only, f'"{col}" IS NULL'), table=table)
+
+    st.session_state[_DIAG_KEY] = {
+        "unit": unit, "n": n, "base_n": base_n,
+        "n_cats_only": n_cats_only, "n_missing_date": n_missing_date,
+        "date": dict(date_f) if date_f else None,
+        "date_label": _FILTER_LABELS.get(date_f["col"], date_f["col"].replace("_", " ").title())
+        if date_f else "",
+        "categories": {_FILTER_LABELS.get(k, k.replace("_", " ").title()): list(v)
+                       for k, v in cats.items()},
+    }
+
+
+def _empty_selection_help(filters: dict, key_prefix: str) -> None:
+    """Sidebar warning + one-click widen when the current selection is empty."""
+    diag = st.session_state.get(_DIAG_KEY, {})
+    date_f = filters.get("_date")
+    st.sidebar.warning(f"No {diag.get('unit', 'records')} match these filters.")
+    if date_f and diag.get("n_cats_only"):
+        col = date_f["col"]
+        if st.sidebar.button("📅 Widen to all time", width="stretch",
+                             key=f"{key_prefix}_alltime_{col}"):
+            # The preset defaults to "All time", so dropping the keys widens the
+            # window while keeping every other filter the user has chosen.
+            st.session_state.pop(f"{key_prefix}_preset_{col}", None)
+            st.session_state.pop(f"{key_prefix}_custom_{col}", None)
+            st.session_state.pop(f"{key_prefix}_nulls_{col}", None)
+            st.rerun()
+
+
+def _date_preset_widget(ctx: DataContext, filters: dict, date_field: str, key_prefix: str,
+                        table: str = "fact", scope_where: str = "") -> None:
     """Date-range preset selector (This/Last week, This/Last month, 3/6 months, FY, …)."""
     label = _FILTER_LABELS.get(date_field, date_field.replace("_", " ").title())
     preset = st.sidebar.selectbox(
@@ -158,7 +224,19 @@ def _date_preset_widget(ctx: DataContext, filters: dict, date_field: str, key_pr
             start, end = rng[0].date(), rng[1].date()
 
     if start is not None and end is not None:
-        filters["_date"] = {"col": date_field, "start": start, "end": end}
+        # A range filter silently drops rows whose date is missing — on pages
+        # keyed to an optional date (planned/actual end) that can be most of the
+        # dataset, so make it visible and opt-in-able.
+        missing = analytics.total_rows(
+            ctx.con, analytics._where_and(scope_where, f'"{date_field}" IS NULL'), table=table)
+        include_null = False
+        if missing:
+            include_null = st.sidebar.checkbox(
+                f"Include {fmt_int(missing)} with no {label.lower()}",
+                key=f"{key_prefix}_nulls_{date_field}",
+                help="Records missing this date fall outside any date range.")
+        filters["_date"] = {"col": date_field, "start": start, "end": end,
+                            "include_null": include_null}
         st.sidebar.caption(f"📅 {start:%d %b %Y} → {end:%d %b %Y}")
 
 
@@ -184,7 +262,38 @@ def show_table(df: pd.DataFrame, height: int | None = None, hide_index: bool = T
 
 
 def empty_state(msg: str = "No records match the current filters.") -> None:
+    """Empty-result notice, explaining *which* filter emptied the report."""
     st.info(msg)
+    hint = _empty_state_hint()
+    if hint:
+        st.caption(hint)
+
+
+def _empty_state_hint() -> str:
+    """Human explanation of the active filters, from the last sidebar render."""
+    diag = st.session_state.get(_DIAG_KEY)
+    if not diag or not diag.get("base_n"):
+        return ""
+    unit = diag["unit"]
+    bits: list[str] = []
+    date_f = diag.get("date")
+    if date_f and date_f.get("start") is not None:
+        start, end = date_f["start"], date_f["end"]
+        bits.append(f"📅 **{diag['date_label']}** between **{start:%d %b %Y}** and "
+                    f"**{end:%d %b %Y}** — only {fmt_int(diag['n'])} of "
+                    f"{fmt_int(diag['n_cats_only'])} {unit} fall inside it"
+                    + (f" ({fmt_int(diag['n_missing_date'])} have no "
+                       f"{diag['date_label'].lower()} at all)"
+                       if diag.get("n_missing_date") else ""))
+    if diag.get("categories"):
+        picked = "; ".join(f"**{k}**: {', '.join(str(x) for x in v)}"
+                           for k, v in diag["categories"].items())
+        bits.append(f"🔎 {picked}")
+    if not bits:
+        return ""
+    return (" · ".join(bits)
+            + f"  —  widen the range or press **Reset filters** in the sidebar to see all "
+              f"{fmt_int(diag['base_n'])} {unit}.")
 
 
 def banner_note(text: str) -> None:

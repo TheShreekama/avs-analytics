@@ -210,11 +210,17 @@ def auto_map(headers: list[str]) -> dict[str, Optional[str]]:
                     match = h
                     break
 
-        # 3) token-contains fallback (synonym appears inside the header)
+        # 3) token-contains fallback (synonym appears inside the header).
+        #    For date fields the header must actually look like a date column:
+        #    without that guard "estimated completion" happily claims a header
+        #    like "Milestone Estimated Completion Month" (a month/quarter label),
+        #    which then fails to parse and flags every row as a bad date.
         if match is None:
             targets = [_norm(f.source_default), *(_norm(s) for s in f.synonyms)]
             for h, nh in norm_headers.items():
                 if h in used:
+                    continue
+                if f.dtype == DTYPE_DATE and "date" not in nh:
                     continue
                 if any(t and (t in nh or nh in t) for t in targets):
                     match = h
