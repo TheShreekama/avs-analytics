@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 
 from ..config import DIR_FROM_AVS, DIR_OTHER, DIR_TO_AVS
+from .cleaning import _as_bool
 
 
 def build_customer_rollup(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFrame:
@@ -100,7 +101,7 @@ def build_customer_rollup(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFra
 
     # Representative migration direction + Azure-native target.
     out["migration_direction"] = np.select(
-        [out["is_avs_to_azure"], out["is_onboard"]],
+        [_as_bool(out["is_avs_to_azure"]), _as_bool(out["is_onboard"])],
         [DIR_FROM_AVS, DIR_TO_AVS], default=DIR_OTHER)
     from_avs = df[df["is_from_avs"]]
     if not from_avs.empty:
