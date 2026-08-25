@@ -322,3 +322,81 @@ def test_auto_map_does_not_claim_month_columns_as_dates():
     m = schema.auto_map(headers)
     assert m["created_date"] == "Nom. Created Date"
     assert m["eta_date"] is None
+
+
+# --------------------------------------------------------------------------- #
+# Date parsing across export shapes
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("value,expected", [
+    ("45855", "2025-07-17"),                    # unformatted Excel cell (serial day)
+    ("45855.0", "2025-07-17"),
+    ("2026-05-13", "2026-05-13"),
+    ("05-13-2026", "2026-05-13"),
+    ("13-May-2026", "2026-05-13"),
+    ("May 13, 2026", "2026-05-13"),
+    ("20260513", "2026-05-13"),
+    ("2026-05-13 14:35:00", "2026-05-13"),      # time-of-day dropped: calendar day
+    ("2026-05-13T00:00:00Z", "2026-05-13"),
+    ("2026-05-13T00:00:00+05:30", "2026-05-13"),  # offset dropped, not shifted
+])
+def test_parse_date_series_formats(value, expected):
+    got = cleaning.parse_date_series(pd.Series([value], dtype="string"))[0]
+    assert got == pd.Timestamp(expected)
+
+
+@pytest.mark.parametrize("values,expected", [
+    (["13-05-2026", "01-06-2026"], ["2026-05-13", "2026-06-01"]),   # day-first column
+    (["05-13-2026", "06-01-2026"], ["2026-05-13", "2026-06-01"]),   # month-first column
+])
+def test_parse_date_series_infers_order_per_column(values, expected):
+    """An ambiguous d/m pair follows the column's evidence, not a per-value guess."""
+    got = cleaning.parse_date_series(pd.Series(values, dtype="string"))
+    assert list(got) == [pd.Timestamp(e) for e in expected]
+
+
+def test_parse_date_series_rejects_non_dates():
+    got = cleaning.parse_date_series(pd.Series(["N/A", "", "-", "Q3", "2026"], dtype="string"))
+    assert got.isna().all()          # a bare year is a number, not a serial date
+
+
+def test_excel_serial_dates_survive_the_full_build(raw):
+    """A date column exported as serial numbers must not flag every row as bad."""
+    mp = mapping.resolve_mapping(list(raw.columns))
+    df = raw.copy()
+    parsed = cleaning.parse_date_series(df[mp["created_date"]])
+    df[mp["created_date"]] = [
+        "" if pd.isna(d) else str((d.normalize() - pd.Timestamp("1899-12-30")).days)
+        for d in parsed
+    ]
+    fact, report = cleaning.build_fact_frame(df, mp)
+    assert report["dq"].get("bad_date", 0) == 0
+    assert fact["created_date"].notna().sum() == int(parsed.notna().sum())
+    assert list(fact["created_date"]) == list(parsed)
+
+
+# --------------------------------------------------------------------------- #
+# AV36 / EOS identification
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("value,expected", [
+    ("AV36/AV36P/AV52 - EOS", True),
+    ("AV36/AV36P/AV52 – EOS", True),       # en dash, as it appears in the export
+    ("AVS36 - EGS", True),
+    ("AV52 EOS Migration", True),
+    ("AV36P", True),
+    ("End of Support Refresh", True),
+    ("Onprem to AVS", False),
+    ("SQL Server MI Migration (From AVS)", False),
+    ("Geospatial workload", False),        # "eos" inside a word is not a marker
+])
+def test_is_av36_eos_path(value, expected):
+    assert cleaning.is_av36_eos_path(value) is expected
+
+
+def test_eos_marker_found_on_factory_offering(raw):
+    """The marker often lives on the offering, not the migration path."""
+    mp = mapping.resolve_mapping(list(raw.columns))
+    df = raw.copy()
+    df[mp["migration_path"]] = "Onprem to AVS"
+    df[mp["factory_offering"]] = "AV36/AV36P/AV52 - EOS"
+    fact, _ = cleaning.build_fact_frame(df, mp)
+    assert fact["is_av36_eos"].all()

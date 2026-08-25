@@ -19,8 +19,28 @@ import pandas as pd
 from . import schema
 from ..config import DIR_FROM_AVS, DIR_OTHER, DIR_TO_AVS
 
-# Accepted date formats, tried in order.  The export uses MM-DD-YYYY.
-_DATE_FORMATS = ("%m-%d-%Y", "%m/%d/%Y", "%Y-%m-%d", "%d-%m-%Y", "%m-%d-%y", "%m/%d/%y")
+# Accepted date formats.  The export nominally uses MM-DD-YYYY, but real files
+# arrive with day-first values, month names, ISO stamps and time-of-day suffixes.
+# ``_DATE_FORMATS_MONTH_FIRST`` / ``_DAY_FIRST`` differ only in how they read an
+# ambiguous d/m pair; which one leads is decided per column (see ``_prefers_day_first``).
+_DATE_FORMATS_COMMON = (
+    "%Y-%m-%d", "%Y/%m/%d", "%Y%m%d",
+    "%d-%b-%Y", "%d %b %Y", "%d-%b-%y", "%b %d %Y", "%b %d, %Y", "%d %B %Y", "%B %d, %Y",
+)
+_DATE_FORMATS_MONTH_FIRST = ("%m-%d-%Y", "%m/%d/%Y", "%m.%d.%Y", "%m-%d-%y", "%m/%d/%y")
+_DATE_FORMATS_DAY_FIRST = ("%d-%m-%Y", "%d/%m/%Y", "%d.%m.%Y", "%d-%m-%y", "%d/%m/%y")
+
+# Excel / Google-Sheets serial day numbers, counted from 1899-12-30.  A date cell
+# that was never *formatted* as a date exports as this bare number.
+_EXCEL_EPOCH = pd.Timestamp("1899-12-30")
+_EXCEL_SERIAL_MIN = 15000        # 1941-01-16 — below this it is a plain number, not a date
+_EXCEL_SERIAL_MAX = 80000        # 2119-01-25
+
+# A trailing midnight/time stamp we can drop before matching a date-only format.
+_TIME_SUFFIX_RE = re.compile(
+    r"[ T]\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?\s*(am|pm)?\s*(z|[+-]\d{2}:?\d{2})?$", re.I)
+# An all-numeric d/m/y triple, used to detect whether a column is day-first.
+_DMY_RE = re.compile(r"^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$")
 
 # Valid customer-segment vocabulary (anything else is flagged as contamination).
 _VALID_SEGMENT_TOKENS = ("commercial", "public sector", "enterprise", "smc", "smb",
@@ -30,22 +50,89 @@ _VALID_SEGMENT_TOKENS = ("commercial", "public sector", "enterprise", "smc", "sm
 # --------------------------------------------------------------------------- #
 # Scalar parsers
 # --------------------------------------------------------------------------- #
-def parse_date_series(s: pd.Series) -> pd.Series:
-    """Parse a string series of dates trying several known formats."""
-    s = s.astype("string").str.strip()
-    s = s.replace({"": pd.NA, "nan": pd.NA, "NaT": pd.NA, "None": pd.NA})
+def _excel_serial_dates(s: pd.Series) -> pd.Series:
+    """Convert bare Excel/Sheets serial day numbers to timestamps.
+
+    An unformatted date cell exports as a number ("45855"), which no date format
+    matches — the single biggest source of "unparseable date" rows in real files.
+    """
+    nums = pd.to_numeric(s, errors="coerce")
     out = pd.Series(pd.NaT, index=s.index, dtype="datetime64[ns]")
-    remaining = s.notna()
-    for fmt in _DATE_FORMATS:
-        if not remaining.any():
-            break
-        parsed = pd.to_datetime(s[remaining], format=fmt, errors="coerce")
-        out.loc[remaining] = parsed
-        remaining = remaining & out.isna()
-    # Final generic pass for anything still unparsed.
-    if remaining.any():
-        out.loc[remaining] = pd.to_datetime(s[remaining], errors="coerce")
+    ok = nums.notna() & nums.between(_EXCEL_SERIAL_MIN, _EXCEL_SERIAL_MAX)
+    if ok.any():
+        days = pd.to_timedelta(nums[ok].astype("float64").round(), unit="D")
+        out.loc[ok] = _EXCEL_EPOCH + days
     return out
+
+
+def _prefers_day_first(s: pd.Series) -> bool:
+    """Decide whether an all-numeric date column is day-first or month-first.
+
+    A value whose first component exceeds 12 can only be a day; one whose second
+    component exceeds 12 can only be a month-first date.  Whichever appears more
+    often wins, so a whole column is read consistently instead of each value being
+    guessed on its own (which silently turns 05-06 into May 6th in a UK-style file).
+    """
+    day_first = month_first = 0
+    for val in s.dropna().unique()[:2000]:
+        m = _DMY_RE.match(str(val))
+        if not m:
+            continue
+        first, second = int(m.group(1)), int(m.group(2))
+        if first > 12 >= second:
+            day_first += 1
+        elif second > 12 >= first:
+            month_first += 1
+    return day_first > month_first
+
+
+def parse_date_series(s: pd.Series) -> pd.Series:
+    """Parse a column of dates in whatever shape the export happens to use.
+
+    Handles: real datetime values, Excel serial numbers, ISO stamps (with or
+    without a timezone), month names, and d/m/y triples in either order — the
+    order being inferred per column rather than per value.
+    """
+    if pd.api.types.is_datetime64_any_dtype(s):
+        return pd.to_datetime(s, errors="coerce").dt.tz_localize(None) \
+            if getattr(s.dtype, "tz", None) else pd.to_datetime(s, errors="coerce")
+
+    s = s.astype("string").str.strip()
+    s = s.replace({"": pd.NA, "nan": pd.NA, "NaT": pd.NA, "None": pd.NA, "null": pd.NA,
+                   "N/A": pd.NA, "n/a": pd.NA, "NA": pd.NA, "-": pd.NA, "--": pd.NA})
+    # A bare year carries no day or month; parsing it as the 1st of January would
+    # invent precision, so leave it unparsed (and flagged) instead.
+    s = s.mask(s.str.fullmatch(r"(19|20|21)\d{2}", na=False), pd.NA)
+    out = pd.Series(pd.NaT, index=s.index, dtype="datetime64[ns]")
+
+    # 1) Excel serial numbers.
+    out.loc[:] = _excel_serial_dates(s)
+    remaining = s.notna() & out.isna()
+    if not remaining.any():
+        return out.dt.normalize()
+
+    # 2) Known formats, with the ambiguous d/m pair ordered to suit the column.
+    bare = s.where(~remaining, s.str.replace(_TIME_SUFFIX_RE, "", regex=True).str.strip())
+    ambiguous = (_DATE_FORMATS_DAY_FIRST + _DATE_FORMATS_MONTH_FIRST
+                 if _prefers_day_first(bare[remaining])
+                 else _DATE_FORMATS_MONTH_FIRST + _DATE_FORMATS_DAY_FIRST)
+    for fmt in _DATE_FORMATS_COMMON + ambiguous:
+        if not remaining.any():
+            return out.dt.normalize()
+        out.loc[remaining] = pd.to_datetime(bare[remaining], format=fmt, errors="coerce")
+        remaining = s.notna() & out.isna()
+
+    # 3) Generic pass for anything left.  ``utc=True`` keeps mixed-timezone input
+    #    from raising (it does so even under errors="coerce"); the offset is then
+    #    dropped, since every date in this dataset is a calendar day.
+    if remaining.any():
+        try:
+            generic = pd.to_datetime(s[remaining], errors="coerce", utc=True,
+                                     format="mixed", dayfirst=_prefers_day_first(bare))
+            out.loc[remaining] = generic.dt.tz_localize(None)
+        except (ValueError, TypeError):
+            pass
+    return out.dt.normalize()
 
 
 def _clean_number_token(x) -> float:
@@ -149,13 +236,30 @@ def azure_native_target(path: str) -> str:
     return "Azure Native (Other)"
 
 
-def is_av36_eos_path(path) -> bool:
-    """True if a migration path denotes an AV36 / EOS (End-of-Support) nomination.
+# SKU-style markers may appear glued to other text ("AV36P-EGS"), so they are
+# matched anywhere; the short words are matched as whole tokens only, so that a
+# value like "Geospatial" cannot masquerade as an EOS nomination.
+_EOS_SKU_MARKERS = ("av36", "avs36", "av36p", "avs36p", "av52", "avs52", "av64", "avs64",
+                    "endofsupport", "endoflife")
+_EOS_WORD_MARKERS = ("eos", "egs", "eol")
 
-    Matches the export's 'AVS36 - EGS' as well as AV36 / EOS variants.
+
+def is_av36_eos_path(*values) -> bool:
+    """True if any value denotes an AV36 / EOS (End-of-Support) nomination.
+
+    Real exports carry the marker in different places and spellings — "AVS36 - EGS"
+    in the migration path, "AV36/AV36P/AV52 - EOS" as the factory offering — so
+    every offering-ish field is checked, not just the migration path.
     """
-    norm = re.sub(r"[^a-z0-9]", "", str(path).lower())
-    return any(k in norm for k in ("av36", "avs36", "eos", "egs"))
+    for value in values:
+        text = str(value).lower()
+        compact = re.sub(r"[^a-z0-9]", "", text)
+        if any(k in compact for k in _EOS_SKU_MARKERS):
+            return True
+        tokens = set(re.split(r"[^a-z0-9]+", text))
+        if tokens & set(_EOS_WORD_MARKERS):
+            return True
+    return False
 
 
 def _as_bool(cond) -> np.ndarray:
@@ -219,7 +323,7 @@ def build_fact_frame(
     """
     n = len(raw)
     fact = pd.DataFrame(index=raw.index)
-    report: dict = {"n_rows": n, "unmapped": [], "parse": {}, "dq": {}}
+    report: dict = {"n_rows": n, "unmapped": [], "parse": {}, "dq": {}, "dq_samples": {}}
 
     # 1) Pull mapped source columns into canonical names (raw strings first).
     for f in schema.CANONICAL_FIELDS:
@@ -247,6 +351,13 @@ def build_fact_frame(
         nonblank = fact[key].notna() & (fact[key].astype("string").str.strip() != "")
         bad = nonblank & parsed.isna()
         flag(bad, f"Unparseable date in '{schema.CANONICAL_BY_KEY[key].label}'", "bad_date")
+        if bad.any():
+            # Keep a few offending values: a bare count ("bad date: 1641") says
+            # nothing about which format the parser is missing.
+            samples = fact.loc[bad, key].dropna().unique()[:5]
+            report["dq_samples"].setdefault("bad_date", []).append(
+                (schema.CANONICAL_BY_KEY[key].label, int(bad.sum()),
+                 [str(v) for v in samples]))
         fact[key] = parsed
         report["parse"][key] = int(parsed.notna().sum())
 
@@ -294,7 +405,13 @@ def build_fact_frame(
         pd.NA,
     )
     # Wave-level flags used by the customer-rollup (dedup) layer.
-    fact["is_av36_eos"] = fact["migration_path"].map(is_av36_eos_path).astype(bool)
+    # Offering text repeats heavily across rows, so classify each distinct
+    # combination once rather than per row (the 500k-row target).
+    offering_text = (fact["migration_path"].fillna("") + " | "
+                     + fact["factory_offering"].fillna("") + " | "
+                     + fact["linked_offering"].fillna(""))
+    eos_lookup = {v: is_av36_eos_path(v) for v in offering_text.unique()}
+    fact["is_av36_eos"] = offering_text.map(eos_lookup).astype(bool)
     fact["is_from_avs"] = (fact["migration_direction"] == DIR_FROM_AVS)
     fact["is_to_avs"] = (fact["migration_direction"] == DIR_TO_AVS)
     code, label = split_migration_status(fact["migration_status"])
