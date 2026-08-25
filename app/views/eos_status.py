@@ -25,9 +25,9 @@ def render() -> None:
     page_header("AV36 EOS Nomination Status",
                 "Operational health of AV36 / EOS (End-of-Support) migration nominations.")
     components.data_quality_banner(ctx)
-    scope = ("each customer counts once if <b>any</b> wave has an AV36/EOS migration path; "
+    scope = ("each customer counts once if <b>any</b> wave is AV36/EOS; "
              "status follows the customer's <b>last wave</b>") if state.is_customer_mode() else \
-            "every wave whose migration path is AV36/EOS"
+            "every wave that is AV36/EOS"
     banner(f"<b>Scope:</b> AV36 EOS nominations — {scope}. "
            "EOS status is derived from Current State, Milestone Status, Migration Status code "
            "and planned-end vs as-of date.")
@@ -41,8 +41,10 @@ def render() -> None:
     con = ctx.con
     n_av36 = analytics.total_rows(con, where)
     if n_av36 == 0:
-        components.empty_state("No AV36 / EOS nominations in the current selection. "
-                               "(An AV36/EOS nomination is any with an AV36/EOS migration path.)")
+        components.empty_state(
+            "No AV36 / EOS nominations in the current selection. (A nomination counts as "
+            "AV36/EOS when its migration path, factory offering or linked offering carries "
+            "an AV36 / AV36P / AV52 / AV64 / EOS / EGS / end-of-support marker.)")
         return
 
     # Status KPI tiles in canonical order

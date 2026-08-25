@@ -76,6 +76,21 @@ def data_quality_banner(ctx: DataContext) -> None:
         parts = ", ".join(f"{k.replace('_',' ')}: {v}" for k, v in rep.get("dq", {}).items())
         banner(f"⚠️ <b>{dq_rows}</b> row(s) have data-quality issues "
                f"({parts}). See the <b>Insights</b> page for details.", "warn")
+        _bad_date_samples(rep)
+
+
+def _bad_date_samples(rep: dict) -> None:
+    """Show the actual values behind a "bad date" count, so the format is visible."""
+    samples = rep.get("dq_samples", {}).get("bad_date") or []
+    if not samples:
+        return
+    with st.expander("Which date values could not be read?"):
+        for label, count, values in samples:
+            shown = ", ".join(f"`{v}`" for v in values) or "—"
+            st.markdown(f"**{label}** — {fmt_int(count)} row(s), e.g. {shown}")
+        st.caption("Excel serial numbers, ISO stamps, month names and day-first or "
+                   "month-first values are all read automatically. If a value above "
+                   "still looks like a date, it is a format worth adding.")
 
 
 # --------------------------------------------------------------------------- #

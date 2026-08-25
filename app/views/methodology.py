@@ -124,7 +124,13 @@ def render() -> None:
         f"- **This/Last month**, **Last 3/6 months** — calendar-anchored on the as-of "
         f"date.\n\n"
         f"The This-Week / This-Month / This-Quarter / Year-to-Date KPI tiles compare "
-        f"each window to the **prior equivalent** window for the delta arrows.")
+        f"each window to the **prior equivalent** window for the delta arrows.\n\n"
+        f"**Date values are read in whatever shape the export uses** — Excel serial "
+        f"numbers (a date cell that was never formatted as a date, e.g. `45855`), ISO "
+        f"stamps with or without a timezone, month names, and `d/m/y` triples in either "
+        f"order (day-first vs month-first is inferred per column). Times of day are "
+        f"dropped, since every date here is a calendar day. Values that still cannot be "
+        f"read are counted in the data-quality banner, which lists examples.")
     with st.expander("Example: what each preset resolves to right now"):
         rows = {"Preset": [], "Start": [], "End": []}
         for p in DATE_PRESETS:
