@@ -62,8 +62,9 @@ under Streamlit's AppTest in both counting modes.
 - **Full offering names.** On AVS → Azure pages, show `migration_path` (e.g. "SQL Server MI
   Migration (From AVS)"), not the short `factory_offering`.
 - **Dates.** `metrics.date_preset_range` (This/Last week, This/Last month, Last 3/6 months,
-  This FY [July], All time, Custom); default preset "Last week"; anchored on the sidebar
-  as-of date.
+  This FY [July], All time, Custom); default preset "All time" — a narrow default emptied
+  almost every page; anchored on the sidebar as-of date. A range excludes rows whose date is
+  NULL unless the sidebar's "Include N with no <date>" box is ticked (`_date.include_null`).
 
 ## Conventions
 
