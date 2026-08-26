@@ -98,11 +98,12 @@ def test_categories_select_the_right_population(fact):
     assert _tpids(native) == ["600"]
 
 
-def test_eos_worksheet_overrides_marker_membership(fact):
-    df = fact.copy()
-    df["is_eos_population"] = segments.apply_eos_population(df, {"500"})
-    assert _tpids(segments.population(df, segments.CAT_EOS_GEN2)) == ["500"]
-    assert segments.population(df, segments.CAT_EOS_GEN1).empty
+def test_eos_population_comes_from_the_offering_markers(fact):
+    """One dataset, no side worksheet: EOS membership is read off the export."""
+    membership = segments.eos_population(fact)
+    assert sorted(fact.loc[membership, "tpid"].astype(str).unique()) == \
+        ["100", "200", "300", "400"]
+    assert not membership[fact["tpid"].astype(str) == "500"].any()
 
 
 def test_tpid_is_the_matching_key_not_the_account_name(fact):
@@ -241,3 +242,21 @@ def test_generation_uses_tags_when_skus_are_blank(raw_frame):
     assert gen["100"] == segments.GEN_1
     assert gen["300"] == segments.GEN_2
     assert gen["400"] == segments.GEN_UNCLASSIFIED
+
+
+def test_eos_categories_need_no_side_worksheet(fact):
+    """There is one dataset: nothing in the pipeline asks for an EOS worksheet."""
+    assert not hasattr(segments, "apply_eos_population")
+    assert not hasattr(segments, "eos_tpids_from_worksheet")
+    assert segments.eos_population(fact).any()
+
+
+def test_glossary_explains_every_headline_metric():
+    from app.core import glossary
+    for text in (glossary.NEW_ENGAGEMENTS, glossary.MIGRATION_ENDS,
+                 glossary.HOSTS_MIGRATED, glossary.NOMINATIONS_APPROVED,
+                 glossary.TOTAL_ACR, glossary.GENERATION_RULE):
+        assert len(text) > 80                      # a real explanation, not a label
+    assert "Tags" in glossary.GENERATION_RULE
+    assert "latest wave" in glossary.MIGRATION_ENDS
+    assert set(glossary.CATEGORY_HELP) == set(segments.CATEGORY_LABELS)

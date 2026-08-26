@@ -5,6 +5,7 @@ import streamlit as st
 
 from app import state
 from app.core import loader, mapping as mapmod, segments
+from app.version import build_stamp
 from app.core.metrics import fmt_int
 from app.ui import components
 from app.ui.theme import banner, page_header, section
@@ -14,6 +15,11 @@ def render() -> None:
     ctx = state.ensure_context()
     page_header("Data & Upload",
                 "Load your AVS nominations export. Everything is processed locally on this machine.")
+    built, fingerprint = build_stamp()
+    banner(f"🧩 Running build <b>{built}</b> · fingerprint <code>{fingerprint}</code> — "
+           f"the newest timestamp across this app's Python files. If it does not match "
+           f"the copy you just installed, the Streamlit server is still running the old "
+           f"code: stop it (Ctrl+C) and start it again.")
 
     section("Upload a dataset")
     up = st.file_uploader("Choose a file (CSV, XLSX or XLS)", type=["csv", "xlsx", "xls"],
@@ -43,8 +49,6 @@ def render() -> None:
                    f"{', '.join(cov['missing_required'])}. Open <b>Column Mapping</b> to fix.", "warn")
         st.rerun()
 
-    _eos_worksheet(ctx)
-
     # Active dataset summary
     section("Active dataset")
     src = "Bundled sample" if ctx.is_sample else ctx.filename
@@ -61,6 +65,8 @@ def render() -> None:
     if rep.get("duplicate_task_ids"):
         banner(f"⚠️ {rep['duplicate_task_ids']} duplicate Task IDs detected.", "warn")
 
+    _classification_panel(ctx)
+
     section("Source column profile")
     st.caption("Fill rate and sample values for every column in the uploaded file. "
                "Empty columns are detected automatically and excluded from analytics.")
@@ -70,31 +76,32 @@ def render() -> None:
                      "Fill %", min_value=0, max_value=100, format="%.0f%%")})
 
 
-def _eos_worksheet(ctx) -> None:
-    """Optional EOS worksheet: its TPID list defines the EOS Migration population."""
-    section("EOS worksheet (optional)")
-    st.caption("Upload the EOS worksheet to pin the EOS Migration reports to its TPID "
-               "list. Without one, EOS membership is derived from the AV36 / AV36P / "
-               "AV52 / AV64 / EOS markers on the offering and migration path.")
-    if ctx.eos_tpids:
-        cols = st.columns([3, 1])
-        cols[0].success(f"EOS population set from a worksheet: "
-                        f"{fmt_int(len(ctx.eos_tpids))} TPIDs.")
-        if cols[1].button("Clear worksheet", width="stretch"):
-            state.set_eos_worksheet(None)
-            st.rerun()
-    eos_file = st.file_uploader("EOS worksheet (CSV, XLSX or XLS) with a TPID column",
-                               type=["csv", "xlsx", "xls"], key="eos_worksheet")
-    if eos_file is not None:
-        try:
-            eos_raw = loader.read_raw(eos_file.name, eos_file.getvalue())
-        except Exception as exc:  # noqa: BLE001 - surface parse errors to the user
-            st.error(f"Could not read the EOS worksheet: {exc}")
-            return
-        tpids = segments.eos_tpids_from_worksheet(eos_raw)
-        if not tpids:
-            st.error("No TPID column found in that worksheet — expected a column named TPID.")
-            return
-        state.set_eos_worksheet(tpids)
-        st.success(f"EOS population set to {fmt_int(len(tpids))} TPIDs from {eos_file.name}.")
-        st.rerun()
+def _classification_panel(ctx) -> None:
+    """What the classification actually made of this file.
+
+    The categories hinge on three columns — Tags, Primary Migration Path and
+    Factory Offering — so when a dashboard looks empty this is where you see why.
+    """
+    section("How this file was classified")
+    fact = ctx.fact
+    summary = segments.category_summary(fact)
+    components.show_table(summary.rename(columns={
+        "category": "Category", "tpids": "Accounts (TPID)", "nominations": "Nomination waves"}))
+
+    gen = (fact.drop_duplicates("tpid_key")["generation"]
+               .value_counts(dropna=False).rename_axis("Generation")
+               .reset_index(name="Accounts (TPID)"))
+    cols = st.columns(2)
+    with cols[0]:
+        st.markdown("**Generation split** (per TPID, from the Tags column)")
+        components.show_table(gen)
+    with cols[1]:
+        st.markdown("**Most common Tags values**")
+        tags = (fact["tags"].astype("string").fillna("(blank)")
+                    .value_counts().head(10).rename_axis("Tags")
+                    .reset_index(name="Rows"))
+        components.show_table(tags)
+    st.caption("A generation is read from a wave tagged **AVS Migration - Gen1** or "
+               "**- Gen2** anywhere in the Tags cell. If everything lands in "
+               "Unclassified, check the Tags values above — and that Tags is mapped "
+               "on the Column Mapping page.")

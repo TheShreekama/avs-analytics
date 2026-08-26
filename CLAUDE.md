@@ -81,9 +81,8 @@ under Streamlit's AppTest in both counting modes.
 
 - **Migration categories** (`segments.population`): `all_avs` = target platform is AVS
   (on-prem / VMG / AWS-VMC / AVS-to-AVS / EOS); `avs_native` = `is_from_avs`; the three EOS
-  categories = the EOS population split by generation. EOS membership comes from an
-  uploaded EOS worksheet's TPID list when present (`state.set_eos_worksheet`), else from
-  the offering/path markers.
+  categories = the EOS population split by generation. There is only ever **one dataset**:
+  EOS membership is read off the export's offering/path markers (`segments.eos_population`).
 - **TPID is authoritative** for joins, dedup and counts (`segments.tpid_key`; falls back to
   the account name only when a row has no TPID). The `customer` rollup keys on it — never
   on the account name, which differs between worksheets.
@@ -101,6 +100,13 @@ under Streamlit's AppTest in both counting modes.
 - **Terminology.** "AV36 EOS" is called **EOS Migration** everywhere in the UI. The
   AVS → Azure Native page labels the Total Cores metric **Cores Migrated**; the AVS
   categories call it **Hosts Migrated** (same column, different noun).
+- **Explanations.** Every title carries an ⓘ (`theme.info_mark`, hover text) fed from
+  `core/glossary.py` — one place for "what does this number mean", shared by tooltips and
+  the Methodology page.
+- **Build stamp.** `app/version.py` derives a build time (newest source mtime) and a
+  content fingerprint, shown in the sidebar, on Data & Upload and printed to the console
+  at startup — the app is distributed by copying a folder, so "am I running the new code"
+  needs an answer that does not rely on someone bumping a number.
 - **Drill-down.** Charts use a category x-axis and `drilldown.normalize_bucket` so a
   Plotly month label ("2026-06-01") matches the record's period ("2026-06"); summary
   tables are `st.dataframe(on_select=...)` rows that select the same bucket.

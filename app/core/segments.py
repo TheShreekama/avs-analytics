@@ -7,11 +7,11 @@ Three orthogonal classifications drive every dashboard:
   A path containing "(From AVS)" targets Azure-native services; everything else
   whose target is AVS (on-premises, VMG, AWS/VMC, AVS-to-AVS, EOS refresh) is an
   AVS migration.
-* **EOS population** — the TPIDs in scope for the EOS Migration reports.  When an
-  EOS worksheet is supplied its TPID list is authoritative; without one the EOS
-  markers on the offering/path are used instead.
-* **Generation** — Gen-1 / Gen-2 / Unclassified, decided per **TPID** by looking at
-  the SKUs across *all* of its waves (never per wave, never by account name).
+* **EOS population** — the TPIDs in scope for the EOS Migration reports, read off
+  the export's own EOS markers on the offering / migration path.  There is one
+  dataset: nothing here depends on a second worksheet.
+* **Generation** — Gen-1 / Gen-2 / Unclassified, decided per **TPID** from the Tags
+  of *all* its waves (host SKUs as a fallback) — never per wave, never by name.
 
 Every rule here is TPID-first: account names differ between worksheets and source
 systems, so they are never used for matching.
@@ -188,24 +188,13 @@ def tpid_key(fact: pd.DataFrame) -> pd.Series:
 # --------------------------------------------------------------------------- #
 # EOS population
 # --------------------------------------------------------------------------- #
-def eos_tpids_from_worksheet(df: pd.DataFrame) -> set[str]:
-    """TPIDs listed in a supplied EOS worksheet (any column named like a TPID)."""
-    for col in df.columns:
-        if re.sub(r"[^a-z]", "", str(col).lower()) in ("tpid", "topparentid", "tpids"):
-            vals = df[col].astype("string").str.strip()
-            return {v for v in vals.dropna().unique() if v and v != "0"}
-    return set()
-
-
-def apply_eos_population(fact: pd.DataFrame, eos_tpids: set[str] | None) -> pd.Series:
+def eos_population(fact: pd.DataFrame) -> pd.Series:
     """Per-row membership of the EOS population.
 
-    With an EOS worksheet, membership is exactly its TPID list (Section 6).
-    Without one, the EOS markers already derived from the offering/path stand in,
-    so the reports still work on a single-file upload.
+    Everything comes from the single nominations export: a row is EOS when its
+    migration path, factory offering or linked offering carries an AV36 / AV36P /
+    AV52 / AV64 / EOS / EGS / end-of-support marker.
     """
-    if eos_tpids:
-        return tpid_key(fact).isin(eos_tpids)
     return fact["is_av36_eos"].astype(bool)
 
 

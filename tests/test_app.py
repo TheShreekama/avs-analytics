@@ -86,3 +86,25 @@ def test_full_app_boots_with_navigation():
     assert not at.exception, f"app failed to boot: {at.exception}"
     labels = [s.label for s in at.sidebar.selectbox]
     assert "Date range" in labels, f"global reporting period missing: {labels}"
+
+
+def test_build_stamp_identifies_the_running_source():
+    """The sidebar stamp must change when a source file changes."""
+    from app import version
+    built, fingerprint = version.build_stamp()
+    assert len(fingerprint) == 6
+    assert built != "unknown"
+    assert version.version_line().startswith("v")
+
+
+# Categories the bundled sample actually populates (an empty category returns
+# early, before the sections that carry the explanations).
+@pytest.mark.parametrize("page", ["category_dashboard.all_avs",
+                                  "category_dashboard.avs_native"])
+def test_titles_carry_an_explanation(page):
+    """Every dashboard title offers an ⓘ explaining how its number is built."""
+    at = _render_default(page, "Customer (deduplicated)")
+    assert not at.exception, f"{page} raised: {at.exception}"
+    marked = [m.value for m in at.markdown if "avs-info" in m.value]
+    assert len(marked) >= 5, f"{page} has too few explained titles: {len(marked)}"
+    assert any('title="' in m for m in marked)
