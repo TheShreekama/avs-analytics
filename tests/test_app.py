@@ -23,6 +23,7 @@ PAGES = [
     "nomination_trends", "approved_trends", "avs_to_azure", "avs_native_status",
     "insights_page", "methodology", "reports", "data_upload", "column_mapping",
     # Category dashboards (one module, one entry point per migration category).
+    "category_dashboard.eos_all",
     "category_dashboard.eos_gen1", "category_dashboard.eos_gen2",
     "category_dashboard.eos_unclassified", "category_dashboard.all_avs",
     "category_dashboard.avs_native",
@@ -30,6 +31,7 @@ PAGES = [
 
 
 def _render(page: str, mode: str) -> AppTest:
+    os.environ.pop("AVS_AS_OF", None)
     os.environ["AVS_PAGE"] = page
     at = AppTest.from_file(_HARNESS, default_timeout=60)
     at.session_state["count_mode"] = mode
@@ -45,8 +47,25 @@ def _render(page: str, mode: str) -> AppTest:
     return at
 
 
+def _sample_as_of() -> str:
+    """Latest activity date in the bundled sample, as the sidebar would be set."""
+    from app.config import SAMPLE_DATA
+    from app.core import cleaning, loader, mapping
+    raw = loader.read_raw_path(SAMPLE_DATA)
+    fact, _ = cleaning.build_fact_frame(raw, mapping.resolve_mapping(list(raw.columns)))
+    latest = max(fact[c].max() for c in ("approval_date", "created_date")
+                 if fact[c].notna().any())
+    return str(latest.date())
+
+
 def _render_default(page: str, mode: str) -> AppTest:
-    """Render a page with the *default* filter state (no widening)."""
+    """Render a page with the *default* filter state (no widening).
+
+    The as-of date is pinned to the sample's own activity, so this asserts the
+    default *preset* shows data rather than asserting today's calendar overlaps
+    a fixed sample file.
+    """
+    os.environ["AVS_AS_OF"] = _sample_as_of()
     os.environ["AVS_PAGE"] = page
     at = AppTest.from_file(_HARNESS, default_timeout=60)
     at.session_state["count_mode"] = mode

@@ -44,7 +44,8 @@ under Streamlit's AppTest in both counting modes.
   PDF static images — no bundled browser), `components` (filter sidebar, date-range
   controls, KPI rows, tables), `drilldown` (selectable charts → underlying records).
 - `app/views/` — report pages, plus `category_dashboard` which renders the standard
-  five-category dashboard (one entry point per category, wired into `st.navigation`).
+  six-category dashboard (EOS combined + Gen-1/Gen-2/no-tag, All AVS, AVS → Azure Native) — one entry
+  point per category, wired into `st.navigation`.
 
 ## Key domain rules (read before editing reports)
 
@@ -76,7 +77,8 @@ under Streamlit's AppTest in both counting modes.
 - **Dates.** `metrics.date_preset_range` (This/Last week, This/Last month, Last 3/6 months,
   This/Last FY [July], All time, Custom); default preset "This FY". FY presets span the
   **whole** fiscal year (1 Jul → 30 Jun), not year-to-date; everything is anchored on the
-  sidebar as-of date. A range excludes rows whose date is
+  sidebar as-of date, which defaults to **today** (never the data's latest date — one
+  future-dated row used to drag every window into the wrong fiscal year). A range excludes rows whose date is
   NULL unless the sidebar's "Include N with no <date>" box is ticked (`_date.include_null`).
 
 - **Migration categories** (`segments.population`): `all_avs` = target platform is AVS

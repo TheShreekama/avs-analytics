@@ -28,6 +28,7 @@ import pandas as pd
 # --------------------------------------------------------------------------- #
 # Migration categories
 # --------------------------------------------------------------------------- #
+CAT_EOS_ALL = "eos_all"
 CAT_EOS_GEN1 = "eos_gen1"
 CAT_EOS_GEN2 = "eos_gen2"
 CAT_EOS_UNCLASSIFIED = "eos_unclassified"
@@ -35,6 +36,7 @@ CAT_ALL_AVS = "all_avs"
 CAT_AVS_NATIVE = "avs_native"
 
 CATEGORY_LABELS = {
+    CAT_EOS_ALL: "EOS Migration",
     CAT_EOS_GEN1: "EOS Migration — Gen-1",
     CAT_EOS_GEN2: "EOS Migration — Gen-2",
     CAT_EOS_UNCLASSIFIED: "EOS Migration — No generation tag",
@@ -217,6 +219,8 @@ def population(fact: pd.DataFrame, category: str) -> pd.DataFrame:
                     | fact["is_eos_population"].astype(bool)]
     if category == CAT_AVS_NATIVE:
         return fact[fact["is_from_avs"].astype(bool)]
+    if category == CAT_EOS_ALL:
+        return fact[fact["is_eos_population"].astype(bool)]
     if category == CAT_EOS_GEN1:
         return fact[fact["generation"] == GEN_1]
     if category == CAT_EOS_GEN2:

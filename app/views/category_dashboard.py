@@ -34,6 +34,9 @@ def _unit(category: str) -> tuple[str, str]:
 
 
 _DESCRIPTIONS = {
+    segments.CAT_EOS_ALL:
+        "Every EOS Migration account combined — Gen-1, Gen-2 and any account in "
+        "scope by migration path with no generation tag.",
     segments.CAT_EOS_GEN1:
         "Accounts with an \"AVS Migration - Gen1\" tag on any wave — one tagged wave "
         "brings the whole account in.",
@@ -86,10 +89,14 @@ def render(category: str) -> None:
 def _population_note(ctx, category: str, fact: pd.DataFrame) -> None:
     tpids = fmt_int(segments.tpid_key(fact).nunique()) if not fact.empty else "0"
     bits = [f"<b>{tpids}</b> TPIDs · <b>{fmt_int(len(fact))}</b> nomination waves"]
-    if category in (segments.CAT_EOS_GEN1, segments.CAT_EOS_GEN2,
+    if category in (segments.CAT_EOS_ALL, segments.CAT_EOS_GEN1, segments.CAT_EOS_GEN2,
                     segments.CAT_EOS_UNCLASSIFIED):
         bits.append("scope from the <b>AVS Migration - Gen1/Gen2</b> tag on any wave, "
                     "or the <b>AV36/AV36P/AV52 - EOS</b> path when untagged")
+    if category == segments.CAT_EOS_ALL and not fact.empty:
+        split = (fact.drop_duplicates("tpid_key")["generation"]
+                 .value_counts().rename({segments.GEN_UNCLASSIFIED: "no generation tag"}))
+        bits.append(" · ".join(f"<b>{fmt_int(v)}</b> {k}" for k, v in split.items()))
     banner(" · ".join(bits))
 
 
@@ -296,6 +303,10 @@ def _money(df: pd.DataFrame) -> pd.DataFrame:
 # --------------------------------------------------------------------------- #
 # Page entry points (st.Page needs a distinct callable per page)
 # --------------------------------------------------------------------------- #
+def eos_all() -> None:
+    render(segments.CAT_EOS_ALL)
+
+
 def eos_gen1() -> None:
     render(segments.CAT_EOS_GEN1)
 
