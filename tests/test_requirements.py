@@ -135,6 +135,21 @@ def test_eos_path_is_the_fallback_when_no_wave_is_tagged(fact):
     assert untagged["is_eos_population"].all()
 
 
+def test_the_same_eos_path_carries_either_generation(raw_frame):
+    """AV36/AV36P/AV52 - EOS is shared: only the tag separates Gen-1 from Gen-2."""
+    df = raw_frame.copy()
+    df["Primary Migration Path"] = "AV36/AV36P/AV52 - EOS"
+    mp = mapping.resolve_mapping(list(df.columns))
+    built, _ = cleaning.build_fact_frame(df, mp, pd.Timestamp("2026-09-01"))
+    by_tpid = built.drop_duplicates("tpid_key").set_index(built.drop_duplicates(
+        "tpid_key")["tpid"].astype(str))["generation"]
+    assert by_tpid["100"] == segments.GEN_1          # Gen1-tagged, on that path
+    assert by_tpid["300"] == segments.GEN_2          # Gen2-tagged, same path
+    assert by_tpid["400"] == segments.GEN_UNCLASSIFIED   # untagged, same path
+    # All three are EOS accounts; the tag only decides which page they land on.
+    assert segments.eos_population(built).all()
+
+
 def test_a_tag_brings_an_account_in_without_an_eos_path(raw_frame):
     """The tag alone is enough — the offering need not read as EOS."""
     df = raw_frame.copy()
@@ -253,6 +268,7 @@ def test_rollup_deduplicates_on_tpid(fact):
     ("Something elseAVS Migration - Gen2Another tag", segments.GEN_2),
     ("AVS Migration – Gen2", segments.GEN_2),        # en dash
     ("AVS Migration-Gen1", segments.GEN_1),          # no spaces
+    ("AVS Migration Gen2", segments.GEN_2),          # no dash at all
     ("None of the above", None),
     ("", None),
 ])
