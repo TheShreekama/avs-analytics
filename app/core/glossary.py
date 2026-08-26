@@ -118,8 +118,9 @@ DETAILED_DATA = (
 REPORTING_PERIOD = (
     "The window every metric on this page is measured over. 'Global range' follows "
     "the sidebar setting; any other choice overrides it for this page only. "
-    "Windows are anchored on the reporting as-of date in the sidebar — This FY "
-    "covers the whole fiscal year (1 Jul → 30 Jun), not year-to-date."
+    "Windows are anchored on the reporting as-of date in the sidebar, which "
+    "defaults to today — so This FY is the fiscal year you are currently in, "
+    "covering the whole year (1 Jul → 30 Jun) rather than year-to-date."
 )
 
 # --------------------------------------------------------------------------- #
@@ -155,6 +156,11 @@ EOS_UNTAGGED = (
 )
 
 CATEGORY_HELP = {
+    segments.CAT_EOS_ALL: (
+        "Every EOS Migration account in one view — Gen-1, Gen-2 and any account in "
+        "scope through its migration path with no generation tag. The generation "
+        "pages are subsets of this one.\n\n" + EOS_POPULATION
+    ),
     segments.CAT_EOS_GEN1: f"{EOS_POPULATION}\n\n{GENERATION_RULE}",
     segments.CAT_EOS_GEN2: f"{EOS_POPULATION}\n\n{GENERATION_RULE}",
     segments.CAT_EOS_UNCLASSIFIED: f"{EOS_UNTAGGED}\n\n{GENERATION_RULE}",

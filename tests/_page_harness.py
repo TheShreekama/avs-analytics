@@ -18,6 +18,14 @@ from app import state  # noqa: E402
 inject_css()
 state.ensure_context()
 
+# The as-of date now defaults to *today*, so a test working with the bundled
+# sample (whose activity sits in an earlier fiscal year) pins it the way a user
+# would with the sidebar's "Reporting as-of date" control.
+as_of = os.environ.get("AVS_AS_OF")
+if as_of and str(state.get_context().as_of.date()) != as_of:
+    import pandas as pd
+    state.reload_with(as_of=pd.Timestamp(as_of))
+
 # "overview" renders app.views.overview.render(); "category_dashboard.eos_gen1"
 # renders that module's named entry point (the category dashboards share a module).
 page = os.environ.get("AVS_PAGE", "overview")

@@ -356,3 +356,18 @@ def test_a_tagged_account_on_a_non_avs_path_still_counts_as_all_avs(raw_frame):
     mp = mapping.resolve_mapping(list(df.columns))
     built, _ = cleaning.build_fact_frame(df, mp, pd.Timestamp("2026-09-01"))
     assert "600" in _tpids(segments.population(built, segments.CAT_ALL_AVS))
+
+
+def test_combined_eos_tab_is_the_union_of_its_generations(fact):
+    """The EOS Migration tab holds Gen-1, Gen-2 and the untagged EOS accounts."""
+    combined = segments.population(fact, segments.CAT_EOS_ALL)
+    gen1 = segments.population(fact, segments.CAT_EOS_GEN1)
+    gen2 = segments.population(fact, segments.CAT_EOS_GEN2)
+    untagged = segments.population(fact, segments.CAT_EOS_UNCLASSIFIED)
+
+    assert _tpids(combined) == ["100", "200", "300", "400"]
+    assert set(_tpids(gen1)) | set(_tpids(gen2)) | set(_tpids(untagged)) == \
+        set(_tpids(combined))
+    # The parts do not overlap, so the combined count is their sum.
+    assert len(gen1) + len(gen2) + len(untagged) == len(combined)
+    assert combined["is_eos_population"].all()

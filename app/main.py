@@ -49,6 +49,8 @@ def run() -> None:
                     icon=":material/picture_as_pdf:", url_path="reports"),
         ],
         "Migration Analytics": [
+            st.Page(category_dashboard.eos_all, title="EOS Migration (All)",
+                    icon=":material/dns:", url_path="eos-all"),
             st.Page(category_dashboard.eos_gen1, title="EOS Migration — Gen-1",
                     icon=":material/memory:", url_path="eos-gen1"),
             st.Page(category_dashboard.eos_gen2, title="EOS Migration — Gen-2",
@@ -116,7 +118,9 @@ def _sidebar_brand(ctx, state, app_name: str, tagline: str) -> None:
     cur = pd.Timestamp(ctx.as_of).date()
     new_asof = st.sidebar.date_input("Reporting as-of date", value=cur,
                                      help="Anchors all date-range presets and the "
-                                          "This-Week/Month/Quarter/YTD windows.")
+                                          "This-Week/Month/Quarter/YTD windows. "
+                                          "Defaults to today; change it to report as "
+                                          "of an earlier date.")
     if pd.Timestamp(new_asof) != pd.Timestamp(ctx.as_of):
         state.reload_with(as_of=pd.Timestamp(new_asof))
         st.rerun()

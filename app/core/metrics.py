@@ -1,7 +1,7 @@
 """Time-period helpers and KPI calculations.
 
 All period maths is anchored on an *as-of* date so the same dataset can be
-reported "as of" any chosen day (defaults to the latest activity in the data).
+reported "as of" any chosen day (defaults to today).
 """
 from __future__ import annotations
 

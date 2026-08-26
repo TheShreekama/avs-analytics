@@ -518,9 +518,11 @@ def build_fact_frame(
 
 
 def _effective_today(fact: pd.DataFrame) -> pd.Timestamp:
-    """Latest real activity date in the data (used as default 'as-of')."""
-    cols = ["approval_date", "created_date", "actual_end_date", "actual_start_date"]
-    candidates = [fact[c].max() for c in cols if c in fact and fact[c].notna().any()]
-    if candidates:
-        return max(candidates).normalize()
+    """Default reporting as-of date: **today**.
+
+    Deriving it from the data's latest activity date used to drag every window
+    forward whenever a single row carried a far-future date — "This FY" would
+    resolve to a fiscal year the business is not in yet.  Today is the honest
+    anchor; the sidebar's as-of control still overrides it for a back-dated read.
+    """
     return pd.Timestamp.today().normalize()
