@@ -7,8 +7,9 @@ Three orthogonal classifications drive every dashboard:
   A path containing "(From AVS)" targets Azure-native services; everything else
   whose target is AVS (on-premises, VMG, AWS/VMC, AVS-to-AVS, EOS refresh) is an
   AVS migration.
-* **EOS population** — the TPIDs in scope for the EOS Migration reports, read off
-  the export's own EOS markers on the offering / migration path.  There is one
+* **EOS population** — an account is an EOS Migration account when ANY of its
+  waves carries an "AVS Migration - Gen1" or "AVS Migration - Gen2" tag.  That one
+  tag both puts the account in scope and fixes its generation.  There is one
   dataset: nothing here depends on a second worksheet.
 * **Generation** — Gen-1 / Gen-2 / Unclassified, decided per **TPID** from the Tags
   of *all* its waves (host SKUs as a fallback) — never per wave, never by name.
@@ -34,7 +35,7 @@ CAT_AVS_NATIVE = "avs_native"
 CATEGORY_LABELS = {
     CAT_EOS_GEN1: "EOS Migration — Gen-1",
     CAT_EOS_GEN2: "EOS Migration — Gen-2",
-    CAT_EOS_UNCLASSIFIED: "EOS Migration — Unclassified",
+    CAT_EOS_UNCLASSIFIED: "EOS Migration — No generation tag",
     CAT_ALL_AVS: "All AVS Migrations",
     CAT_AVS_NATIVE: "AVS → Azure Native",
 }
@@ -136,40 +137,24 @@ def sku_codes(value) -> set[str]:
     return {"av" + m.group(1).lower() for m in _SKU_TOKEN_RE.finditer(str(value))}
 
 
-def classify_generation(sku_values, tag_values=None) -> str:
-    """Gen-1 / Gen-2 / Unclassified for one TPID, across all of its waves.
+def classify_generation(tag_values) -> str:
+    """Gen-1 / Gen-2 / Unclassified for one TPID, from the Tags of all its waves.
 
-    Precedence:
-      1. **Tags** decide it: any wave tagged "AVS Migration - Gen1" -> Gen-1,
-         "AVS Migration - Gen2" -> Gen-2 (Gen-1 wins if both appear).
-      2. With no generation tag anywhere, fall back to the host SKUs: any wave
-         carrying AV36 / AV36P / AV48 / AV52 -> Gen-1; only-AV64 -> Gen-2.
-      3. Otherwise -> **Unclassified**, reported separately and never silently
-         folded into a generation.
+    A single wave tagged "AVS Migration - Gen1" makes the whole account Gen-1;
+    "AVS Migration - Gen2" makes it Gen-2.  Gen-1 wins when both appear across
+    the account's waves.  No generation tag anywhere -> Unclassified, which also
+    means the account is not an EOS Migration account (see ``eos_population``).
     """
-    tagged = generation_from_tags(tag_values or [])
-    if tagged:
-        return tagged
-    found: set[str] = set()
-    for value in sku_values:
-        found |= sku_codes(value)
-    if found & set(GEN1_SKUS):
-        return GEN_1
-    if found and found <= set(GEN2_SKUS):
-        return GEN_2
-    return GEN_UNCLASSIFIED
+    return generation_from_tags(tag_values) or GEN_UNCLASSIFIED
 
 
 def generation_by_tpid(fact: pd.DataFrame) -> pd.Series:
-    """Map of TPID -> generation, evaluating every wave belonging to the TPID."""
-    if fact.empty or "avs_sku" not in fact.columns:
+    """Map of TPID -> generation, evaluating the Tags of every wave it owns."""
+    if fact.empty:
         return pd.Series(dtype="object")
-    df = fact.assign(_key=tpid_key(fact))
-    tags = df["tags"] if "tags" in df.columns else pd.Series("", index=df.index)
-    df = df.assign(_tags=tags)
-    return df.groupby("_key").apply(
-        lambda g: classify_generation(g["avs_sku"].tolist(), g["_tags"].tolist()),
-        include_groups=False)
+    tags = fact["tags"] if "tags" in fact.columns else pd.Series("", index=fact.index)
+    df = fact.assign(_key=tpid_key(fact), _tags=tags)
+    return df.groupby("_key")["_tags"].apply(lambda s: classify_generation(s.tolist()))
 
 
 def tpid_key(fact: pd.DataFrame) -> pd.Series:
@@ -189,13 +174,19 @@ def tpid_key(fact: pd.DataFrame) -> pd.Series:
 # EOS population
 # --------------------------------------------------------------------------- #
 def eos_population(fact: pd.DataFrame) -> pd.Series:
-    """Per-row membership of the EOS population.
+    """Per-row membership of the EOS Migration population.
 
-    Everything comes from the single nominations export: a row is EOS when its
-    migration path, factory offering or linked offering carries an AV36 / AV36P /
-    AV52 / AV64 / EOS / EGS / end-of-support marker.
+    The generation tag defines it: if ANY wave of an account carries
+    "AVS Migration - Gen1" or "AVS Migration - Gen2", every wave of that account
+    is in scope.  Membership is therefore decided per TPID, never per row — one
+    tagged wave brings the whole account in.
     """
-    return fact["is_av36_eos"].astype(bool)
+    if fact.empty:
+        return pd.Series(dtype=bool)
+    if "generation" in fact.columns:
+        return fact["generation"].isin((GEN_1, GEN_2))
+    gen = generation_by_tpid(fact)
+    return tpid_key(fact).map(gen).isin((GEN_1, GEN_2))
 
 
 # --------------------------------------------------------------------------- #
@@ -214,12 +205,16 @@ def population(fact: pd.DataFrame, category: str) -> pd.DataFrame:
         return fact[fact["is_avs_target"].astype(bool)]
     if category == CAT_AVS_NATIVE:
         return fact[fact["is_from_avs"].astype(bool)]
-    eos = fact[fact["is_eos_population"].astype(bool)]
-    wanted = {CAT_EOS_GEN1: GEN_1, CAT_EOS_GEN2: GEN_2,
-              CAT_EOS_UNCLASSIFIED: GEN_UNCLASSIFIED}.get(category)
-    if wanted is None:
-        return eos
-    return eos[eos["generation"] == wanted]
+    if category == CAT_EOS_GEN1:
+        return fact[fact["generation"] == GEN_1]
+    if category == CAT_EOS_GEN2:
+        return fact[fact["generation"] == GEN_2]
+    if category == CAT_EOS_UNCLASSIFIED:
+        # Untagged accounts whose offering still reads as EOS — kept visible so
+        # nothing disappears, but never folded into a generation.
+        untagged = fact["generation"] == GEN_UNCLASSIFIED
+        return fact[untagged & fact["is_av36_eos"].astype(bool)]
+    return fact[fact["is_eos_population"].astype(bool)]
 
 
 def category_summary(fact: pd.DataFrame) -> pd.DataFrame:
@@ -247,8 +242,10 @@ def category_label_series(fact: pd.DataFrame) -> pd.Series:
     out = pd.Series("Other", index=fact.index, dtype="object")
     avs = fact["is_avs_target"].astype(bool)
     out[avs] = CATEGORY_LABELS[CAT_ALL_AVS]
+    untagged_eos = ((fact["generation"] == GEN_UNCLASSIFIED)
+                    & fact["is_av36_eos"].astype(bool))
+    out[untagged_eos] = CATEGORY_LABELS[CAT_EOS_UNCLASSIFIED]
     eos = fact["is_eos_population"].astype(bool)
-    out[eos] = fact.loc[eos, "generation"].map(
-        lambda g: gen_label.get(g, CATEGORY_LABELS[CAT_EOS_UNCLASSIFIED]))
+    out[eos] = fact.loc[eos, "generation"].map(gen_label)
     out[fact["is_from_avs"].astype(bool)] = CATEGORY_LABELS[CAT_AVS_NATIVE]
     return out

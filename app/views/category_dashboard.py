@@ -35,14 +35,14 @@ def _unit(category: str) -> tuple[str, str]:
 
 _DESCRIPTIONS = {
     segments.CAT_EOS_GEN1:
-        "End-of-support migrations for TPIDs with an \"AVS Migration - Gen1\" tag on "
-        "any wave (falling back to the AV36 / AV36P / AV48 / AV52 host SKUs).",
+        "Accounts with an \"AVS Migration - Gen1\" tag on any wave — one tagged wave "
+        "brings the whole account in.",
     segments.CAT_EOS_GEN2:
-        "End-of-support migrations for TPIDs tagged \"AVS Migration - Gen2\" on any "
-        "wave (falling back to AV64 being the only populated SKU).",
+        "Accounts with an \"AVS Migration - Gen2\" tag on any wave — one tagged wave "
+        "brings the whole account in.",
     segments.CAT_EOS_UNCLASSIFIED:
-        "EOS TPIDs carrying no generation tag and no matching SKU. Shown separately "
-        "— never folded into a generation.",
+        "Accounts whose offering reads as EOS but which carry no generation tag on "
+        "any wave. Shown separately — never folded into a generation.",
     segments.CAT_ALL_AVS:
         "Every migration whose target platform is AVS — on-premises, VMG, AWS/VMC, "
         "AVS-to-AVS and EOS refreshes alike.",
@@ -88,8 +88,8 @@ def _population_note(ctx, category: str, fact: pd.DataFrame) -> None:
     bits = [f"<b>{tpids}</b> TPIDs · <b>{fmt_int(len(fact))}</b> nomination waves"]
     if category in (segments.CAT_EOS_GEN1, segments.CAT_EOS_GEN2,
                     segments.CAT_EOS_UNCLASSIFIED):
-        bits.append("EOS population from the AV36 / AV52 / EOS markers on the "
-                    "offering &amp; migration path")
+        bits.append("scope from the <b>AVS Migration - Gen1/Gen2</b> tag on any wave "
+                    "of the account")
     banner(" · ".join(bits))
 
 
@@ -102,8 +102,8 @@ def _why_empty(ctx, category: str) -> None:
            .rename_axis("Generation").reset_index(name="Accounts (TPID)"))
     eos = int(accounts["is_eos_population"].sum())
     st.caption(f"This file has **{len(accounts)}** accounts, of which **{eos}** carry an "
-               f"EOS marker. Generations are read from the **Tags** column "
-               f"(AVS Migration - Gen1 / - Gen2):")
+               f"**AVS Migration - Gen1/Gen2** tag on at least one wave — that tag is "
+               f"what makes an account an EOS Migration account:")
     components.show_table(gen)
     tags = (fact["tags"].astype("string").fillna("(blank)").value_counts().head(8)
             .rename_axis("Tags").reset_index(name="Rows"))

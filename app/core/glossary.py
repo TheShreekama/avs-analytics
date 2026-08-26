@@ -126,26 +126,34 @@ REPORTING_PERIOD = (
 # Category populations
 # --------------------------------------------------------------------------- #
 GENERATION_RULE = (
-    "Generation is decided per customer (TPID) across ALL of its waves:\n"
-    "1. The Tags column decides it — a wave tagged 'AVS Migration - Gen1' makes "
-    "the account Gen-1, 'AVS Migration - Gen2' makes it Gen-2 (Gen-1 wins if both "
-    "appear). Tags arrive glued together ('Qualify and AccelerateAVS Migration - "
-    "Gen1'), so the marker is matched inside the cell.\n"
-    "2. With no generation tag anywhere, the AVS SKU Type column stands in: "
-    "AV36 / AV36P / AV48 / AV52 → Gen-1, only-AV64 → Gen-2.\n"
-    "3. Neither → Unclassified, reported separately."
+    "The Tags column decides both scope and generation, per customer (TPID) "
+    "across ALL of its waves:\n"
+    "• ONE wave tagged 'AVS Migration - Gen1' makes the whole account an EOS "
+    "Migration account, generation Gen-1.\n"
+    "• 'AVS Migration - Gen2' likewise makes it Gen-2.\n"
+    "• Gen-1 wins when both tags appear on different waves.\n"
+    "Tags arrive glued together with no separator ('Qualify and AccelerateAVS "
+    "Migration - Gen1'), so the marker is matched inside the cell — spacing, "
+    "hyphen vs en dash and neighbouring tags cannot hide it."
 )
 
 EOS_POPULATION = (
-    "EOS nominations are those whose Primary Migration Path, Factory Offering or "
-    "Linked Offering carries an EOS marker — AV36 / AV36P / AV52 / AV64 / EOS / "
-    "EGS / end-of-support (e.g. 'AV36/AV36P/AV52 - EOS')."
+    "An account is an EOS Migration account when ANY of its waves carries an "
+    "'AVS Migration - Gen1' or 'AVS Migration - Gen2' tag. Every wave of that "
+    "account is then in scope, and the tag sets its generation."
+)
+
+EOS_UNTAGGED = (
+    "Accounts whose offering or migration path reads as EOS (e.g. "
+    "'AV36/AV36P/AV52 - EOS') but which carry NO 'AVS Migration - Gen1/Gen2' tag "
+    "on any wave. Listed here so nothing disappears — they are never folded into "
+    "a generation."
 )
 
 CATEGORY_HELP = {
     segments.CAT_EOS_GEN1: f"{EOS_POPULATION}\n\n{GENERATION_RULE}",
     segments.CAT_EOS_GEN2: f"{EOS_POPULATION}\n\n{GENERATION_RULE}",
-    segments.CAT_EOS_UNCLASSIFIED: f"{EOS_POPULATION}\n\n{GENERATION_RULE}",
+    segments.CAT_EOS_UNCLASSIFIED: f"{EOS_UNTAGGED}\n\n{GENERATION_RULE}",
     segments.CAT_ALL_AVS: (
         "Every nomination whose TARGET platform is AVS, whatever it migrates from "
         "— on-premises, VMG, AWS/VMC, AVS-to-AVS and EOS refreshes. Derived from "

@@ -432,7 +432,8 @@ def build_fact_frame(
     fact["tpid_key"] = segments.tpid_key(fact)
     gen_by_tpid = segments.generation_by_tpid(fact)
     fact["generation"] = fact["tpid_key"].map(gen_by_tpid).fillna(segments.GEN_UNCLASSIFIED)
-    # EOS membership comes from the offering/path markers on the export itself.
+    # An "AVS Migration - Gen1/Gen2" tag on ANY wave makes the whole account an
+    # EOS Migration account, so membership follows the generation.
     fact["is_eos_population"] = segments.eos_population(fact)
     fact["migration_category"] = segments.category_label_series(fact)
     code, label = split_migration_status(fact["migration_status"])

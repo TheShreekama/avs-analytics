@@ -121,20 +121,21 @@ def render() -> None:
         "AVS onto Azure-native services.\n"
         "- **EOS Migration — Gen-1 / Gen-2 / Unclassified** — the EOS population, "
         "split by generation.\n\n"
-        "**EOS population.** A nomination is EOS when its **Primary Migration Path**, "
-        "**Factory Offering** or **Linked Offering** carries an AV36 / AV36P / AV52 / "
-        "AV64 / EOS / EGS / end-of-support marker (e.g. *AV36/AV36P/AV52 - EOS*). "
-        "Everything comes from the single nominations export.\n\n"
+        "**EOS population.** An account is an **EOS Migration** account when ANY of "
+        "its waves carries an **\"AVS Migration - Gen1\"** or **\"AVS Migration - "
+        "Gen2\"** tag. One tagged wave brings the whole account into scope, and the "
+        "tag also sets its generation. Everything comes from the single nominations "
+        "export.\n\n"
         "**Generation is decided per TPID, across all of its waves:**\n"
-        "1. The **Tags** column decides it — any wave tagged **\"AVS Migration - "
-        "Gen1\"** → **Gen-1**, **\"AVS Migration - Gen2\"** → **Gen-2** (Gen-1 wins "
-        "if both appear). Tags arrive concatenated with no separator "
+        "1. Any wave tagged **\"AVS Migration - Gen1\"** → the account is **Gen-1**; "
+        "**\"AVS Migration - Gen2\"** → **Gen-2**. Gen-1 wins if both appear on "
+        "different waves. Tags arrive concatenated with no separator "
         "(*\"Qualify and AccelerateAVS Migration - Gen1\"*), so the marker is matched "
         "inside the cell regardless of spacing, dashes or neighbouring tags.\n"
-        "2. With no generation tag anywhere, the host **SKUs** stand in: any wave "
-        "with **AV36 / AV36P / AV48 / AV52** → Gen-1; only-**AV64** → Gen-2.\n"
-        "3. Neither → **Unclassified**, reported on its own page and never folded "
-        "into a generation.")
+        "2. No generation tag on any wave → the account is not an EOS Migration "
+        "account. If its offering still reads as EOS (*AV36/AV36P/AV52 - EOS*) it is "
+        "listed on **EOS Migration — No generation tag**, never folded into a "
+        "generation.")
 
     # ------------------------------------------------------------------ #
     section("Metric rules (unique TPIDs vs. hosts)")

@@ -44,6 +44,18 @@ _HEADERS = {
 }
 
 
+# The Tags column is what puts an account in EOS scope and fixes its generation.
+# Written the way the real export writes them: several tags glued together.
+_TAGS = {
+    "100": "Qualify and AccelerateAVS Migration - Gen1",
+    "200": "Qualify and AccelerateFCS On Hold Reach OutAVS Migration - Gen1",
+    "300": "InternalAVS Migration - Gen2",
+    "400": "None of the above",            # EOS offering, but no generation tag
+    "500": "None of the above",
+    "600": "None of the above",
+}
+
+
 @pytest.fixture(scope="module")
 def raw_frame():
     raw = pd.DataFrame([dict(zip(_HEADERS.values(), row)) for row in _ROWS])
@@ -51,6 +63,7 @@ def raw_frame():
     raw["WW Region"] = "Americas - Enterprise"
     raw["Nomination Status"] = "Approved"
     raw["Nom. Created Date"] = raw["Nom. Approval Date"]
+    raw["Tags"] = raw["TPID"].map(_TAGS)
     return raw
 
 
@@ -70,17 +83,19 @@ def _tpids(records):
 # --------------------------------------------------------------------------- #
 def test_generation_is_decided_per_tpid_across_all_waves(fact):
     gen = dict(zip(fact["tpid"].astype(str), fact["generation"]))
-    assert gen["100"] == segments.GEN_1          # AV36 + AV36P
-    assert gen["200"] == segments.GEN_1          # AV52
-    assert gen["300"] == segments.GEN_2          # AV64 only; a blank wave does not disqualify
-    assert gen["400"] == segments.GEN_UNCLASSIFIED   # blank SKUs everywhere
+    assert gen["100"] == segments.GEN_1          # tagged Gen1 on a wave
+    assert gen["200"] == segments.GEN_1          # tag buried mid-string
+    assert gen["300"] == segments.GEN_2          # tagged Gen2
+    assert gen["400"] == segments.GEN_UNCLASSIFIED   # no generation tag anywhere
 
 
 def test_gen1_wins_over_gen2_when_both_present():
-    assert segments.classify_generation(["AV64", "AV36P"]) == segments.GEN_1
-    assert segments.classify_generation(["AV64", "AV64 Node"]) == segments.GEN_2
+    assert segments.classify_generation(
+        ["InternalAVS Migration - Gen2", "AVS Migration - Gen1"]) == segments.GEN_1
+    assert segments.classify_generation(["InternalAVS Migration - Gen2"]) == segments.GEN_2
     assert segments.classify_generation(["", None]) == segments.GEN_UNCLASSIFIED
-    assert segments.classify_generation(["AV72"]) == segments.GEN_UNCLASSIFIED
+    # SKU values alone never classify an account — only the tag does.
+    assert segments.classify_generation(["AV36P"]) == segments.GEN_UNCLASSIFIED
 
 
 def test_categories_select_the_right_population(fact):
@@ -98,12 +113,20 @@ def test_categories_select_the_right_population(fact):
     assert _tpids(native) == ["600"]
 
 
-def test_eos_population_comes_from_the_offering_markers(fact):
-    """One dataset, no side worksheet: EOS membership is read off the export."""
+def test_one_tagged_wave_makes_the_whole_account_eos(fact):
+    """The generation tag defines EOS scope, per account, from a single wave."""
     membership = segments.eos_population(fact)
     assert sorted(fact.loc[membership, "tpid"].astype(str).unique()) == \
-        ["100", "200", "300", "400"]
-    assert not membership[fact["tpid"].astype(str) == "500"].any()
+        ["100", "200", "300"]
+    # 400 has an EOS offering but no tag -> not an EOS Migration account.
+    assert not membership[fact["tpid"].astype(str) == "400"].any()
+    # Every wave of a tagged account is in scope, not just the tagged one.
+    assert int(membership[fact["tpid"].astype(str) == "100"].sum()) == 2
+
+
+def test_untagged_eos_offerings_are_listed_separately(fact):
+    untagged = segments.population(fact, segments.CAT_EOS_UNCLASSIFIED)
+    assert _tpids(untagged) == ["400"]
 
 
 def test_tpid_is_the_matching_key_not_the_account_name(fact):
@@ -219,15 +242,10 @@ def test_generation_from_tags(tag, expected):
     assert segments.generation_from_tags([tag]) == expected
 
 
-def test_tags_beat_sku_and_gen1_wins_across_waves():
-    assert segments.classify_generation(["AV64"], ["AVS Migration - Gen1"]) == segments.GEN_1
-    assert segments.classify_generation(["AV36"], ["AVS Migration - Gen2"]) == segments.GEN_2
-    # Gen-1 wins when a TPID carries both markers on different waves.
-    assert segments.classify_generation(
-        [], ["InternalAVS Migration - Gen2", "AVS Migration - Gen1"]) == segments.GEN_1
-    # No generation tag anywhere -> the host SKUs still decide it.
-    assert segments.classify_generation(["AV36P"], ["None of the above"]) == segments.GEN_1
-    assert segments.classify_generation([], ["None of the above"]) == segments.GEN_UNCLASSIFIED
+def test_only_the_tag_classifies_an_account():
+    assert segments.classify_generation(["AVS Migration - Gen1"]) == segments.GEN_1
+    assert segments.classify_generation(["AVS Migration - Gen2"]) == segments.GEN_2
+    assert segments.classify_generation(["None of the above"]) == segments.GEN_UNCLASSIFIED
 
 
 def test_generation_uses_tags_when_skus_are_blank(raw_frame):
