@@ -36,11 +36,15 @@ under Streamlit's AppTest in both counting modes.
 
 - `app/core/` — `schema` (canonical fields + auto_map), `loader` (ingest + DuckDB),
   `cleaning` (parsing/derivations/DQ), `rollup` (wave dedup → `customer` table),
+  `segments` (migration category, source/target platform, Gen-1/Gen-2, EOS population),
+  `kpi` (requirement-defined metrics in pandas, each returning its source records),
   `mapping`, `metrics` (periods, date presets, KPIs), `analytics` (**all SQL lives here**),
   `insights` (deterministic rules), `exporter` (ReportLab PDF).
 - `app/ui/` — `theme`, `charts` (Plotly, interactive/browser), `pdf_charts` (matplotlib,
-  PDF static images — no bundled browser), `components` (filter sidebar, KPI rows, tables).
-- `app/views/` — 13 report pages.
+  PDF static images — no bundled browser), `components` (filter sidebar, date-range
+  controls, KPI rows, tables), `drilldown` (selectable charts → underlying records).
+- `app/views/` — report pages, plus `category_dashboard` which renders the standard
+  five-category dashboard (one entry point per category, wired into `st.navigation`).
 
 ## Key domain rules (read before editing reports)
 
@@ -74,10 +78,33 @@ under Streamlit's AppTest in both counting modes.
   almost every page; anchored on the sidebar as-of date. A range excludes rows whose date is
   NULL unless the sidebar's "Include N with no <date>" box is ticked (`_date.include_null`).
 
+- **Migration categories** (`segments.population`): `all_avs` = target platform is AVS
+  (on-prem / VMG / AWS-VMC / AVS-to-AVS / EOS); `avs_native` = `is_from_avs`; the three EOS
+  categories = the EOS population split by generation. EOS membership comes from an
+  uploaded EOS worksheet's TPID list when present (`state.set_eos_worksheet`), else from
+  the offering/path markers.
+- **TPID is authoritative** for joins, dedup and counts (`segments.tpid_key`; falls back to
+  the account name only when a row has no TPID). The `customer` rollup keys on it — never
+  on the account name, which differs between worksheets.
+- **Generations** (`segments.classify_generation`, per TPID across ALL waves): any of
+  AV36/AV36P/AV48/AV52 → Gen-1 (wins over AV64); only AV64 populated → Gen-2; blank or
+  unmatched → Unclassified (shown separately, never folded in).
+- **Metric rules** (`core/kpi.py`, all with `records` for drill-down): new engagements =
+  unique TPIDs by **Wave-1** approval date; migration ends = unique TPIDs whose **latest**
+  wave is `7 - Completed` (Wave 7 done + Wave 8 open ⇒ not counted), dated by actual end;
+  hosts migrated = **sum of Total Cores** over completed records (never a TPID count);
+  Cumulative is the final column and runs over the displayed months only.
+- **Terminology.** "AV36 EOS" is called **EOS Migration** everywhere in the UI.
+
 ## Conventions
 
 - **All SQL is in `app/core/analytics.py`** (DuckDB). Views call helpers; avoid inline SQL
-  (a few documented multi-line queries in trend views are the exception).
+  (a few documented multi-line queries in trend views are the exception). The
+  requirement-defined metrics live in `app/core/kpi.py` as pandas — the latest-wave and
+  unique-TPID rules read far better there, and each returns the rows behind the number.
+- **Date ranges.** A global reporting period lives in the sidebar
+  (`components.global_date_controls`); every report can override it with
+  `components.report_date_range`, which returns `(start, end, description)`.
 - Charts: **Plotly** for the browser (JS, no binary); **matplotlib** for the PDF (headless
   Agg, no bundled Chromium). Value axes are integer-only.
 - Server binds **127.0.0.1** (`.streamlit/config.toml`). No `.bat`/`.ps1`/`.exe`; run from

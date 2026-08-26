@@ -4,7 +4,7 @@ from __future__ import annotations
 import streamlit as st
 
 from app import state
-from app.core import loader, mapping as mapmod
+from app.core import loader, mapping as mapmod, segments
 from app.core.metrics import fmt_int
 from app.ui import components
 from app.ui.theme import banner, page_header, section
@@ -43,6 +43,8 @@ def render() -> None:
                    f"{', '.join(cov['missing_required'])}. Open <b>Column Mapping</b> to fix.", "warn")
         st.rerun()
 
+    _eos_worksheet(ctx)
+
     # Active dataset summary
     section("Active dataset")
     src = "Bundled sample" if ctx.is_sample else ctx.filename
@@ -66,3 +68,33 @@ def render() -> None:
     st.dataframe(fill, width="stretch", height=420, hide_index=True,
                  column_config={"fill_pct": st.column_config.ProgressColumn(
                      "Fill %", min_value=0, max_value=100, format="%.0f%%")})
+
+
+def _eos_worksheet(ctx) -> None:
+    """Optional EOS worksheet: its TPID list defines the EOS Migration population."""
+    section("EOS worksheet (optional)")
+    st.caption("Upload the EOS worksheet to pin the EOS Migration reports to its TPID "
+               "list. Without one, EOS membership is derived from the AV36 / AV36P / "
+               "AV52 / AV64 / EOS markers on the offering and migration path.")
+    if ctx.eos_tpids:
+        cols = st.columns([3, 1])
+        cols[0].success(f"EOS population set from a worksheet: "
+                        f"{fmt_int(len(ctx.eos_tpids))} TPIDs.")
+        if cols[1].button("Clear worksheet", width="stretch"):
+            state.set_eos_worksheet(None)
+            st.rerun()
+    eos_file = st.file_uploader("EOS worksheet (CSV, XLSX or XLS) with a TPID column",
+                               type=["csv", "xlsx", "xls"], key="eos_worksheet")
+    if eos_file is not None:
+        try:
+            eos_raw = loader.read_raw(eos_file.name, eos_file.getvalue())
+        except Exception as exc:  # noqa: BLE001 - surface parse errors to the user
+            st.error(f"Could not read the EOS worksheet: {exc}")
+            return
+        tpids = segments.eos_tpids_from_worksheet(eos_raw)
+        if not tpids:
+            st.error("No TPID column found in that worksheet — expected a column named TPID.")
+            return
+        state.set_eos_worksheet(tpids)
+        st.success(f"EOS population set to {fmt_int(len(tpids))} TPIDs from {eos_file.name}.")
+        st.rerun()

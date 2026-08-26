@@ -1,4 +1,4 @@
-"""Report 4 — AV36 EOS Nomination Status.
+"""Report 4 — EOS Migration Nomination Status.
 
 Tracks the derived operational/EOS taxonomy (On Track, Completed, At Risk,
 Delayed, Blocked, Cancelled) with a Region × Status heatmap and aging analysis.
@@ -22,29 +22,29 @@ def render() -> None:
     table = state.active_table()
     analytics.use_table(table)
     unit = state.unit_label()
-    page_header("AV36 EOS Nomination Status",
-                "Operational health of AV36 / EOS (End-of-Support) migration nominations.")
+    page_header("EOS Migration Status",
+                "Operational health of EOS (End-of-Support) migration nominations.")
     components.data_quality_banner(ctx)
-    scope = ("each customer counts once if <b>any</b> wave is AV36/EOS; "
+    scope = ("each customer counts once if <b>any</b> wave is an EOS migration; "
              "status follows the customer's <b>last wave</b>") if state.is_customer_mode() else \
-            "every wave that is AV36/EOS"
-    banner(f"<b>Scope:</b> AV36 EOS nominations — {scope}. "
+            "every wave that is an EOS migration"
+    banner(f"<b>Scope:</b> EOS Migration nominations — {scope}. "
            "EOS status is derived from Current State, Milestone Status, Migration Status code "
            "and planned-end vs as-of date.")
 
     filters, where = components.filter_sidebar(
         ctx, ["region_geo", "eos_status", "migration_path"],
         date_field="planned_end_date", table=table)
-    # Restrict the whole report to AV36/EOS nominations.
+    # Restrict the whole report to EOS Migration nominations.
     where = analytics._where_and(where, '"is_av36_eos" = TRUE')
 
     con = ctx.con
     n_av36 = analytics.total_rows(con, where)
     if n_av36 == 0:
         components.empty_state(
-            "No AV36 / EOS nominations in the current selection. (A nomination counts as "
-            "AV36/EOS when its migration path, factory offering or linked offering carries "
-            "an AV36 / AV36P / AV52 / AV64 / EOS / EGS / end-of-support marker.)")
+            "No EOS Migration nominations in the current selection. (A nomination counts as "
+            "an EOS migration when its migration path, factory offering or linked offering "
+            "carries an AV36 / AV36P / AV52 / AV64 / EOS / EGS / end-of-support marker.)")
         return
 
     # Status KPI tiles in canonical order
@@ -56,7 +56,7 @@ def render() -> None:
                 "Delayed": "warn", "Blocked": "bad", "Cancelled": ""}.get(s, "")
         items.append({"label": s, "value": fmt_int(counts.get(s, 0)), "tone": tone})
     components.kpi_row(items)
-    st.caption(f"**{fmt_int(n_av36)}** AV36 / EOS {unit} in scope "
+    st.caption(f"**{fmt_int(n_av36)}** EOS Migration {unit} in scope "
                f"(status taken from each account's last wave).")
     st.write("")
 

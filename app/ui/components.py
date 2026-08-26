@@ -7,7 +7,8 @@ import re
 import pandas as pd
 import streamlit as st
 
-from ..config import DATE_PRESETS, DEFAULT_DATE_PRESET, FY_START_MONTH
+from ..config import (DATE_PRESETS, DEFAULT_DATE_PRESET, FY_START_MONTH,
+                      GLOBAL_DATE_PRESETS)
 from ..core import analytics, metrics, schema
 from ..core.metrics import fmt_int
 from ..state import DataContext
@@ -333,3 +334,81 @@ def period_kpi_row(dates: pd.Series, as_of, verb: str = "") -> None:
         items.append({"label": f"{verb} {label}".strip(), "value": fmt_int(cur),
                       "delta": delta, "delta_label": "vs prior"})
     kpi_row(items)
+
+
+# --------------------------------------------------------------------------- #
+# Date range: one global window, overridable per report
+# --------------------------------------------------------------------------- #
+GLOBAL_DATE_KEY = "global_date_preset"
+GLOBAL_CUSTOM_KEY = "global_date_custom"
+USE_GLOBAL = "Global range"
+
+
+def global_date_controls(ctx: DataContext) -> None:
+    """The application-wide reporting window, rendered once in the sidebar.
+
+    Every report follows this window unless it overrides it with its own
+    selector, so a single change re-dates the whole dashboard.
+    """
+    st.sidebar.markdown("### 📅 Reporting period")
+    preset = st.sidebar.selectbox(
+        "Date range", GLOBAL_DATE_PRESETS,
+        index=GLOBAL_DATE_PRESETS.index(DEFAULT_DATE_PRESET), key=GLOBAL_DATE_KEY,
+        help="Applies to every report. Individual reports can override it.")
+    if preset == "Custom":
+        lo, hi = analytics.date_bounds(ctx.con, "created_date")
+        if lo is not None and hi is not None:
+            lo, hi = pd.Timestamp(lo).date(), pd.Timestamp(hi).date()
+            st.sidebar.date_input("Custom range", value=(lo, hi), min_value=lo, max_value=hi,
+                                  key=GLOBAL_CUSTOM_KEY)
+    start, end = resolve_range(ctx, preset, st.session_state.get(GLOBAL_CUSTOM_KEY))
+    if start is not None:
+        st.sidebar.caption(f"{start:%d %b %Y} → {end:%d %b %Y}")
+    else:
+        st.sidebar.caption("All dates in the dataset")
+
+
+def resolve_range(ctx: DataContext, preset: str, custom=None):
+    """Turn a preset name into a concrete (start, end) pair, or (None, None)."""
+    if preset == "Custom":
+        if isinstance(custom, (tuple, list)) and len(custom) == 2:
+            return custom[0], custom[1]
+        return None, None
+    if preset == "All time":
+        return None, None
+    rng = metrics.date_preset_range(ctx.as_of, preset, FY_START_MONTH)
+    return (rng[0].date(), rng[1].date()) if rng else (None, None)
+
+
+def global_range(ctx: DataContext):
+    preset = st.session_state.get(GLOBAL_DATE_KEY, DEFAULT_DATE_PRESET)
+    return resolve_range(ctx, preset, st.session_state.get(GLOBAL_CUSTOM_KEY))
+
+
+def report_date_range(ctx: DataContext, key_prefix: str, label: str = "Reporting period"):
+    """Per-report date selector that defaults to the global window.
+
+    Returns ``(start, end, description)`` — dates are inclusive, and ``None``
+    means unbounded.
+    """
+    options = [USE_GLOBAL] + list(DATE_PRESETS)
+    choice = st.selectbox(label, options, index=0, key=f"{key_prefix}_range",
+                          help="Overrides the global reporting period for this report only.")
+    if choice == USE_GLOBAL:
+        preset = st.session_state.get(GLOBAL_DATE_KEY, DEFAULT_DATE_PRESET)
+        start, end = global_range(ctx)
+        shown = f"{preset} (global)"
+    else:
+        custom = None
+        if choice == "Custom":
+            lo, hi = analytics.date_bounds(ctx.con, "created_date")
+            if lo is not None and hi is not None:
+                lo, hi = pd.Timestamp(lo).date(), pd.Timestamp(hi).date()
+                custom = st.date_input("Custom range", value=(lo, hi), min_value=lo,
+                                       max_value=hi, key=f"{key_prefix}_custom")
+        start, end = resolve_range(ctx, choice, custom)
+        shown = choice
+    window = (f"{start:%d %b %Y} → {end:%d %b %Y}" if start is not None
+              else "all dates in the dataset")
+    st.caption(f"**{shown}** — {window}")
+    return start, end, shown

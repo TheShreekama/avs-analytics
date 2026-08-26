@@ -18,6 +18,9 @@ from app import state  # noqa: E402
 inject_css()
 state.ensure_context()
 
+# "overview" renders app.views.overview.render(); "category_dashboard.eos_gen1"
+# renders that module's named entry point (the category dashboards share a module).
 page = os.environ.get("AVS_PAGE", "overview")
-mod = importlib.import_module(f"app.views.{page}")
-mod.render()
+module, _, func = page.partition(".")
+mod = importlib.import_module(f"app.views.{module}")
+getattr(mod, func or "render")()

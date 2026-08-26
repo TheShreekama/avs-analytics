@@ -72,6 +72,10 @@ CANONICAL_FIELDS: list[CanonicalField] = [
                    "Migration Track", ("linked task",)),
     CanonicalField("linked_offering", "Linked Offering", "Linked Offering Name",
                    DTYPE_CATEGORY, "Migration Track", ("linked offering", "linked nomination")),
+    CanonicalField("avs_sku", "AVS SKU Type", "AVS SKU Type", DTYPE_CATEGORY, "Migration Track",
+                   ("sku", "avs sku", "sku type", "host sku", "node sku", "hardware sku"),
+                   description="Host SKU (AV36 / AV36P / AV48 / AV52 / AV64) — drives the "
+                               "Gen-1 vs Gen-2 classification of a TPID."),
 
     # --- Geography ------------------------------------------------------- #
     CanonicalField("ww_region", "WW Region", "WW Region", DTYPE_CATEGORY, "Geography",

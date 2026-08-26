@@ -29,7 +29,7 @@ def render() -> None:
         "**'(From AVS)'** (i.e. migrating *away* from AVS to an Azure-native service) "
         "are a different motion and are **quarantined to their own pages**:\n\n"
         "- **Primary reports** (Overview, Accounts by Status, Approved, Closed, "
-        "AV36 EOS, Nomination Trends, Approved Trends, Insights) show **only** "
+        "EOS Migration, Nomination Trends, Approved Trends, Insights) show **only** "
         "`is_from_avs = FALSE`.\n"
         "- **AVS → Azure Native** (Status + Trends pages) show **only** "
         "`is_from_avs = TRUE`.\n\n"
@@ -43,7 +43,7 @@ def render() -> None:
         "A customer can have several waves (Wave-1, Wave-2 …). The **sidebar toggle** "
         "switches how things are counted:\n\n"
         "- **Customer (deduplicated)** — *default*. Each customer counts **once**:\n"
-        "    - **Category membership = ANY wave** (a customer is *AV36 EOS* if any wave "
+        "    - **Category membership = ANY wave** (a customer is *EOS Migration* if any wave "
         "is AV36/EOS; *AVS → Azure Native* if any wave is from-AVS).\n"
         "    - **Approval & creation date = Wave-1** (lowest wave number).\n"
         "    - **Status, region & closure = the last wave**. Closed when the last wave is "
@@ -110,12 +110,63 @@ def render() -> None:
         "region by median latency.")
 
     # ------------------------------------------------------------------ #
+    section("Migration categories & generations")
+    st.markdown(
+        "Each **Migration Analytics** dashboard reports one category, selected by "
+        "the nomination's **target platform** and — for EOS — the TPID's SKU "
+        "generation.\n\n"
+        "- **All AVS Migrations** — every nomination whose target platform is AVS: "
+        "on-premises, VMG, AWS/VMC, AVS-to-AVS and EOS refreshes.\n"
+        "- **AVS → Azure Native** — the '(From AVS)' offerings, moving workloads off "
+        "AVS onto Azure-native services.\n"
+        "- **EOS Migration — Gen-1 / Gen-2 / Unclassified** — the EOS population, "
+        "split by generation.\n\n"
+        "**EOS population.** Upload the EOS worksheet on *Data & Upload* and its "
+        "**TPID list** defines the population exactly. Without a worksheet, EOS "
+        "membership falls back to the AV36 / AV36P / AV52 / AV64 / EOS / EGS markers "
+        "on the migration path, factory offering or linked offering.\n\n"
+        "**Generation is decided per TPID, across all of its waves:**\n"
+        "1. Any wave carrying **AV36, AV36P, AV48 or AV52** → **Gen-1**, even when "
+        "other SKUs are also present.\n"
+        "2. Otherwise, when the only populated SKU across every wave is **AV64** → "
+        "**Gen-2**. A blank SKU on some waves does not disqualify it.\n"
+        "3. Blank SKUs, or any combination the rules do not cover → **Unclassified**, "
+        "reported on its own page and never folded into a generation.")
+
+    # ------------------------------------------------------------------ #
+    section("Metric rules (unique TPIDs vs. hosts)")
+    st.markdown(
+        "**TPID is the authoritative identifier** for every join, lookup, "
+        "classification and count. Account names differ between worksheets and "
+        "source systems, so they are never used for matching.\n\n"
+        "| Metric | Rule | Unit |\n"
+        "| --- | --- | --- |\n"
+        "| New Engagements | Unique TPIDs whose **Wave-1** nomination approval date "
+        "falls in the period | Customers |\n"
+        "| Migration Ends | Unique TPIDs whose **latest** wave is `7 - Completed`, "
+        "dated by its Actual End Date | Customers |\n"
+        "| Hosts Migrated | **Sum of Total Cores** over completed wave records — "
+        "*not* a TPID count, each source record counted once | Hosts |\n"
+        "| Nominations Approved | Nomination records approved in the period | "
+        "Nominations |\n"
+        "| Nomination Count (MoM) | Unique TPIDs per month, each counted once | "
+        "Customers |\n"
+        "| ACR (MoM) | Each TPID's ACR summed across its waves, landing in one month "
+        "| Currency |\n\n"
+        "A TPID whose **Wave 7 is completed but Wave 8 is not** is *not* a completed "
+        "migration — completion always evaluates the latest wave.\n\n"
+        "**Cumulative** is the final column of every trend table and is the running "
+        "total of the months displayed, computed from the same population as the "
+        "monthly values.")
+
+    # ------------------------------------------------------------------ #
     section("Date ranges & time windows")
     fy_name = {1: "January", 4: "April", 7: "July", 10: "October"}.get(
         FY_START_MONTH, f"month {FY_START_MONTH}")
     presets = ", ".join(p for p in DATE_PRESETS if p not in ("Custom",))
     st.markdown(
-        f"Every page has a **date-range preset** selector (default **{DEFAULT_DATE_PRESET}**): "
+        f"A **global reporting period** in the sidebar drives every report; each report "
+        f"can override it with its own selector (default **{DEFAULT_DATE_PRESET}**): "
         f"{presets}, plus **Custom**. Ranges are anchored on the **reporting as-of "
         f"date** in the sidebar (which defaults to the latest activity date in your "
         f"data).\n\n"

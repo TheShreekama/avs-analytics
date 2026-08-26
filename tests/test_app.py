@@ -16,11 +16,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
 _HARNESS = os.path.join(os.path.dirname(__file__), "_page_harness.py")
+_HOME = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Home.py")
 
 PAGES = [
     "overview", "accounts_status", "approved", "closed", "eos_status",
     "nomination_trends", "approved_trends", "avs_to_azure", "avs_native_status",
     "insights_page", "methodology", "reports", "data_upload", "column_mapping",
+    # Category dashboards (one module, one entry point per migration category).
+    "category_dashboard.eos_gen1", "category_dashboard.eos_gen2",
+    "category_dashboard.eos_unclassified", "category_dashboard.all_avs",
+    "category_dashboard.avs_native",
 ]
 
 
@@ -58,7 +63,9 @@ def test_page_renders_without_error(page, mode):
 
 # Regression: the default date preset used to be a one-week window, which left
 # almost every page showing "No records match the current filters" on first open.
-_REPORT_PAGES = [p for p in PAGES if p not in ("methodology", "data_upload", "column_mapping")]
+_REPORT_PAGES = [p for p in PAGES
+                 if p not in ("methodology", "data_upload", "column_mapping")
+                 and not p.startswith("category_dashboard")]
 
 
 @pytest.mark.parametrize("page", _REPORT_PAGES)
@@ -70,3 +77,12 @@ def test_page_has_records_with_default_filters(page, mode):
     assert in_view, f"{page} [{mode}] rendered no filter summary"
     assert not any(c.startswith("**0** of") for c in in_view), \
         f"{page} [{mode}] is empty with default filters: {in_view}"
+
+
+def test_full_app_boots_with_navigation():
+    """Home.py wires every page, the sidebar and the global reporting period."""
+    at = AppTest.from_file(_HOME, default_timeout=120)
+    at.run()
+    assert not at.exception, f"app failed to boot: {at.exception}"
+    labels = [s.label for s in at.sidebar.selectbox]
+    assert "Date range" in labels, f"global reporting period missing: {labels}"
