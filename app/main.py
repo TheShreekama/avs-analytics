@@ -21,8 +21,9 @@ def run() -> None:
     from app.config import APP_NAME, APP_TAGLINE, APP_VERSION
     from app.ui.theme import inject_css
     from app.views import (accounts_status, approved, approved_trends, avs_native_status,
-                           avs_to_azure, closed, column_mapping, data_upload, eos_status,
-                           insights_page, methodology, nomination_trends, overview, reports)
+                           avs_to_azure, category_dashboard, closed, column_mapping,
+                           data_upload, eos_status, insights_page, methodology,
+                           nomination_trends, overview, reports)
 
     inject_css()
     ctx = state.ensure_context()
@@ -38,6 +39,19 @@ def run() -> None:
             st.Page(reports.render, title="Reports & Export",
                     icon=":material/picture_as_pdf:", url_path="reports"),
         ],
+        "Migration Analytics": [
+            st.Page(category_dashboard.eos_gen1, title="EOS Migration — Gen-1",
+                    icon=":material/memory:", url_path="eos-gen1"),
+            st.Page(category_dashboard.eos_gen2, title="EOS Migration — Gen-2",
+                    icon=":material/developer_board:", url_path="eos-gen2"),
+            st.Page(category_dashboard.eos_unclassified,
+                    title="EOS Migration — Unclassified",
+                    icon=":material/help_outline:", url_path="eos-unclassified"),
+            st.Page(category_dashboard.all_avs, title="All AVS Migrations",
+                    icon=":material/cloud:", url_path="all-avs"),
+            st.Page(category_dashboard.avs_native, title="AVS → Azure Native",
+                    icon=":material/cloud_sync:", url_path="avs-native"),
+        ],
         "Status Reports": [
             st.Page(accounts_status.render, title="Accounts by Migration Status",
                     icon=":material/donut_large:", url_path="accounts-by-status"),
@@ -45,8 +59,8 @@ def run() -> None:
                     url_path="approved"),
             st.Page(closed.render, title="Nominations Closed", icon=":material/check_circle:",
                     url_path="closed"),
-            st.Page(eos_status.render, title="AV36 EOS Status", icon=":material/warning:",
-                    url_path="eos-status"),
+            st.Page(eos_status.render, title="EOS Migration Status",
+                    icon=":material/warning:", url_path="eos-status"),
             st.Page(avs_native_status.render, title="AVS → Azure Native Status",
                     icon=":material/cloud_sync:", url_path="avs-native-status"),
         ],
@@ -94,6 +108,9 @@ def _sidebar_brand(ctx, state, app_name: str, tagline: str) -> None:
     if pd.Timestamp(new_asof) != pd.Timestamp(ctx.as_of):
         state.reload_with(as_of=pd.Timestamp(new_asof))
         st.rerun()
+
+    from app.ui import components
+    components.global_date_controls(ctx)
 
     st.sidebar.radio(
         "Counting mode", [state.MODE_CUSTOMER, state.MODE_WAVE], key=state.MODE_KEY,

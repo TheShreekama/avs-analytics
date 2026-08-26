@@ -16,7 +16,7 @@ import re
 import numpy as np
 import pandas as pd
 
-from . import schema
+from . import schema, segments
 from ..config import DIR_FROM_AVS, DIR_OTHER, DIR_TO_AVS
 
 # Accepted date formats.  The export nominally uses MM-DD-YYYY, but real files
@@ -389,8 +389,10 @@ def build_fact_frame(
         fact["region_geo"] = geo_region(fact["ww_region"])
 
     seg = fact["customer_segment"].astype("string").str.strip()
-    seg_norm = seg.str.lower()
-    bad_seg = seg.notna() & (seg != "") & ~seg_norm.apply(
+    # ``apply`` hands <NA> straight to the lambda when the column is unmapped or
+    # partly blank, so match on the filled text and gate on the original values.
+    seg_norm = seg.str.lower().fillna("")
+    bad_seg = seg.notna() & (seg != "") & ~seg_norm.map(
         lambda v: any(tok in v for tok in _VALID_SEGMENT_TOKENS)
     )
     flag(bad_seg, "Invalid Customer Segment value", "bad_segment")
@@ -414,6 +416,26 @@ def build_fact_frame(
     fact["is_av36_eos"] = offering_text.map(eos_lookup).astype(bool)
     fact["is_from_avs"] = (fact["migration_direction"] == DIR_FROM_AVS)
     fact["is_to_avs"] = (fact["migration_direction"] == DIR_TO_AVS)
+
+    # Source / target platform, from the same distinct offering combinations.
+    src_lookup = {v: segments.source_platform(v) for v in offering_text.unique()}
+    tgt_lookup = {v: segments.target_platform(v) for v in offering_text.unique()}
+    fact["source_platform"] = offering_text.map(src_lookup)
+    fact["target_platform"] = offering_text.map(tgt_lookup)
+    # "All AVS Migrations" = every nomination whose target platform is AVS,
+    # whatever it is coming from (on-premises, VMG, AWS/VMC, AVS, EOS refresh).
+    fact["is_avs_target"] = fact["target_platform"].eq(segments.PLATFORM_AVS)
+    fact["avs_sku_codes"] = fact["avs_sku"].map(lambda v: " ".join(sorted(segments.sku_codes(v))))
+
+    # TPID is the authoritative identifier for every join, lookup and count, and
+    # the generation is decided from the SKUs of *all* waves belonging to it.
+    fact["tpid_key"] = segments.tpid_key(fact)
+    gen_by_tpid = segments.generation_by_tpid(fact)
+    fact["generation"] = fact["tpid_key"].map(gen_by_tpid).fillna(segments.GEN_UNCLASSIFIED)
+    # EOS membership defaults to the offering markers; a supplied EOS worksheet
+    # replaces it (see segments.apply_eos_population).
+    fact["is_eos_population"] = fact["is_av36_eos"].astype(bool)
+    fact["migration_category"] = segments.category_label_series(fact)
     code, label = split_migration_status(fact["migration_status"])
     fact["migration_status_code"] = code
     fact["migration_status_label"] = label.fillna("Unknown")

@@ -40,7 +40,7 @@ SECTION_LIBRARY = [
     ("overview", "Portfolio Overview (status, regions, delivery health)"),
     ("approved", "Nominations Approved (trend & regional)"),
     ("closed", "Nominations Closed (closure rate & aging)"),
-    ("eos", "AV36 EOS Status"),
+    ("eos", "EOS Migration Status"),
     ("trends", "Nomination Trends"),
     ("avs_azure", "AVS → Azure Native"),
     ("insights", "Insights"),
@@ -188,7 +188,7 @@ def _sec_closed(con, where, ss) -> list:
 
 def _sec_eos(con, where, ss) -> list:
     w = analytics._where_and(where, '"is_av36_eos" = TRUE')
-    out = [Paragraph("AV36 EOS Status", ss["H1"]),
+    out = [Paragraph("EOS Migration Status", ss["H1"]),
            Paragraph("Scope: nominations with an AV36/EOS migration path.", ss["Muted"])]
     dist = analytics.count_by(con, w, "eos_status")
     if not dist.empty:

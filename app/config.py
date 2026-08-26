@@ -95,9 +95,11 @@ SCOPE_FROM_AVS = "from_avs"    # is_from_avs = TRUE   (AVS → Azure Native)
 FY_START_MONTH = int(os.environ.get("AVS_FY_START_MONTH", "7"))
 
 DATE_PRESETS = [
-    "This week", "Last week", "This month", "Last month",
+    "This week", "Last week", "This month", "Last month", "This quarter",
     "Last 3 months", "Last 6 months", "This FY", "All time", "Custom",
 ]
+# Presets offered by the global (all-report) date selector.
+GLOBAL_DATE_PRESETS = DATE_PRESETS
 # Default to the full dataset: a narrow default window (e.g. "Last week") makes
 # nearly every report open empty ("No records match the current filters"), because
 # most pages filter on a date that only a handful of rows fall inside.  Users can

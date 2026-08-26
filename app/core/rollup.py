@@ -9,7 +9,7 @@ one row per customer using the business rules agreed with the user:
   * **Status = last wave** (highest wave number). If the last wave is done/
     completed the customer is treated as closed; otherwise it follows the last
     wave's operational/EOS status.
-  * **Category membership = any wave.** A customer is an "AV36 EOS" nomination if
+  * **Category membership = any wave.** A customer is an "EOS Migration" nomination if
     *any* of its waves has an AV36/EOS migration path; likewise "AVS → Azure
     Native" if *any* wave is a from-AVS path.
 
@@ -22,6 +22,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from . import segments
 from ..config import DIR_FROM_AVS, DIR_OTHER, DIR_TO_AVS
 from .cleaning import _as_bool
 
@@ -31,8 +32,10 @@ def build_customer_rollup(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFra
         return fact.copy()
 
     df = fact.copy()
-    df["customer_key"] = df["customer_name"].astype("string").str.strip().str.upper()
-    df.loc[df["customer_key"].isna() | (df["customer_key"] == ""), "customer_key"] = "UNKNOWN"
+    # TPID is the authoritative identifier: account names differ between
+    # worksheets and source systems, so they are never used for matching.
+    df["customer_key"] = (df["tpid_key"] if "tpid_key" in df.columns
+                          else segments.tpid_key(df))
 
     # Wave ordering: Wave-1 first → ascending wave number; missing waves last.
     df["_wave_order"] = df["wave_num"].fillna(9_999)
@@ -81,6 +84,14 @@ def build_customer_rollup(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFra
     out["actual_start_date"] = g["actual_start_date"].min()   # earliest execution start
 
     # Category membership = ANY wave.
+    out["tpid_key"] = first.index.to_series().to_numpy()
+    out["generation"] = last["generation"]          # one value per TPID by construction
+    out["is_eos_population"] = g["is_eos_population"].any()
+    out["migration_category"] = last["migration_category"]
+    out["is_avs_target"] = g["is_avs_target"].any()
+    out["source_platform"] = last["source_platform"]
+    out["target_platform"] = last["target_platform"]
+    out["avs_sku"] = g["avs_sku"].apply(_distinct_values)
     out["is_av36_eos"] = g["is_av36_eos"].any()
     out["is_avs_to_azure"] = g["is_from_avs"].any()
     out["is_from_avs"] = out["is_avs_to_azure"]   # uniform scope flag (matches fact)
@@ -138,6 +149,12 @@ def build_customer_rollup(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFra
     out["dq_flags"] = g["dq_flags"].apply(_merge_flags).to_numpy()
 
     return out.reset_index(drop=True)
+
+
+def _distinct_values(series: pd.Series) -> str:
+    """Distinct non-blank values across a TPID's waves, e.g. every SKU it uses."""
+    vals = {str(v).strip() for v in series.dropna() if str(v).strip()}
+    return ", ".join(sorted(vals))
 
 
 def _merge_flags(series: pd.Series) -> str:

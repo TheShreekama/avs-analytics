@@ -62,6 +62,11 @@ def date_preset_range(as_of: pd.Timestamp, name: str,
     if name == "Last month":
         prev_end = as_of.replace(day=1) - pd.Timedelta(days=1)
         return prev_end.replace(day=1), prev_end
+    if name == "This quarter":
+        return quarter_start(as_of), as_of
+    if name == "Last quarter":
+        prev_end = quarter_start(as_of) - pd.Timedelta(days=1)
+        return quarter_start(prev_end), prev_end
     if name == "Last 3 months":
         return as_of - pd.DateOffset(months=3) + pd.Timedelta(days=1), as_of
     if name == "Last 6 months":
