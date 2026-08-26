@@ -44,7 +44,7 @@ def render() -> None:
         components.empty_state(
             "No EOS Migration nominations in the current selection. (A nomination counts as "
             "an EOS migration when its migration path, factory offering or linked offering "
-            "carries an AV36 / AV36P / AV52 / AV64 / EOS / EGS / end-of-support marker.)")
+            "carries an AV36 / AV36P / AV52 / EOS / EGS / end-of-support marker.)")
         return
 
     # Status KPI tiles in canonical order

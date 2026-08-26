@@ -62,7 +62,7 @@ under Streamlit's AppTest in both counting modes.
   counting-mode radio via `state.active_table()`).
 - **AV36/EOS membership** (`cleaning.is_av36_eos_path`) is checked across `migration_path`,
   `factory_offering` *and* `linked_offering` — real exports carry the marker on the offering
-  ("AV36/AV36P/AV52 - EOS"), not the path. SKU markers (av36/av36p/av52/av64, end-of-support)
+  ("AV36/AV36P/AV52 - EOS"), not the path. SKU markers (av36/av36p/av52, end-of-support)
   match anywhere; short words (eos/egs/eol) must be whole tokens, so "Geospatial" is not a hit.
 - **Date parsing** (`cleaning.parse_date_series`) accepts Excel serial numbers ("45855" — an
   unformatted date cell), ISO stamps with or without timezone, month names, and d/m/y triples;

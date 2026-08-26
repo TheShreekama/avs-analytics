@@ -95,8 +95,8 @@ GEN_1 = "Gen-1"
 GEN_2 = "Gen-2"
 GEN_UNCLASSIFIED = "Unclassified"
 
-GEN1_SKUS = ("av36p", "av36", "av48", "av52")     # longest first: AV36P before AV36
-GEN2_SKUS = ("av64",)
+# Host SKUs no longer classify anything (the Tags column does) — the codes are
+# still parsed so the SKU a wave used can be shown in drill-downs.
 _SKU_TOKEN_RE = re.compile(r"av\s*(36p|36|48|52|64)", re.I)
 
 # The Tags column is the authoritative generation signal.  Several tags are

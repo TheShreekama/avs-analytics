@@ -24,9 +24,10 @@ _ROWS = [
     # B: Wave 7 completed but Wave 8 still running -> NOT a completed migration.  Gen-1.
     ("200", "Bravo", "3", "Wave 7", "AV52", "7 - Completed",              "01-20-2026", "07-20-2026", "20", "$200,000", "AV36/AV36P/AV52 - EOS"),
     ("200", "Bravo", "4", "Wave 8", "AV52", "4 - Migration In Progress",  "02-20-2026", "",           "8",  "$10,000",  "AV36/AV36P/AV52 - EOS"),
-    # C: single wave, only AV64 across every wave -> Gen-2, completed in Aug 2026.
-    ("300", "Charlie", "5", "Wave 1", "AV64", "7 - Completed", "02-01-2026", "08-10-2026", "16", "$300,000", "AV64 - EOS"),
-    ("300", "Charlie", "6", "Wave 2", "",     "7 - Completed", "02-05-2026", "08-11-2026", "4",  "$5,000",   "AV64 - EOS"),
+    # C: tagged Gen2 -> Gen-2, completed in Aug 2026.  The migration path reads the
+    # same as every other EOS row: the tag, not the path, distinguishes generations.
+    ("300", "Charlie", "5", "Wave 1", "AV64", "7 - Completed", "02-01-2026", "08-10-2026", "16", "$300,000", "AV36/AV36P/AV52 - EOS"),
+    ("300", "Charlie", "6", "Wave 2", "",     "7 - Completed", "02-05-2026", "08-11-2026", "4",  "$5,000",   "AV36/AV36P/AV52 - EOS"),
     # D: EOS marker but blank SKUs everywhere -> Unclassified.
     ("400", "Delta", "7", "Wave 1", "", "2 - Executing Pre-Requisites", "03-15-2026", "", "12", "$80,000", "AV36/AV36P/AV52 - EOS"),
     # E: on-premises onboarding, not EOS -> All AVS Migrations only.
