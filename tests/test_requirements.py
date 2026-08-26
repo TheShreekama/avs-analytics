@@ -45,15 +45,19 @@ _HEADERS = {
 
 
 @pytest.fixture(scope="module")
-def fact():
-    raw = pd.DataFrame(
-        [dict(zip(_HEADERS.values(), row)) for row in _ROWS])
+def raw_frame():
+    raw = pd.DataFrame([dict(zip(_HEADERS.values(), row)) for row in _ROWS])
     raw["Factory Offering"] = "AVS Migration Nominations"
     raw["WW Region"] = "Americas - Enterprise"
     raw["Nomination Status"] = "Approved"
     raw["Nom. Created Date"] = raw["Nom. Approval Date"]
-    mp = mapping.resolve_mapping(list(raw.columns))
-    built, _report = cleaning.build_fact_frame(raw, mp, pd.Timestamp("2026-09-01"))
+    return raw
+
+
+@pytest.fixture(scope="module")
+def fact(raw_frame):
+    mp = mapping.resolve_mapping(list(raw_frame.columns))
+    built, _report = cleaning.build_fact_frame(raw_frame, mp, pd.Timestamp("2026-09-01"))
     return built
 
 
@@ -194,3 +198,46 @@ def test_rollup_deduplicates_on_tpid(fact):
     assert len(customer) == fact["tpid"].nunique()
     assert set(customer["generation"]) == {segments.GEN_1, segments.GEN_2,
                                            segments.GEN_UNCLASSIFIED}
+
+
+# --------------------------------------------------------------------------- #
+# Generation from the Tags column
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("tag,expected", [
+    ("Qualify and AccelerateAVS Migration - Gen1", segments.GEN_1),
+    ("InternalAVS Migration - Gen2", segments.GEN_2),
+    # Tags are concatenated with no separator, and the marker can sit mid-string.
+    ("Qualify and AccelerateFCS On Hold Reach OutAVS Migration - Gen1", segments.GEN_1),
+    ("Something elseAVS Migration - Gen2Another tag", segments.GEN_2),
+    ("AVS Migration – Gen2", segments.GEN_2),        # en dash
+    ("AVS Migration-Gen1", segments.GEN_1),          # no spaces
+    ("None of the above", None),
+    ("", None),
+])
+def test_generation_from_tags(tag, expected):
+    assert segments.generation_from_tags([tag]) == expected
+
+
+def test_tags_beat_sku_and_gen1_wins_across_waves():
+    assert segments.classify_generation(["AV64"], ["AVS Migration - Gen1"]) == segments.GEN_1
+    assert segments.classify_generation(["AV36"], ["AVS Migration - Gen2"]) == segments.GEN_2
+    # Gen-1 wins when a TPID carries both markers on different waves.
+    assert segments.classify_generation(
+        [], ["InternalAVS Migration - Gen2", "AVS Migration - Gen1"]) == segments.GEN_1
+    # No generation tag anywhere -> the host SKUs still decide it.
+    assert segments.classify_generation(["AV36P"], ["None of the above"]) == segments.GEN_1
+    assert segments.classify_generation([], ["None of the above"]) == segments.GEN_UNCLASSIFIED
+
+
+def test_generation_uses_tags_when_skus_are_blank(raw_frame):
+    """The real export carries blank SKUs and the generation in Tags."""
+    df = raw_frame.copy()
+    df["AVS SKU Type"] = ""
+    df["Tags"] = ["Qualify and AccelerateAVS Migration - Gen1"] * 4 + \
+                 ["InternalAVS Migration - Gen2"] * 2 + ["None of the above"] * 3
+    mp = mapping.resolve_mapping(list(df.columns))
+    built, _ = cleaning.build_fact_frame(df, mp, pd.Timestamp("2026-09-01"))
+    gen = dict(zip(built["tpid"].astype(str), built["generation"]))
+    assert gen["100"] == segments.GEN_1
+    assert gen["300"] == segments.GEN_2
+    assert gen["400"] == segments.GEN_UNCLASSIFIED

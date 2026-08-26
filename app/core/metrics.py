@@ -45,6 +45,11 @@ def fiscal_year_start(as_of: pd.Timestamp, fy_start_month: int = 7) -> pd.Timest
     return pd.Timestamp(year=y, month=fy_start_month, day=1)
 
 
+def fiscal_year_end(fy_start: pd.Timestamp) -> pd.Timestamp:
+    """Last day of the fiscal year that begins on ``fy_start`` (30 Jun for a July FY)."""
+    return pd.Timestamp(fy_start) + pd.DateOffset(years=1) - pd.Timedelta(days=1)
+
+
 def date_preset_range(as_of: pd.Timestamp, name: str,
                       fy_start_month: int = 7) -> tuple[pd.Timestamp, pd.Timestamp] | None:
     """Resolve a named date-range preset to (start, end) anchored on ``as_of``.
@@ -72,7 +77,12 @@ def date_preset_range(as_of: pd.Timestamp, name: str,
     if name == "Last 6 months":
         return as_of - pd.DateOffset(months=6) + pd.Timedelta(days=1), as_of
     if name == "This FY":
-        return fiscal_year_start(as_of, fy_start_month), as_of
+        # The whole fiscal year, not year-to-date: 1 Jul → 30 Jun.
+        start = fiscal_year_start(as_of, fy_start_month)
+        return start, fiscal_year_end(start)
+    if name == "Last FY":
+        start = fiscal_year_start(as_of, fy_start_month) - pd.DateOffset(years=1)
+        return start, fiscal_year_end(start)
     if name == "Year to date":
         return as_of.replace(month=1, day=1), as_of
     return None  # All time / Custom

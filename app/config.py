@@ -96,15 +96,14 @@ FY_START_MONTH = int(os.environ.get("AVS_FY_START_MONTH", "7"))
 
 DATE_PRESETS = [
     "This week", "Last week", "This month", "Last month", "This quarter",
-    "Last 3 months", "Last 6 months", "This FY", "All time", "Custom",
+    "Last 3 months", "Last 6 months", "This FY", "Last FY", "All time", "Custom",
 ]
 # Presets offered by the global (all-report) date selector.
 GLOBAL_DATE_PRESETS = DATE_PRESETS
-# Default to the full dataset: a narrow default window (e.g. "Last week") makes
-# nearly every report open empty ("No records match the current filters"), because
-# most pages filter on a date that only a handful of rows fall inside.  Users can
-# narrow from the sidebar; they should never have to widen just to see their data.
-DEFAULT_DATE_PRESET = "All time"
+# Reports open on the current fiscal year — the reporting unit the business works
+# in.  (Never a narrow window like "Last week": that made nearly every page open
+# empty, since most pages filter on a date only a handful of rows fall inside.)
+DEFAULT_DATE_PRESET = "This FY"
 
 # Default network settings for the local server.
 DEFAULT_PORT = int(os.environ.get("AVS_PORT", "8501"))

@@ -185,3 +185,33 @@ def _rgba(hex_color: str, alpha: float) -> str:
 # Note: static image rendering for the PDF lives in app/ui/pdf_charts.py
 # (matplotlib).  Plotly figures here are only rendered interactively in the
 # browser, so no bundled image-export engine (kaleido/Chromium) is needed.
+
+
+def trend_chart(df: pd.DataFrame, x: str, value_col: str, cumulative_col: str | None = None,
+                currency: bool = False, height: int = 320,
+                title: str | None = None) -> go.Figure:
+    """Monthly bars plus a cumulative line — the shape every trend section uses.
+
+    Bars (not line points) carry the monthly value because they are far easier to
+    click for a drill-down, and the x-axis is forced to ``category`` so Plotly
+    hands the period back exactly as written ("2026-06") instead of re-parsing it
+    into a date.
+    """
+    money = "$%{y:,.0f}" if currency else "%{y:,.0f}"
+    fig = go.Figure()
+    fig.add_bar(x=df[x], y=df[value_col], name=value_col,
+                marker_color=PALETTE["primary"],
+                hovertemplate=f"%{{x}}<br>{value_col}: {money}<extra></extra>")
+    if cumulative_col and cumulative_col in df.columns:
+        fig.add_scatter(x=df[x], y=df[cumulative_col], name=cumulative_col, yaxis="y2",
+                        mode="lines+markers", line=dict(color=PALETTE["good"], width=2.5),
+                        marker=dict(size=6),
+                        hovertemplate=f"%{{x}}<br>{cumulative_col}: {money}<extra></extra>")
+    _base_layout(fig, height, title, showlegend=True, int_y=not currency)
+    fig.update_xaxes(type="category")
+    axis_fmt = dict(tickprefix="$", tickformat="~s") if currency else dict(tickformat=",d")
+    fig.update_yaxes(**axis_fmt)
+    if cumulative_col and cumulative_col in df.columns:
+        fig.update_layout(yaxis2=dict(overlaying="y", side="right", showgrid=False,
+                                      **axis_fmt))
+    return fig

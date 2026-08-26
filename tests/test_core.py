@@ -400,3 +400,27 @@ def test_eos_marker_found_on_factory_offering(raw):
     df[mp["factory_offering"]] = "AV36/AV36P/AV52 - EOS"
     fact, _ = cleaning.build_fact_frame(df, mp)
     assert fact["is_av36_eos"].all()
+
+
+# --------------------------------------------------------------------------- #
+# Fiscal-year presets and chart drill-down matching
+# --------------------------------------------------------------------------- #
+def test_fiscal_year_presets_span_the_whole_year():
+    as_of = pd.Timestamp("2027-07-01")
+    start, end = metrics.date_preset_range(as_of, "This FY", 7)
+    assert (start.date().isoformat(), end.date().isoformat()) == ("2027-07-01", "2028-06-30")
+    start, end = metrics.date_preset_range(as_of, "Last FY", 7)
+    assert (start.date().isoformat(), end.date().isoformat()) == ("2026-07-01", "2027-06-30")
+    # Mid-year the window still covers the full fiscal year, not year-to-date.
+    start, end = metrics.date_preset_range(pd.Timestamp("2027-12-15"), "This FY", 7)
+    assert (start.date().isoformat(), end.date().isoformat()) == ("2027-07-01", "2028-06-30")
+
+
+def test_drilldown_matches_plotly_month_labels():
+    """Plotly can return a month as a full date; both forms must select the month."""
+    from app.ui import drilldown
+    assert drilldown.normalize_bucket("2026-06") == "2026-06"
+    assert drilldown.normalize_bucket("2026-06-01") == "2026-06"
+    assert drilldown.normalize_bucket(" 2026/06/15 ") == "2026-06"
+    assert drilldown.normalize_bucket("Executing Migration") == "Executing Migration"
+    assert drilldown.normalize_bucket(None) == ""
