@@ -81,18 +81,18 @@ under Streamlit's AppTest in both counting modes.
 
 - **Migration categories** (`segments.population`): `all_avs` = target platform is AVS
   (on-prem / VMG / AWS-VMC / AVS-to-AVS / EOS); `avs_native` = `is_from_avs`; the three EOS
-  categories = the EOS population split by generation. EOS membership comes from an
-  uploaded EOS worksheet's TPID list when present (`state.set_eos_worksheet`), else from
-  the offering/path markers.
+  categories = the EOS population split by generation. There is only ever **one dataset**.
+  **An account is EOS when ANY of its waves carries an "AVS Migration - Gen1/Gen2" tag** —
+  that one tag sets both scope and generation (`segments.eos_population`); untagged
+  accounts whose offering still reads as EOS land on the "No generation tag" page.
 - **TPID is authoritative** for joins, dedup and counts (`segments.tpid_key`; falls back to
   the account name only when a row has no TPID). The `customer` rollup keys on it — never
   on the account name, which differs between worksheets.
 - **Generations** (`segments.classify_generation`, per TPID across ALL waves): the **Tags**
-  column decides — "AVS Migration - Gen1"/"- Gen2" matched against the cell stripped to
-  letters+digits, because tags arrive concatenated ("Qualify and AccelerateAVS Migration -
-  Gen1"); Gen-1 wins if both appear. No tag anywhere → fall back to host SKUs
-  (AV36/AV36P/AV48/AV52 → Gen-1; only AV64 → Gen-2). Neither → Unclassified (shown
-  separately, never folded in).
+  column alone decides — "AVS Migration - Gen1"/"- Gen2" matched against the cell stripped
+  to letters+digits, because tags arrive concatenated ("Qualify and AccelerateAVS
+  Migration - Gen1"); Gen-1 wins if both appear. No tag → Unclassified (and not EOS).
+  Host SKUs are no longer part of the classification.
 - **Metric rules** (`core/kpi.py`, all with `records` for drill-down): new engagements =
   unique TPIDs by **Wave-1** approval date; migration ends = unique TPIDs whose **latest**
   wave is `7 - Completed` (Wave 7 done + Wave 8 open ⇒ not counted), dated by actual end;
@@ -101,6 +101,13 @@ under Streamlit's AppTest in both counting modes.
 - **Terminology.** "AV36 EOS" is called **EOS Migration** everywhere in the UI. The
   AVS → Azure Native page labels the Total Cores metric **Cores Migrated**; the AVS
   categories call it **Hosts Migrated** (same column, different noun).
+- **Explanations.** Every title carries an ⓘ (`theme.info_mark`, hover text) fed from
+  `core/glossary.py` — one place for "what does this number mean", shared by tooltips and
+  the Methodology page.
+- **Build stamp.** `app/version.py` derives a build time (newest source mtime) and a
+  content fingerprint, shown in the sidebar, on Data & Upload and printed to the console
+  at startup — the app is distributed by copying a folder, so "am I running the new code"
+  needs an answer that does not rely on someone bumping a number.
 - **Drill-down.** Charts use a category x-axis and `drilldown.normalize_bucket` so a
   Plotly month label ("2026-06-01") matches the record's period ("2026-06"); summary
   tables are `st.dataframe(on_select=...)` rows that select the same bucket.

@@ -5,6 +5,8 @@ hidden Streamlit chrome — so it reads as a leadership dashboard, not a dev too
 """
 from __future__ import annotations
 
+import html
+
 import streamlit as st
 
 from ..config import APP_NAME, PALETTE
@@ -35,6 +37,16 @@ def inject_css() -> None:
         #MainMenu, header[data-testid="stHeader"], footer {{ visibility: hidden; }}
         .block-container {{ padding-top: 1.4rem; padding-bottom: 2rem; max-width: 1500px; }}
 
+        /* Explanation marker: hover for the calculation behind a title */
+        .avs-info {{
+            display: inline-block; margin-left: .38rem; cursor: help;
+            color: var(--primary); font-size: .82em; vertical-align: super;
+            border-bottom: 1px dotted var(--primary);
+        }}
+        .avs-subheading {{
+            font-size: 1.02rem; font-weight: 700; color: var(--ink);
+            margin: .7rem 0 .25rem 0;
+        }}
         /* Section heading */
         .avs-h1 {{ font-size: 1.7rem; font-weight: 700; color: var(--ink); margin: 0; }}
         .avs-sub {{ color: var(--muted); font-size: .95rem; margin-top: .1rem; margin-bottom: .6rem; }}
@@ -88,14 +100,34 @@ def inject_css() -> None:
     )
 
 
-def page_header(title: str, subtitle: str = "") -> None:
-    st.markdown(f'<div class="avs-h1">{title}</div>', unsafe_allow_html=True)
+def info_mark(explanation: str | None) -> str:
+    """An ⓘ marker whose hover text explains how a number is calculated.
+
+    Rendered as a plain ``title`` attribute so the tooltip works in the browser
+    without any JavaScript (the app ships no bundled JS beyond Plotly).
+    """
+    if not explanation:
+        return ""
+    text = html.escape(str(explanation), quote=True).replace("\n", "&#10;")
+    return f'<span class="avs-info" title="{text}">ⓘ</span>'
+
+
+def page_header(title: str, subtitle: str = "", help: str | None = None) -> None:
+    st.markdown(f'<div class="avs-h1">{title}{info_mark(help)}</div>',
+                unsafe_allow_html=True)
     if subtitle:
         st.markdown(f'<div class="avs-sub">{subtitle}</div>', unsafe_allow_html=True)
 
 
-def section(title: str) -> None:
-    st.markdown(f'<div class="avs-section">{title}</div>', unsafe_allow_html=True)
+def section(title: str, help: str | None = None) -> None:
+    st.markdown(f'<div class="avs-section">{title}{info_mark(help)}</div>',
+                unsafe_allow_html=True)
+
+
+def subheading(title: str, help: str | None = None) -> None:
+    """A bold sub-title inside a section, with the same ⓘ explanation."""
+    st.markdown(f'<div class="avs-subheading">{title}{info_mark(help)}</div>',
+                unsafe_allow_html=True)
 
 
 def banner(text: str, kind: str = "info") -> None:

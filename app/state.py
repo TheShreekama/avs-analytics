@@ -17,7 +17,6 @@ from .config import SAMPLE_DATA
 from .core import cleaning, loader, mapping as mapmod, rollup as rollupmod, segments
 
 CTX_KEY = "avs_ctx"
-EOS_TPIDS_KEY = "avs_eos_tpids"
 MODE_KEY = "count_mode"
 MODE_CUSTOMER = "Customer (deduplicated)"
 MODE_WAVE = "Nomination (wave-level)"
@@ -35,9 +34,6 @@ class DataContext:
     as_of: pd.Timestamp
     con: duckdb.DuckDBPyConnection
     is_sample: bool = False
-    # TPIDs from an uploaded EOS worksheet; None means "no worksheet supplied",
-    # in which case EOS membership falls back to the offering/path markers.
-    eos_tpids: set | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -49,18 +45,11 @@ def _read_raw(signature: str, name: str, data: bytes) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False, max_entries=6)
-def _build_fact(signature: str, mapping_json: str, as_of_str: str, eos_key: str,
-                _raw: pd.DataFrame,
-                _eos_tpids: set | None = None) -> tuple[pd.DataFrame, dict, pd.DataFrame]:
+def _build_fact(signature: str, mapping_json: str, as_of_str: str,
+                _raw: pd.DataFrame) -> tuple[pd.DataFrame, dict, pd.DataFrame]:
     mp = json.loads(mapping_json)
     as_of = pd.Timestamp(as_of_str) if as_of_str else None
     fact, report = cleaning.build_fact_frame(_raw, mp, as_of)
-    # A supplied EOS worksheet is authoritative for EOS membership; without one
-    # the marker-derived default from build_fact_frame stands.
-    if _eos_tpids:
-        fact["is_eos_population"] = segments.apply_eos_population(fact, _eos_tpids)
-        fact["migration_category"] = segments.category_label_series(fact)
-        report["eos_tpids"] = len(_eos_tpids)
     customer = rollupmod.build_customer_rollup(fact, report["as_of"])
     report["rollup"] = rollupmod.rollup_summary(customer)
     return fact, report, customer
@@ -76,8 +65,7 @@ def _make_con(cache_key: str, _fact: pd.DataFrame,
 # Public API
 # --------------------------------------------------------------------------- #
 def build_context(filename: str, data: bytes, mapping: dict | None = None,
-                  as_of: pd.Timestamp | None = None, is_sample: bool = False,
-                  eos_tpids: set | None = None) -> DataContext:
+                  as_of: pd.Timestamp | None = None, is_sample: bool = False) -> DataContext:
     signature = loader.file_signature(filename, data)
     raw = _read_raw(signature, filename, data)
     if mapping is None:
@@ -92,17 +80,13 @@ def build_context(filename: str, data: bytes, mapping: dict | None = None,
 
     as_of_str = pd.Timestamp(as_of).isoformat() if as_of is not None else ""
     mapping_json = json.dumps(mapping, sort_keys=True)
-    if eos_tpids is None:
-        eos_tpids = st.session_state.get(EOS_TPIDS_KEY)
-    eos_key = f"{len(eos_tpids)}:{hash(frozenset(eos_tpids))}" if eos_tpids else ""
-    fact, report, customer = _build_fact(signature, mapping_json, as_of_str, eos_key,
-                                         raw, eos_tpids)
-    cache_key = f"{signature}:{hash(mapping_json)}:{as_of_str}:{eos_key}"
+    fact, report, customer = _build_fact(signature, mapping_json, as_of_str, raw)
+    cache_key = f"{signature}:{hash(mapping_json)}:{as_of_str}"
     con = _make_con(cache_key, fact, customer)
 
     return DataContext(filename=filename, signature=signature, raw=raw, mapping=mapping,
                        fact=fact, customer=customer, report=report, as_of=report["as_of"],
-                       con=con, is_sample=is_sample, eos_tpids=eos_tpids)
+                       con=con, is_sample=is_sample)
 
 
 def set_context(ctx: DataContext) -> None:
@@ -126,15 +110,6 @@ def ensure_context() -> DataContext:
     if ctx is None:
         ctx = load_sample()
     return ctx
-
-
-def set_eos_worksheet(tpids: set | None) -> DataContext:
-    """Adopt (or clear) the EOS worksheet's TPID list and rebuild the context."""
-    if tpids:
-        st.session_state[EOS_TPIDS_KEY] = set(tpids)
-    else:
-        st.session_state.pop(EOS_TPIDS_KEY, None)
-    return reload_with()
 
 
 def reload_with(mapping: dict | None = None, as_of: pd.Timestamp | None = None) -> DataContext:

@@ -12,18 +12,27 @@ import pandas as pd
 import streamlit as st
 
 
+_BOOT_LOGGED = False
+
+
 def run() -> None:
     # set_page_config must be the first Streamlit command executed.
     st.set_page_config(page_title="AVS Migration Analytics", page_icon="📈",
                        layout="wide", initial_sidebar_state="expanded")
 
     from app import state
-    from app.config import APP_NAME, APP_TAGLINE, APP_VERSION
+    from app.config import APP_NAME, APP_TAGLINE
+    from app.version import build_stamp, version_line
     from app.ui.theme import inject_css
     from app.views import (accounts_status, approved, approved_trends, avs_native_status,
                            avs_to_azure, category_dashboard, closed, column_mapping,
                            data_upload, eos_status, insights_page, methodology,
                            nomination_trends, overview, reports)
+
+    global _BOOT_LOGGED
+    if not _BOOT_LOGGED:                    # once per server start, into the console
+        print(f"AVS Migration Analytics — {version_line()}", flush=True)
+        _BOOT_LOGGED = True
 
     inject_css()
     ctx = state.ensure_context()
@@ -86,7 +95,10 @@ def run() -> None:
 
     nav.run()
     st.sidebar.divider()
-    st.sidebar.caption(f"v{APP_VERSION} · Runs locally · No data leaves this machine")
+    built, fingerprint = build_stamp()
+    st.sidebar.caption(f"**Build {built}** · `{fingerprint}`  \n"
+                       f"{version_line().split(' · ')[0]} · Runs locally · No data "
+                       f"leaves this machine")
 
 
 def _sidebar_brand(ctx, state, app_name: str, tagline: str) -> None:

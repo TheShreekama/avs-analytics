@@ -12,7 +12,7 @@ from ..config import (DATE_PRESETS, DEFAULT_DATE_PRESET, FY_START_MONTH,
 from ..core import analytics, metrics, schema
 from ..core.metrics import fmt_int
 from ..state import DataContext
-from .theme import banner
+from .theme import banner, info_mark as banner_info
 
 # Render **bold** spans (markdown) inside HTML insight cards as <b> tags.
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
@@ -29,7 +29,8 @@ def kpi_row(items: list[dict]) -> None:
     """Render a row of KPI cards.
 
     Each item: {label, value, delta?(float pct), tone?('','good','warn','bad'),
-    delta_label?}.
+    delta_label?, help?}.  ``help`` renders an ⓘ whose hover text explains how the
+    number is calculated.
     """
     cards = []
     for it in items:
@@ -44,7 +45,8 @@ def kpi_row(items: list[dict]) -> None:
         elif it.get("sub"):
             delta_html = f'<div class="delta flat">{html.escape(str(it["sub"]))}</div>'
         cards.append(
-            f'<div class="kpi {tone}"><div class="label">{html.escape(str(it["label"]))}</div>'
+            f'<div class="kpi {tone}"><div class="label">{html.escape(str(it["label"]))}'
+            f'{banner_info(it.get("help"))}</div>'
             f'<div class="value">{html.escape(str(it["value"]))}</div>{delta_html}</div>')
     st.markdown(f'<div class="kpi-grid">{"".join(cards)}</div>', unsafe_allow_html=True)
 
@@ -391,9 +393,10 @@ def report_date_range(ctx: DataContext, key_prefix: str, label: str = "Reporting
     Returns ``(start, end, description)`` — dates are inclusive, and ``None``
     means unbounded.
     """
+    from ..core import glossary
     options = [USE_GLOBAL] + list(DATE_PRESETS)
     choice = st.selectbox(label, options, index=0, key=f"{key_prefix}_range",
-                          help="Overrides the global reporting period for this report only.")
+                          help=glossary.REPORTING_PERIOD)
     if choice == USE_GLOBAL:
         preset = st.session_state.get(GLOBAL_DATE_KEY, DEFAULT_DATE_PRESET)
         start, end = global_range(ctx)

@@ -20,10 +20,10 @@ import pandas as pd
 import streamlit as st
 
 from app import state
-from app.core import kpi, segments
+from app.core import glossary, kpi, segments
 from app.core.metrics import fmt_currency, fmt_int
 from app.ui import charts, components, drilldown
-from app.ui.theme import banner, page_header, section
+from app.ui.theme import banner, page_header, section, subheading
 
 # The AVS → Azure Native motion moves *cores* to Azure-native services; the AVS
 # categories move *hosts*.  Both are the Total Cores column — only the noun differs.
@@ -35,14 +35,14 @@ def _unit(category: str) -> tuple[str, str]:
 
 _DESCRIPTIONS = {
     segments.CAT_EOS_GEN1:
-        "End-of-support migrations for TPIDs with an \"AVS Migration - Gen1\" tag on "
-        "any wave (falling back to the AV36 / AV36P / AV48 / AV52 host SKUs).",
+        "Accounts with an \"AVS Migration - Gen1\" tag on any wave — one tagged wave "
+        "brings the whole account in.",
     segments.CAT_EOS_GEN2:
-        "End-of-support migrations for TPIDs tagged \"AVS Migration - Gen2\" on any "
-        "wave (falling back to AV64 being the only populated SKU).",
+        "Accounts with an \"AVS Migration - Gen2\" tag on any wave — one tagged wave "
+        "brings the whole account in.",
     segments.CAT_EOS_UNCLASSIFIED:
-        "EOS TPIDs carrying no generation tag and no matching SKU. Shown separately "
-        "— never folded into a generation.",
+        "Accounts whose offering reads as EOS but which carry no generation tag on "
+        "any wave. Shown separately — never folded into a generation.",
     segments.CAT_ALL_AVS:
         "Every migration whose target platform is AVS — on-premises, VMG, AWS/VMC, "
         "AVS-to-AVS and EOS refreshes alike.",
@@ -54,7 +54,8 @@ _DESCRIPTIONS = {
 def render(category: str) -> None:
     ctx = state.ensure_context()
     label = segments.CATEGORY_LABELS[category]
-    page_header(label, _DESCRIPTIONS.get(category, ""))
+    page_header(label, _DESCRIPTIONS.get(category, ""),
+                help=glossary.CATEGORY_HELP.get(category))
     components.data_quality_banner(ctx)
 
     fact = segments.population(ctx.fact, category)
@@ -68,16 +69,14 @@ def render(category: str) -> None:
         _population_note(ctx, category, fact)
 
     if fact.empty:
-        components.empty_state(
-            f"No nominations fall into **{label}**. "
-            "Check the Column Mapping page — the Tags, AVS SKU Type and Primary "
-            "Migration Path columns drive this classification.")
+        components.empty_state(f"No nominations fall into **{label}**.")
+        _why_empty(ctx, category)
         return
 
     # One wave sort for the whole page: every metric below reuses it.
     waves = kpi.wave_index(fact)
     unit_label, unit_short = _unit(category)
-    _executive_summary(fact, waves, start, end, key, unit_label)
+    _executive_summary(fact, waves, start, end, key, unit_label, category)
     _trends(fact, waves, start, end, key, unit_label, unit_short)
     _pipeline(fact, waves, key)
     _detailed_data(fact, waves, start, end, key)
@@ -89,17 +88,34 @@ def _population_note(ctx, category: str, fact: pd.DataFrame) -> None:
     bits = [f"<b>{tpids}</b> TPIDs · <b>{fmt_int(len(fact))}</b> nomination waves"]
     if category in (segments.CAT_EOS_GEN1, segments.CAT_EOS_GEN2,
                     segments.CAT_EOS_UNCLASSIFIED):
-        source = ("the uploaded <b>EOS worksheet</b>" if ctx.eos_tpids
-                  else "EOS markers on the offering / migration path "
-                       "(upload an EOS worksheet on <b>Data &amp; Upload</b> to pin the "
-                       "population to its TPID list)")
-        bits.append(f"EOS population from {source}")
+        bits.append("scope from the <b>AVS Migration - Gen1/Gen2</b> tag on any wave "
+                    "of the account")
     banner(" · ".join(bits))
 
 
+def _why_empty(ctx, category: str) -> None:
+    """Show what the file actually contains when a category selects nothing."""
+    st.markdown("**Why is this empty?**")
+    fact = ctx.fact
+    accounts = fact.drop_duplicates("tpid_key")
+    gen = (accounts["generation"].value_counts(dropna=False)
+           .rename_axis("Generation").reset_index(name="Accounts (TPID)"))
+    eos = int(accounts["is_eos_population"].sum())
+    st.caption(f"This file has **{len(accounts)}** accounts, of which **{eos}** carry an "
+               f"**AVS Migration - Gen1/Gen2** tag on at least one wave — that tag is "
+               f"what makes an account an EOS Migration account:")
+    components.show_table(gen)
+    tags = (fact["tags"].astype("string").fillna("(blank)").value_counts().head(8)
+            .rename_axis("Tags").reset_index(name="Rows"))
+    st.caption("Most common Tags values in the file:")
+    components.show_table(tags)
+    st.caption("If Tags is blank or unmapped, open **Column Mapping** and point the "
+               "Tags field at the right column, then come back.")
+
+
 def _executive_summary(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str,
-                       unit_label: str) -> None:
-    section("Executive summary")
+                       unit_label: str, category: str) -> None:
+    section("Executive summary", help=glossary.EXECUTIVE_SUMMARY)
     engagements = kpi.new_engagements(fact, start, end, firsts=waves.first)
     ends = kpi.migration_ends(fact, start, end, lasts=waves.last)
     hosts = kpi.hosts_migrated(fact, start, end)
@@ -107,17 +123,21 @@ def _executive_summary(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key
     states, state_rows = kpi.by_state(fact, lasts=waves.last)
     on_track = int(states.loc[states["category"] == kpi.STATE_ON_TRACK, "count"].sum())
 
+    cores_help = (glossary.CORES_MIGRATED if category == segments.CAT_AVS_NATIVE
+                  else glossary.HOSTS_MIGRATED)
     components.kpi_row([
         {"label": "New Engagements", "value": fmt_int(engagements.value),
-         "sub": "unique TPIDs, Wave-1 approval"},
+         "sub": "unique TPIDs, Wave-1 approval", "help": glossary.NEW_ENGAGEMENTS},
         {"label": "Migrations Ended", "value": fmt_int(ends.value),
-         "sub": "latest wave completed", "tone": "good"},
+         "sub": "latest wave completed", "tone": "good", "help": glossary.MIGRATION_ENDS},
         {"label": unit_label, "value": fmt_int(hosts.value),
-         "sub": "sum of Total Cores"},
+         "sub": "sum of Total Cores", "help": cores_help},
         {"label": "Nominations Approved", "value": fmt_int(approved.value),
-         "sub": "in the selected period"},
-        {"label": "On-Track Accounts", "value": fmt_int(on_track), "tone": "warn"},
-        {"label": "Total ACR", "value": fmt_currency(kpi.current_acr(fact))},
+         "sub": "in the selected period", "help": glossary.NOMINATIONS_APPROVED},
+        {"label": "On-Track Accounts", "value": fmt_int(on_track), "tone": "warn",
+         "help": glossary.ON_TRACK_ACCOUNTS},
+        {"label": "Total ACR", "value": fmt_currency(kpi.current_acr(fact)),
+         "help": glossary.TOTAL_ACR},
     ])
     with st.expander("🔎 Records behind these tiles"):
         tabs = st.tabs(["New Engagements", "Migrations Ended", unit_label,
@@ -136,7 +156,7 @@ def _executive_summary(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key
 
 def _trends(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str,
             unit_label: str, unit_short: str) -> None:
-    section("Trends — month over month")
+    section("Trends — month over month", help=glossary.TRENDS)
     st.caption("Click a bar **or a row of the table** to open the records behind "
                "that month.")
     basis = st.radio(
@@ -152,16 +172,17 @@ def _trends(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str,
 
     trends = [
         ("Nomination count (unique TPIDs)", noms, nom_rows, "Nominations", date_col,
-         None, False, "nominations"),
-        ("ACR", acr, acr_rows, "ACR", date_col, "total_acr", True, "TPID ACR records"),
+         None, False, "nominations", glossary.TREND_NOMINATIONS),
+        ("ACR", acr, acr_rows, "ACR", date_col, "total_acr", True, "TPID ACR records",
+         glossary.TREND_ACR),
         (f"{unit_label} (Total Cores)", hosts, host_rows, "Hosts", "actual_end_date",
-         "total_cores", False, "wave records"),
+         "total_cores", False, "wave records", glossary.TREND_HOSTS),
         ("Migrations ended (unique TPIDs)", ends, end_rows, "Migrations Ended",
-         "actual_end_date", None, False, "completed migrations"),
+         "actual_end_date", None, False, "completed migrations", glossary.TREND_ENDS),
     ]
-    for title, table, rows, value_col, row_date, unit_col, currency, what in trends:
+    for title, table, rows, value_col, row_date, unit_col, currency, what, help_text in trends:
         display_col = unit_short if value_col == "Hosts" else value_col
-        st.markdown(f"**{title}**")
+        subheading(title, help=help_text)
         if table.empty:
             components.empty_state(f"No {what} in the selected period.")
             continue
@@ -175,12 +196,12 @@ def _trends(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str,
 
 
 def _pipeline(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
-    section("Current pipeline")
+    section("Current pipeline", help=glossary.PIPELINE)
     st.caption("Click a slice, bar or table row to open the accounts behind it.")
     states, state_rows = kpi.by_state(fact, lasts=waves.last)
     stages, stage_rows = kpi.on_track_by_stage(fact, lasts=waves.last)
 
-    st.markdown("**Nominations by state**")
+    subheading("Nominations by state", help=glossary.BY_STATE)
     if states.empty:
         components.empty_state("No accounts to report.")
     else:
@@ -192,7 +213,7 @@ def _pipeline(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
                                                   "acr": "ACR"})),
             summary_bucket="State")
 
-    st.markdown("**On-track nominations by stage**")
+    subheading("On-track nominations by stage", help=glossary.BY_STAGE)
     if stages.empty:
         components.empty_state("No on-track accounts to report.")
     else:
@@ -206,7 +227,7 @@ def _pipeline(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
 
 
 def _detailed_data(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str) -> None:
-    section("Detailed data")
+    section("Detailed data", help=glossary.DETAILED_DATA)
     st.caption("Every record in this category, inheriting the filters and reporting "
                "period above. Group it, read the subtotals, then export.")
     c1, c2 = st.columns([2, 2])
