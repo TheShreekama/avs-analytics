@@ -24,9 +24,10 @@ _ROWS = [
     # B: Wave 7 completed but Wave 8 still running -> NOT a completed migration.  Gen-1.
     ("200", "Bravo", "3", "Wave 7", "AV52", "7 - Completed",              "01-20-2026", "07-20-2026", "20", "$200,000", "AV36/AV36P/AV52 - EOS"),
     ("200", "Bravo", "4", "Wave 8", "AV52", "4 - Migration In Progress",  "02-20-2026", "",           "8",  "$10,000",  "AV36/AV36P/AV52 - EOS"),
-    # C: single wave, only AV64 across every wave -> Gen-2, completed in Aug 2026.
-    ("300", "Charlie", "5", "Wave 1", "AV64", "7 - Completed", "02-01-2026", "08-10-2026", "16", "$300,000", "AV64 - EOS"),
-    ("300", "Charlie", "6", "Wave 2", "",     "7 - Completed", "02-05-2026", "08-11-2026", "4",  "$5,000",   "AV64 - EOS"),
+    # C: tagged Gen2 -> Gen-2, completed in Aug 2026.  The migration path reads the
+    # same as every other EOS row: the tag, not the path, distinguishes generations.
+    ("300", "Charlie", "5", "Wave 1", "AV64", "7 - Completed", "02-01-2026", "08-10-2026", "16", "$300,000", "AV36/AV36P/AV52 - EOS"),
+    ("300", "Charlie", "6", "Wave 2", "",     "7 - Completed", "02-05-2026", "08-11-2026", "4",  "$5,000",   "AV36/AV36P/AV52 - EOS"),
     # D: EOS marker but blank SKUs everywhere -> Unclassified.
     ("400", "Delta", "7", "Wave 1", "", "2 - Executing Pre-Requisites", "03-15-2026", "", "12", "$80,000", "AV36/AV36P/AV52 - EOS"),
     # E: on-premises onboarding, not EOS -> All AVS Migrations only.
@@ -116,17 +117,49 @@ def test_categories_select_the_right_population(fact):
 def test_one_tagged_wave_makes_the_whole_account_eos(fact):
     """The generation tag defines EOS scope, per account, from a single wave."""
     membership = segments.eos_population(fact)
+    # 100/200/300 by tag; 400 through the EOS migration-path fallback.
     assert sorted(fact.loc[membership, "tpid"].astype(str).unique()) == \
-        ["100", "200", "300"]
-    # 400 has an EOS offering but no tag -> not an EOS Migration account.
-    assert not membership[fact["tpid"].astype(str) == "400"].any()
-    # Every wave of a tagged account is in scope, not just the tagged one.
+        ["100", "200", "300", "400"]
+    # Every wave of a qualifying account is in scope, not just the tagged one.
     assert int(membership[fact["tpid"].astype(str) == "100"].sum()) == 2
+    # 500 has neither a generation tag nor an EOS offering.
+    assert not membership[fact["tpid"].astype(str) == "500"].any()
 
 
-def test_untagged_eos_offerings_are_listed_separately(fact):
+def test_eos_path_is_the_fallback_when_no_wave_is_tagged(fact):
+    """No Gen1/Gen2 tag anywhere -> the "AV36/AV36P/AV52 - EOS" path decides."""
     untagged = segments.population(fact, segments.CAT_EOS_UNCLASSIFIED)
     assert _tpids(untagged) == ["400"]
+    # It is in the EOS population, but carries no generation.
+    assert set(untagged["generation"]) == {segments.GEN_UNCLASSIFIED}
+    assert untagged["is_eos_population"].all()
+
+
+def test_the_same_eos_path_carries_either_generation(raw_frame):
+    """AV36/AV36P/AV52 - EOS is shared: only the tag separates Gen-1 from Gen-2."""
+    df = raw_frame.copy()
+    df["Primary Migration Path"] = "AV36/AV36P/AV52 - EOS"
+    mp = mapping.resolve_mapping(list(df.columns))
+    built, _ = cleaning.build_fact_frame(df, mp, pd.Timestamp("2026-09-01"))
+    by_tpid = built.drop_duplicates("tpid_key").set_index(built.drop_duplicates(
+        "tpid_key")["tpid"].astype(str))["generation"]
+    assert by_tpid["100"] == segments.GEN_1          # Gen1-tagged, on that path
+    assert by_tpid["300"] == segments.GEN_2          # Gen2-tagged, same path
+    assert by_tpid["400"] == segments.GEN_UNCLASSIFIED   # untagged, same path
+    # All three are EOS accounts; the tag only decides which page they land on.
+    assert segments.eos_population(built).all()
+
+
+def test_a_tag_brings_an_account_in_without_an_eos_path(raw_frame):
+    """The tag alone is enough — the offering need not read as EOS."""
+    df = raw_frame.copy()
+    df["Primary Migration Path"] = "Onprem to AVS"          # no EOS marker anywhere
+    df.loc[df["TPID"] == "500", "Tags"] = "InternalAVS Migration - Gen2"
+    mp = mapping.resolve_mapping(list(df.columns))
+    built, _ = cleaning.build_fact_frame(df, mp, pd.Timestamp("2026-09-01"))
+    gen2 = segments.population(built, segments.CAT_EOS_GEN2)
+    assert "500" in gen2["tpid"].astype(str).tolist()
+    assert segments.population(built, segments.CAT_EOS_UNCLASSIFIED).empty
 
 
 def test_tpid_is_the_matching_key_not_the_account_name(fact):
@@ -235,6 +268,7 @@ def test_rollup_deduplicates_on_tpid(fact):
     ("Something elseAVS Migration - Gen2Another tag", segments.GEN_2),
     ("AVS Migration – Gen2", segments.GEN_2),        # en dash
     ("AVS Migration-Gen1", segments.GEN_1),          # no spaces
+    ("AVS Migration Gen2", segments.GEN_2),          # no dash at all
     ("None of the above", None),
     ("", None),
 ])
@@ -278,3 +312,47 @@ def test_glossary_explains_every_headline_metric():
     assert "Tags" in glossary.GENERATION_RULE
     assert "latest wave" in glossary.MIGRATION_ENDS
     assert set(glossary.CATEGORY_HELP) == set(segments.CATEGORY_LABELS)
+
+
+# --------------------------------------------------------------------------- #
+# Data consistency: generation tag vs. EOS migration path
+# --------------------------------------------------------------------------- #
+def test_eos_consistency_reports_both_mismatches(raw_frame):
+    df = raw_frame.copy()
+    # 500 keeps its "Onprem to AVS" path but gains a Gen-2 tag -> tagged, no EOS
+    # path.  400 already sits on the EOS path with no tag -> path, no tag.
+    df.loc[df["TPID"] == "500", "Tags"] = "InternalAVS Migration - Gen2"
+    mp = mapping.resolve_mapping(list(df.columns))
+    built, _ = cleaning.build_fact_frame(df, mp, pd.Timestamp("2026-09-01"))
+
+    issues = segments.eos_consistency(built)
+    assert _tpids(issues["tagged_without_eos_path"]) == ["500"]
+    assert _tpids(issues["eos_path_without_tag"]) == ["400"]
+    # Wave-level on the path side: every offending wave is listed.
+    assert len(issues["eos_path_without_tag"]) == \
+        int((built["tpid"].astype(str) == "400").sum())
+
+
+def test_a_clean_file_reports_no_inconsistency(raw_frame):
+    df = raw_frame.copy()
+    df["Primary Migration Path"] = "AV36/AV36P/AV52 - EOS"
+    df["Tags"] = "Qualify and AccelerateAVS Migration - Gen1"
+    mp = mapping.resolve_mapping(list(df.columns))
+    built, _ = cleaning.build_fact_frame(df, mp, pd.Timestamp("2026-09-01"))
+    issues = segments.eos_consistency(built)
+    assert all(frame.empty for frame in issues.values())
+
+
+def test_every_eos_account_is_also_an_all_avs_migration(fact):
+    """EOS accounts roll up into All AVS Migrations, whatever their own path says."""
+    eos = fact[fact["is_eos_population"].astype(bool)]
+    all_avs = segments.population(fact, segments.CAT_ALL_AVS)
+    assert set(_tpids(eos)) <= set(_tpids(all_avs))
+
+
+def test_a_tagged_account_on_a_non_avs_path_still_counts_as_all_avs(raw_frame):
+    df = raw_frame.copy()
+    df.loc[df["TPID"] == "600", "Tags"] = "AVS Migration - Gen1"   # a (From AVS) path
+    mp = mapping.resolve_mapping(list(df.columns))
+    built, _ = cleaning.build_fact_frame(df, mp, pd.Timestamp("2026-09-01"))
+    assert "600" in _tpids(segments.population(built, segments.CAT_ALL_AVS))

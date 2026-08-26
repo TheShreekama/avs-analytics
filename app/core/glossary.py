@@ -138,16 +138,20 @@ GENERATION_RULE = (
 )
 
 EOS_POPULATION = (
-    "An account is an EOS Migration account when ANY of its waves carries an "
-    "'AVS Migration - Gen1' or 'AVS Migration - Gen2' tag. Every wave of that "
-    "account is then in scope, and the tag sets its generation."
+    "An account is an EOS Migration account when either:\n"
+    "1. ANY of its waves carries an 'AVS Migration - Gen1' or 'AVS Migration - "
+    "Gen2' tag — that tag also sets the account's generation; or\n"
+    "2. no wave carries either tag, but the Primary Migration Path (or Factory / "
+    "Linked Offering) reads as EOS, e.g. 'AV36/AV36P/AV52 - EOS' — in scope, but "
+    "with no generation.\n"
+    "Either way one qualifying wave brings every wave of the account with it."
 )
 
 EOS_UNTAGGED = (
-    "Accounts whose offering or migration path reads as EOS (e.g. "
-    "'AV36/AV36P/AV52 - EOS') but which carry NO 'AVS Migration - Gen1/Gen2' tag "
-    "on any wave. Listed here so nothing disappears — they are never folded into "
-    "a generation."
+    "EOS accounts that got here through the offering fallback: no wave carries an "
+    "'AVS Migration - Gen1/Gen2' tag, but the migration path reads as EOS (e.g. "
+    "'AV36/AV36P/AV52 - EOS'). In scope, but with no generation to report — never "
+    "folded into Gen-1 or Gen-2."
 )
 
 CATEGORY_HELP = {

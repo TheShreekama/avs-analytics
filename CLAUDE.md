@@ -62,7 +62,7 @@ under Streamlit's AppTest in both counting modes.
   counting-mode radio via `state.active_table()`).
 - **AV36/EOS membership** (`cleaning.is_av36_eos_path`) is checked across `migration_path`,
   `factory_offering` *and* `linked_offering` — real exports carry the marker on the offering
-  ("AV36/AV36P/AV52 - EOS"), not the path. SKU markers (av36/av36p/av52/av64, end-of-support)
+  ("AV36/AV36P/AV52 - EOS"), not the path. SKU markers (av36/av36p/av52, end-of-support)
   match anywhere; short words (eos/egs/eol) must be whole tokens, so "Geospatial" is not a hit.
 - **Date parsing** (`cleaning.parse_date_series`) accepts Excel serial numbers ("45855" — an
   unformatted date cell), ISO stamps with or without timezone, month names, and d/m/y triples;
@@ -80,11 +80,13 @@ under Streamlit's AppTest in both counting modes.
   NULL unless the sidebar's "Include N with no <date>" box is ticked (`_date.include_null`).
 
 - **Migration categories** (`segments.population`): `all_avs` = target platform is AVS
-  (on-prem / VMG / AWS-VMC / AVS-to-AVS / EOS); `avs_native` = `is_from_avs`; the three EOS
+  (on-prem / VMG / AWS-VMC / AVS-to-AVS / EOS) **plus every EOS account**, whatever its
+  own path says; `avs_native` = `is_from_avs`; the three EOS
   categories = the EOS population split by generation. There is only ever **one dataset**.
-  **An account is EOS when ANY of its waves carries an "AVS Migration - Gen1/Gen2" tag** —
-  that one tag sets both scope and generation (`segments.eos_population`); untagged
-  accounts whose offering still reads as EOS land on the "No generation tag" page.
+  **An account is EOS when ANY of its waves carries an "AVS Migration - Gen1/Gen2" tag**
+  (that tag sets both scope and generation); with no tag on any wave, an
+  "AV36/AV36P/AV52 - EOS" path/offering is the fallback (`segments.eos_population`) and the
+  account lands on the "No generation tag" page.
 - **TPID is authoritative** for joins, dedup and counts (`segments.tpid_key`; falls back to
   the account name only when a row has no TPID). The `customer` rollup keys on it — never
   on the account name, which differs between worksheets.
@@ -101,6 +103,10 @@ under Streamlit's AppTest in both counting modes.
 - **Terminology.** "AV36 EOS" is called **EOS Migration** everywhere in the UI. The
   AVS → Azure Native page labels the Total Cores metric **Cores Migrated**; the AVS
   categories call it **Hosts Migrated** (same column, different noun).
+- **Tag/path consistency** (`segments.eos_consistency`, shown in the sidebar and on Data &
+  Upload): accounts tagged Gen-1/Gen-2 with no EOS path on any wave, and waves on the EOS
+  path whose account carries no generation tag. Both are legitimate ways into EOS scope —
+  the panel just makes the disagreement visible.
 - **Explanations.** Every title carries an ⓘ (`theme.info_mark`, hover text) fed from
   `core/glossary.py` — one place for "what does this number mean", shared by tooltips and
   the Methodology page.

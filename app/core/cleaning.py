@@ -239,7 +239,10 @@ def azure_native_target(path: str) -> str:
 # SKU-style markers may appear glued to other text ("AV36P-EGS"), so they are
 # matched anywhere; the short words are matched as whole tokens only, so that a
 # value like "Geospatial" cannot masquerade as an EOS nomination.
-_EOS_SKU_MARKERS = ("av36", "avs36", "av36p", "avs36p", "av52", "avs52", "av64", "avs64",
+# Offering/path markers.  The real export writes "AV36/AV36P/AV52 - EOS"; AV64 is a
+# host SKU that never appears in a migration path, and a string that did carry it
+# would still match on the EOS token below.
+_EOS_SKU_MARKERS = ("av36", "avs36", "av36p", "avs36p", "av52", "avs52",
                     "endofsupport", "endoflife")
 _EOS_WORD_MARKERS = ("eos", "egs", "eol")
 

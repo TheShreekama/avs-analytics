@@ -8,9 +8,11 @@ Three orthogonal classifications drive every dashboard:
   whose target is AVS (on-premises, VMG, AWS/VMC, AVS-to-AVS, EOS refresh) is an
   AVS migration.
 * **EOS population** — an account is an EOS Migration account when ANY of its
-  waves carries an "AVS Migration - Gen1" or "AVS Migration - Gen2" tag.  That one
-  tag both puts the account in scope and fixes its generation.  There is one
-  dataset: nothing here depends on a second worksheet.
+  waves carries an "AVS Migration - Gen1" or "AVS Migration - Gen2" tag; that tag
+  also fixes its generation.  With no generation tag on any wave, the offering
+  falls back to deciding it: a migration path (or offering) reading
+  "AV36/AV36P/AV52 - EOS" puts the account in scope with no generation.  There is
+  one dataset: nothing here depends on a second worksheet.
 * **Generation** — Gen-1 / Gen-2 / Unclassified, decided per **TPID** from the Tags
   of *all* its waves (host SKUs as a fallback) — never per wave, never by name.
 
@@ -93,8 +95,8 @@ GEN_1 = "Gen-1"
 GEN_2 = "Gen-2"
 GEN_UNCLASSIFIED = "Unclassified"
 
-GEN1_SKUS = ("av36p", "av36", "av48", "av52")     # longest first: AV36P before AV36
-GEN2_SKUS = ("av64",)
+# Host SKUs no longer classify anything (the Tags column does) — the codes are
+# still parsed so the SKU a wave used can be shown in drill-downs.
 _SKU_TOKEN_RE = re.compile(r"av\s*(36p|36|48|52|64)", re.I)
 
 # The Tags column is the authoritative generation signal.  Several tags are
@@ -174,19 +176,26 @@ def tpid_key(fact: pd.DataFrame) -> pd.Series:
 # EOS population
 # --------------------------------------------------------------------------- #
 def eos_population(fact: pd.DataFrame) -> pd.Series:
-    """Per-row membership of the EOS Migration population.
+    """Per-row membership of the EOS Migration population, decided per account.
 
-    The generation tag defines it: if ANY wave of an account carries
-    "AVS Migration - Gen1" or "AVS Migration - Gen2", every wave of that account
-    is in scope.  Membership is therefore decided per TPID, never per row — one
-    tagged wave brings the whole account in.
+    1. **Tag** — ANY wave carrying "AVS Migration - Gen1" or "AVS Migration - Gen2"
+       brings the whole account in, with that generation.
+    2. **Fallback** — no generation tag on any wave, but an EOS offering
+       ("AV36/AV36P/AV52 - EOS" on the migration path, factory offering or linked
+       offering): the account is still in scope, with no generation.
+
+    Either way membership is per TPID, never per row: one qualifying wave brings
+    every wave of that account with it.
     """
     if fact.empty:
         return pd.Series(dtype=bool)
     if "generation" in fact.columns:
-        return fact["generation"].isin((GEN_1, GEN_2))
-    gen = generation_by_tpid(fact)
-    return tpid_key(fact).map(gen).isin((GEN_1, GEN_2))
+        tagged = fact["generation"].isin((GEN_1, GEN_2))
+    else:
+        tagged = tpid_key(fact).map(generation_by_tpid(fact)).isin((GEN_1, GEN_2))
+    keys = fact["tpid_key"] if "tpid_key" in fact.columns else tpid_key(fact)
+    marker = fact["is_av36_eos"].astype(bool).groupby(keys).transform("any")
+    return tagged | marker
 
 
 # --------------------------------------------------------------------------- #
@@ -202,7 +211,10 @@ def population(fact: pd.DataFrame, category: str) -> pd.DataFrame:
     if fact.empty:
         return fact
     if category == CAT_ALL_AVS:
-        return fact[fact["is_avs_target"].astype(bool)]
+        # Every EOS Migration account is an AVS migration too, even when its own
+        # path does not read as AVS-targeting.
+        return fact[fact["is_avs_target"].astype(bool)
+                    | fact["is_eos_population"].astype(bool)]
     if category == CAT_AVS_NATIVE:
         return fact[fact["is_from_avs"].astype(bool)]
     if category == CAT_EOS_GEN1:
@@ -210,10 +222,10 @@ def population(fact: pd.DataFrame, category: str) -> pd.DataFrame:
     if category == CAT_EOS_GEN2:
         return fact[fact["generation"] == GEN_2]
     if category == CAT_EOS_UNCLASSIFIED:
-        # Untagged accounts whose offering still reads as EOS — kept visible so
-        # nothing disappears, but never folded into a generation.
-        untagged = fact["generation"] == GEN_UNCLASSIFIED
-        return fact[untagged & fact["is_av36_eos"].astype(bool)]
+        # In scope through the offering fallback rather than a tag, so there is no
+        # generation to report — kept visible, never folded into Gen-1 or Gen-2.
+        return fact[fact["is_eos_population"].astype(bool)
+                    & (fact["generation"] == GEN_UNCLASSIFIED)]
     return fact[fact["is_eos_population"].astype(bool)]
 
 
@@ -242,10 +254,50 @@ def category_label_series(fact: pd.DataFrame) -> pd.Series:
     out = pd.Series("Other", index=fact.index, dtype="object")
     avs = fact["is_avs_target"].astype(bool)
     out[avs] = CATEGORY_LABELS[CAT_ALL_AVS]
-    untagged_eos = ((fact["generation"] == GEN_UNCLASSIFIED)
-                    & fact["is_av36_eos"].astype(bool))
-    out[untagged_eos] = CATEGORY_LABELS[CAT_EOS_UNCLASSIFIED]
     eos = fact["is_eos_population"].astype(bool)
-    out[eos] = fact.loc[eos, "generation"].map(gen_label)
+    out[eos] = fact.loc[eos, "generation"].map(
+        lambda g: gen_label.get(g, CATEGORY_LABELS[CAT_EOS_UNCLASSIFIED]))
     out[fact["is_from_avs"].astype(bool)] = CATEGORY_LABELS[CAT_AVS_NATIVE]
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Data consistency between the generation tag and the EOS migration path
+# --------------------------------------------------------------------------- #
+def eos_consistency(fact: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Where the generation tag and the EOS migration path disagree.
+
+    Two ways an export can be inconsistent, both worth seeing before trusting a
+    number:
+
+    ``tagged_without_eos_path``
+        Accounts carrying an "AVS Migration - Gen1/Gen2" tag whose waves never
+        show an EOS migration path — in scope by tag alone.
+    ``eos_path_without_tag``
+        Waves on an EOS migration path belonging to accounts with no generation
+        tag anywhere — in scope by path alone, so no generation can be reported.
+    """
+    empty = pd.DataFrame(columns=["tpid", "customer_name", "phase",
+                                  "migration_path", "tags", "generation"])
+    if fact.empty:
+        return {"tagged_without_eos_path": empty, "eos_path_without_tag": empty}
+
+    keys = fact["tpid_key"] if "tpid_key" in fact.columns else tpid_key(fact)
+    tagged = fact["generation"].isin((GEN_1, GEN_2))
+    account_has_eos_path = fact["is_av36_eos"].astype(bool).groupby(keys).transform("any")
+
+    cols = [c for c in ("tpid", "customer_name", "phase", "migration_path",
+                        "factory_offering", "tags", "generation") if c in fact.columns]
+
+    # One row per account for the tag-side mismatch; wave-level for the path side,
+    # since a single untagged wave on an EOS path is what you want to look at.
+    tagged_no_path = fact[tagged & ~account_has_eos_path]
+    if not tagged_no_path.empty:
+        tagged_no_path = tagged_no_path.groupby(keys[tagged & ~account_has_eos_path],
+                                                as_index=False).first()
+    path_no_tag = fact[~tagged & fact["is_av36_eos"].astype(bool)]
+
+    return {
+        "tagged_without_eos_path": tagged_no_path[cols] if not tagged_no_path.empty else empty,
+        "eos_path_without_tag": path_no_tag[cols] if not path_no_tag.empty else empty,
+    }

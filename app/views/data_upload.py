@@ -101,6 +101,9 @@ def _classification_panel(ctx) -> None:
                     .value_counts().head(10).rename_axis("Tags")
                     .reset_index(name="Rows"))
         components.show_table(tags)
+    section("Data consistency — tag vs. EOS migration path")
+    components.consistency_panel(ctx)
+
     st.caption("A generation is read from a wave tagged **AVS Migration - Gen1** or "
                "**- Gen2** anywhere in the Tags cell. If everything lands in "
                "Unclassified, check the Tags values above — and that Tags is mapped "
