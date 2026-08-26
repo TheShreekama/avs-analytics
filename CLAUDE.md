@@ -82,9 +82,10 @@ under Streamlit's AppTest in both counting modes.
 - **Migration categories** (`segments.population`): `all_avs` = target platform is AVS
   (on-prem / VMG / AWS-VMC / AVS-to-AVS / EOS); `avs_native` = `is_from_avs`; the three EOS
   categories = the EOS population split by generation. There is only ever **one dataset**.
-  **An account is EOS when ANY of its waves carries an "AVS Migration - Gen1/Gen2" tag** —
-  that one tag sets both scope and generation (`segments.eos_population`); untagged
-  accounts whose offering still reads as EOS land on the "No generation tag" page.
+  **An account is EOS when ANY of its waves carries an "AVS Migration - Gen1/Gen2" tag**
+  (that tag sets both scope and generation); with no tag on any wave, an
+  "AV36/AV36P/AV52 - EOS" path/offering is the fallback (`segments.eos_population`) and the
+  account lands on the "No generation tag" page.
 - **TPID is authoritative** for joins, dedup and counts (`segments.tpid_key`; falls back to
   the account name only when a row has no TPID). The `customer` rollup keys on it — never
   on the account name, which differs between worksheets.

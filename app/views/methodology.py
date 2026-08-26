@@ -123,19 +123,20 @@ def render() -> None:
         "split by generation.\n\n"
         "**EOS population.** An account is an **EOS Migration** account when ANY of "
         "its waves carries an **\"AVS Migration - Gen1\"** or **\"AVS Migration - "
-        "Gen2\"** tag. One tagged wave brings the whole account into scope, and the "
-        "tag also sets its generation. Everything comes from the single nominations "
-        "export.\n\n"
+        "Gen2\"** tag — one tagged wave brings the whole account into scope, and the "
+        "tag also sets its generation. When no wave carries either tag, the offering "
+        "falls back to deciding it: a **Primary Migration Path** (or Factory / Linked "
+        "Offering) reading **AV36/AV36P/AV52 - EOS** puts the account in scope with no "
+        "generation. Everything comes from the single nominations export.\n\n"
         "**Generation is decided per TPID, across all of its waves:**\n"
         "1. Any wave tagged **\"AVS Migration - Gen1\"** → the account is **Gen-1**; "
         "**\"AVS Migration - Gen2\"** → **Gen-2**. Gen-1 wins if both appear on "
         "different waves. Tags arrive concatenated with no separator "
         "(*\"Qualify and AccelerateAVS Migration - Gen1\"*), so the marker is matched "
         "inside the cell regardless of spacing, dashes or neighbouring tags.\n"
-        "2. No generation tag on any wave → the account is not an EOS Migration "
-        "account. If its offering still reads as EOS (*AV36/AV36P/AV52 - EOS*) it is "
-        "listed on **EOS Migration — No generation tag**, never folded into a "
-        "generation.")
+        "2. No generation tag on any wave → no generation. If the account is in EOS "
+        "scope through its migration path (*AV36/AV36P/AV52 - EOS*) it is listed on "
+        "**EOS Migration — No generation tag**, never folded into a generation.")
 
     # ------------------------------------------------------------------ #
     section("Metric rules (unique TPIDs vs. hosts)")

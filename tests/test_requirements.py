@@ -116,17 +116,34 @@ def test_categories_select_the_right_population(fact):
 def test_one_tagged_wave_makes_the_whole_account_eos(fact):
     """The generation tag defines EOS scope, per account, from a single wave."""
     membership = segments.eos_population(fact)
+    # 100/200/300 by tag; 400 through the EOS migration-path fallback.
     assert sorted(fact.loc[membership, "tpid"].astype(str).unique()) == \
-        ["100", "200", "300"]
-    # 400 has an EOS offering but no tag -> not an EOS Migration account.
-    assert not membership[fact["tpid"].astype(str) == "400"].any()
-    # Every wave of a tagged account is in scope, not just the tagged one.
+        ["100", "200", "300", "400"]
+    # Every wave of a qualifying account is in scope, not just the tagged one.
     assert int(membership[fact["tpid"].astype(str) == "100"].sum()) == 2
+    # 500 has neither a generation tag nor an EOS offering.
+    assert not membership[fact["tpid"].astype(str) == "500"].any()
 
 
-def test_untagged_eos_offerings_are_listed_separately(fact):
+def test_eos_path_is_the_fallback_when_no_wave_is_tagged(fact):
+    """No Gen1/Gen2 tag anywhere -> the "AV36/AV36P/AV52 - EOS" path decides."""
     untagged = segments.population(fact, segments.CAT_EOS_UNCLASSIFIED)
     assert _tpids(untagged) == ["400"]
+    # It is in the EOS population, but carries no generation.
+    assert set(untagged["generation"]) == {segments.GEN_UNCLASSIFIED}
+    assert untagged["is_eos_population"].all()
+
+
+def test_a_tag_brings_an_account_in_without_an_eos_path(raw_frame):
+    """The tag alone is enough — the offering need not read as EOS."""
+    df = raw_frame.copy()
+    df["Primary Migration Path"] = "Onprem to AVS"          # no EOS marker anywhere
+    df.loc[df["TPID"] == "500", "Tags"] = "InternalAVS Migration - Gen2"
+    mp = mapping.resolve_mapping(list(df.columns))
+    built, _ = cleaning.build_fact_frame(df, mp, pd.Timestamp("2026-09-01"))
+    gen2 = segments.population(built, segments.CAT_EOS_GEN2)
+    assert "500" in gen2["tpid"].astype(str).tolist()
+    assert segments.population(built, segments.CAT_EOS_UNCLASSIFIED).empty
 
 
 def test_tpid_is_the_matching_key_not_the_account_name(fact):
