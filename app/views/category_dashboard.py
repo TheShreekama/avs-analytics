@@ -25,16 +25,24 @@ from app.core.metrics import fmt_currency, fmt_int
 from app.ui import charts, components, drilldown
 from app.ui.theme import banner, page_header, section
 
+# The AVS → Azure Native motion moves *cores* to Azure-native services; the AVS
+# categories move *hosts*.  Both are the Total Cores column — only the noun differs.
+def _unit(category: str) -> tuple[str, str]:
+    if category == segments.CAT_AVS_NATIVE:
+        return "Cores Migrated", "Cores"
+    return "Hosts Migrated", "Hosts"
+
+
 _DESCRIPTIONS = {
     segments.CAT_EOS_GEN1:
-        "End-of-support migrations for TPIDs on Gen-1 hosts (any wave carrying "
-        "AV36, AV36P, AV48 or AV52).",
+        "End-of-support migrations for TPIDs with an \"AVS Migration - Gen1\" tag on "
+        "any wave (falling back to the AV36 / AV36P / AV48 / AV52 host SKUs).",
     segments.CAT_EOS_GEN2:
-        "End-of-support migrations for TPIDs whose only populated SKU across every "
-        "wave is AV64 (Gen-2).",
+        "End-of-support migrations for TPIDs tagged \"AVS Migration - Gen2\" on any "
+        "wave (falling back to AV64 being the only populated SKU).",
     segments.CAT_EOS_UNCLASSIFIED:
-        "EOS TPIDs whose SKU values are blank or do not match the Gen-1 / Gen-2 "
-        "rules. Shown separately — never folded into a generation.",
+        "EOS TPIDs carrying no generation tag and no matching SKU. Shown separately "
+        "— never folded into a generation.",
     segments.CAT_ALL_AVS:
         "Every migration whose target platform is AVS — on-premises, VMG, AWS/VMC, "
         "AVS-to-AVS and EOS refreshes alike.",
@@ -62,14 +70,15 @@ def render(category: str) -> None:
     if fact.empty:
         components.empty_state(
             f"No nominations fall into **{label}**. "
-            "Check the Column Mapping page — the AVS SKU Type and Primary Migration "
-            "Path columns drive this classification.")
+            "Check the Column Mapping page — the Tags, AVS SKU Type and Primary "
+            "Migration Path columns drive this classification.")
         return
 
     # One wave sort for the whole page: every metric below reuses it.
     waves = kpi.wave_index(fact)
-    _executive_summary(fact, waves, start, end, key)
-    _trends(fact, waves, start, end, key)
+    unit_label, unit_short = _unit(category)
+    _executive_summary(fact, waves, start, end, key, unit_label)
+    _trends(fact, waves, start, end, key, unit_label, unit_short)
     _pipeline(fact, waves, key)
     _detailed_data(fact, waves, start, end, key)
 
@@ -88,7 +97,8 @@ def _population_note(ctx, category: str, fact: pd.DataFrame) -> None:
     banner(" · ".join(bits))
 
 
-def _executive_summary(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str) -> None:
+def _executive_summary(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str,
+                       unit_label: str) -> None:
     section("Executive summary")
     engagements = kpi.new_engagements(fact, start, end, firsts=waves.first)
     ends = kpi.migration_ends(fact, start, end, lasts=waves.last)
@@ -102,7 +112,7 @@ def _executive_summary(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key
          "sub": "unique TPIDs, Wave-1 approval"},
         {"label": "Migrations Ended", "value": fmt_int(ends.value),
          "sub": "latest wave completed", "tone": "good"},
-        {"label": "Hosts Migrated", "value": fmt_int(hosts.value),
+        {"label": unit_label, "value": fmt_int(hosts.value),
          "sub": "sum of Total Cores"},
         {"label": "Nominations Approved", "value": fmt_int(approved.value),
          "sub": "in the selected period"},
@@ -110,7 +120,7 @@ def _executive_summary(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key
         {"label": "Total ACR", "value": fmt_currency(kpi.current_acr(fact))},
     ])
     with st.expander("🔎 Records behind these tiles"):
-        tabs = st.tabs(["New Engagements", "Migrations Ended", "Hosts Migrated",
+        tabs = st.tabs(["New Engagements", "Migrations Ended", unit_label,
                         "Nominations Approved"])
         for tab, metric, name in zip(
                 tabs, [engagements, ends, hosts, approved],
@@ -124,8 +134,11 @@ def _executive_summary(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key
                                    key=f"{key}_{name}_csv")
 
 
-def _trends(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str) -> None:
+def _trends(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str,
+            unit_label: str, unit_short: str) -> None:
     section("Trends — month over month")
+    st.caption("Click a bar **or a row of the table** to open the records behind "
+               "that month.")
     basis = st.radio(
         "Trend basis", ["Nomination approval date", "Nomination created date"],
         horizontal=True, key=f"{key}_basis",
@@ -135,56 +148,61 @@ def _trends(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str) -> N
     noms, nom_rows = kpi.monthly_unique_tpids(fact, date_col, start, end, firsts=waves.first)
     acr, acr_rows = kpi.monthly_acr(fact, date_col, start, end, firsts=waves.first)
     hosts, host_rows = kpi.monthly_hosts(fact, start, end)
+    ends, end_rows = kpi.monthly_migration_ends(fact, start, end, lasts=waves.last)
 
-    for title, table, rows, value_col, unit_col, what in [
-        ("Nomination count (unique TPIDs)", noms, nom_rows, "Nominations", None, "nominations"),
-        ("ACR", acr, acr_rows, "ACR", "total_acr", "TPID ACR records"),
-        ("Hosts migrated (Total Cores)", hosts, host_rows, "Hosts", "total_cores", "wave records"),
-    ]:
+    trends = [
+        ("Nomination count (unique TPIDs)", noms, nom_rows, "Nominations", date_col,
+         None, False, "nominations"),
+        ("ACR", acr, acr_rows, "ACR", date_col, "total_acr", True, "TPID ACR records"),
+        (f"{unit_label} (Total Cores)", hosts, host_rows, "Hosts", "actual_end_date",
+         "total_cores", False, "wave records"),
+        ("Migrations ended (unique TPIDs)", ends, end_rows, "Migrations Ended",
+         "actual_end_date", None, False, "completed migrations"),
+    ]
+    for title, table, rows, value_col, row_date, unit_col, currency, what in trends:
+        display_col = unit_short if value_col == "Hosts" else value_col
         st.markdown(f"**{title}**")
         if table.empty:
             components.empty_state(f"No {what} in the selected period.")
             continue
-        left, right = st.columns([3, 2])
-        with left:
-            fig = charts.line(table, "period", value_col, area=True, height=320)
-            charts.add_line(fig, table, "period", "Cumulative")
-            drilldown.chart_with_drilldown(
-                fig, _with_period(rows, date_col if value_col != "Hosts" else "actual_end_date"),
-                "period", key=f"{key}_{value_col}", what=what, unit_col=unit_col)
-        with right:
-            components.show_table(_display_trend(table), height=320)
+        fig = charts.trend_chart(table, "period", value_col, "Cumulative",
+                                 currency=currency, height=320)
+        drilldown.chart_with_drilldown(
+            fig, _with_period(rows, row_date), "period",
+            key=f"{key}_{value_col}".replace(" ", "_"), what=what, unit_col=unit_col,
+            summary=_display_trend(table, display_col, currency), summary_bucket="Month")
         st.write("")
 
 
 def _pipeline(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
     section("Current pipeline")
+    st.caption("Click a slice, bar or table row to open the accounts behind it.")
     states, state_rows = kpi.by_state(fact, lasts=waves.last)
     stages, stage_rows = kpi.on_track_by_stage(fact, lasts=waves.last)
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("**Nominations by state**")
-        if states.empty:
-            components.empty_state("No accounts to report.")
-        else:
-            state_rows = state_rows.assign(bucket=state_rows["state"])
-            fig = charts.donut(states, "category", "count", height=320)
-            drilldown.chart_with_drilldown(fig, state_rows, "bucket",
-                                           key=f"{key}_state", what="accounts")
-            components.show_table(_money(states.rename(
-                columns={"category": "State", "count": "Accounts", "acr": "ACR"})))
-    with c2:
-        st.markdown("**On-track nominations by stage**")
-        if stages.empty:
-            components.empty_state("No on-track accounts to report.")
-        else:
-            stage_rows = stage_rows.assign(bucket=stage_rows["stage"])
-            fig = charts.bar(stages, "category", "count", horizontal=True, height=320)
-            drilldown.chart_with_drilldown(fig, stage_rows, "bucket",
-                                           key=f"{key}_stage", what="accounts")
-            components.show_table(_money(stages.rename(
-                columns={"category": "Stage", "count": "Accounts", "acr": "ACR"})))
+    st.markdown("**Nominations by state**")
+    if states.empty:
+        components.empty_state("No accounts to report.")
+    else:
+        fig = charts.donut(states, "category", "count", height=320)
+        drilldown.chart_with_drilldown(
+            fig, state_rows.assign(bucket=state_rows["state"]), "bucket",
+            key=f"{key}_state", what="accounts",
+            summary=_money(states.rename(columns={"category": "State", "count": "Accounts",
+                                                  "acr": "ACR"})),
+            summary_bucket="State")
+
+    st.markdown("**On-track nominations by stage**")
+    if stages.empty:
+        components.empty_state("No on-track accounts to report.")
+    else:
+        fig = charts.bar(stages, "category", "count", horizontal=True, height=320)
+        drilldown.chart_with_drilldown(
+            fig, stage_rows.assign(bucket=stage_rows["stage"]), "bucket",
+            key=f"{key}_stage", what="accounts",
+            summary=_money(stages.rename(columns={"category": "Stage", "count": "Accounts",
+                                                  "acr": "ACR"})),
+            summary_bucket="Stage")
 
 
 def _detailed_data(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str) -> None:
@@ -230,11 +248,21 @@ def _with_period(rows: pd.DataFrame, date_col: str) -> pd.DataFrame:
     return out
 
 
-def _display_trend(table: pd.DataFrame) -> pd.DataFrame:
-    """Month, value and the Cumulative column — cumulative always last."""
+def _display_trend(table: pd.DataFrame, display_col: str | None = None,
+                   currency: bool = False) -> pd.DataFrame:
+    """Month, value and the Cumulative column — cumulative always last.
+
+    Money is shown as $1.2M / $840.0K rather than a raw number.
+    """
     out = table.drop(columns=["month"]).rename(columns={"period": "Month"})
-    value_col = [c for c in out.columns if c not in ("Month", "Cumulative")]
-    return out[["Month", *value_col, "Cumulative"]]
+    value_cols = [c for c in out.columns if c not in ("Month", "Cumulative")]
+    out = out[["Month", *value_cols, "Cumulative"]]
+    if currency:
+        for col in [*value_cols, "Cumulative"]:
+            out[col] = out[col].map(fmt_currency)
+    if display_col and value_cols and display_col != value_cols[0]:
+        out = out.rename(columns={value_cols[0]: display_col})
+    return out
 
 
 def _money(df: pd.DataFrame) -> pd.DataFrame:

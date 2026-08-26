@@ -126,12 +126,15 @@ def render() -> None:
         "membership falls back to the AV36 / AV36P / AV52 / AV64 / EOS / EGS markers "
         "on the migration path, factory offering or linked offering.\n\n"
         "**Generation is decided per TPID, across all of its waves:**\n"
-        "1. Any wave carrying **AV36, AV36P, AV48 or AV52** → **Gen-1**, even when "
-        "other SKUs are also present.\n"
-        "2. Otherwise, when the only populated SKU across every wave is **AV64** → "
-        "**Gen-2**. A blank SKU on some waves does not disqualify it.\n"
-        "3. Blank SKUs, or any combination the rules do not cover → **Unclassified**, "
-        "reported on its own page and never folded into a generation.")
+        "1. The **Tags** column decides it — any wave tagged **\"AVS Migration - "
+        "Gen1\"** → **Gen-1**, **\"AVS Migration - Gen2\"** → **Gen-2** (Gen-1 wins "
+        "if both appear). Tags arrive concatenated with no separator "
+        "(*\"Qualify and AccelerateAVS Migration - Gen1\"*), so the marker is matched "
+        "inside the cell regardless of spacing, dashes or neighbouring tags.\n"
+        "2. With no generation tag anywhere, the host **SKUs** stand in: any wave "
+        "with **AV36 / AV36P / AV48 / AV52** → Gen-1; only-**AV64** → Gen-2.\n"
+        "3. Neither → **Unclassified**, reported on its own page and never folded "
+        "into a generation.")
 
     # ------------------------------------------------------------------ #
     section("Metric rules (unique TPIDs vs. hosts)")
@@ -171,7 +174,8 @@ def render() -> None:
         f"date** in the sidebar (which defaults to the latest activity date in your "
         f"data).\n\n"
         f"- **This/Last week** — Monday-based weeks.\n"
-        f"- **This FY** — fiscal year starting **1 {fy_name}** (Microsoft FY).\n"
+        f"- **This FY / Last FY** — the **whole** fiscal year starting 1 {fy_name} "
+        f"(Microsoft FY), e.g. 1 Jul → 30 Jun — not year-to-date.\n"
         f"- **This/Last month**, **Last 3/6 months** — calendar-anchored on the as-of "
         f"date.\n\n"
         f"The This-Week / This-Month / This-Quarter / Year-to-Date KPI tiles compare "

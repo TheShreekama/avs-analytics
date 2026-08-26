@@ -74,8 +74,9 @@ under Streamlit's AppTest in both counting modes.
 - **Full offering names.** On AVS → Azure pages, show `migration_path` (e.g. "SQL Server MI
   Migration (From AVS)"), not the short `factory_offering`.
 - **Dates.** `metrics.date_preset_range` (This/Last week, This/Last month, Last 3/6 months,
-  This FY [July], All time, Custom); default preset "All time" — a narrow default emptied
-  almost every page; anchored on the sidebar as-of date. A range excludes rows whose date is
+  This/Last FY [July], All time, Custom); default preset "This FY". FY presets span the
+  **whole** fiscal year (1 Jul → 30 Jun), not year-to-date; everything is anchored on the
+  sidebar as-of date. A range excludes rows whose date is
   NULL unless the sidebar's "Include N with no <date>" box is ticked (`_date.include_null`).
 
 - **Migration categories** (`segments.population`): `all_avs` = target platform is AVS
@@ -86,15 +87,23 @@ under Streamlit's AppTest in both counting modes.
 - **TPID is authoritative** for joins, dedup and counts (`segments.tpid_key`; falls back to
   the account name only when a row has no TPID). The `customer` rollup keys on it — never
   on the account name, which differs between worksheets.
-- **Generations** (`segments.classify_generation`, per TPID across ALL waves): any of
-  AV36/AV36P/AV48/AV52 → Gen-1 (wins over AV64); only AV64 populated → Gen-2; blank or
-  unmatched → Unclassified (shown separately, never folded in).
+- **Generations** (`segments.classify_generation`, per TPID across ALL waves): the **Tags**
+  column decides — "AVS Migration - Gen1"/"- Gen2" matched against the cell stripped to
+  letters+digits, because tags arrive concatenated ("Qualify and AccelerateAVS Migration -
+  Gen1"); Gen-1 wins if both appear. No tag anywhere → fall back to host SKUs
+  (AV36/AV36P/AV48/AV52 → Gen-1; only AV64 → Gen-2). Neither → Unclassified (shown
+  separately, never folded in).
 - **Metric rules** (`core/kpi.py`, all with `records` for drill-down): new engagements =
   unique TPIDs by **Wave-1** approval date; migration ends = unique TPIDs whose **latest**
   wave is `7 - Completed` (Wave 7 done + Wave 8 open ⇒ not counted), dated by actual end;
   hosts migrated = **sum of Total Cores** over completed records (never a TPID count);
   Cumulative is the final column and runs over the displayed months only.
-- **Terminology.** "AV36 EOS" is called **EOS Migration** everywhere in the UI.
+- **Terminology.** "AV36 EOS" is called **EOS Migration** everywhere in the UI. The
+  AVS → Azure Native page labels the Total Cores metric **Cores Migrated**; the AVS
+  categories call it **Hosts Migrated** (same column, different noun).
+- **Drill-down.** Charts use a category x-axis and `drilldown.normalize_bucket` so a
+  Plotly month label ("2026-06-01") matches the record's period ("2026-06"); summary
+  tables are `st.dataframe(on_select=...)` rows that select the same bucket.
 
 ## Conventions
 

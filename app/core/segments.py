@@ -96,6 +96,38 @@ GEN1_SKUS = ("av36p", "av36", "av48", "av52")     # longest first: AV36P before 
 GEN2_SKUS = ("av64",)
 _SKU_TOKEN_RE = re.compile(r"av\s*(36p|36|48|52|64)", re.I)
 
+# The Tags column is the authoritative generation signal.  Several tags are
+# concatenated into one cell with no separator — "Qualify and AccelerateAVS
+# Migration - Gen1", "InternalAVS Migration - Gen2", "Qualify and AccelerateFCS
+# On Hold Reach OutAVS Migration - Gen1" — so the marker is matched against the
+# cell stripped of everything but letters and digits.  That way spacing, dashes
+# (hyphen or en dash) and neighbouring tags cannot hide it.
+_GEN_TAG_MARKERS = ((GEN_1, "avsmigrationgen1"), (GEN_2, "avsmigrationgen2"))
+
+
+def _compact(value) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value).lower())
+
+
+def generation_from_tags(tag_values) -> str | None:
+    """Generation from the Tags column, or None when no generation tag is present.
+
+    Gen-1 wins when a TPID carries both markers across its waves, matching the
+    SKU precedence.
+    """
+    found = set()
+    for value in tag_values:
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            continue
+        compact = _compact(value)
+        for gen, marker in _GEN_TAG_MARKERS:
+            if marker in compact:
+                found.add(gen)
+    for gen, _marker in _GEN_TAG_MARKERS:
+        if gen in found:
+            return gen
+    return None
+
 
 def sku_codes(value) -> set[str]:
     """Normalised SKU codes found in a raw SKU cell ("AV36P Node" -> {'av36p'})."""
@@ -104,16 +136,20 @@ def sku_codes(value) -> set[str]:
     return {"av" + m.group(1).lower() for m in _SKU_TOKEN_RE.finditer(str(value))}
 
 
-def classify_generation(sku_values) -> str:
-    """Gen-1 / Gen-2 / Unclassified for one TPID, from the SKUs of all its waves.
+def classify_generation(sku_values, tag_values=None) -> str:
+    """Gen-1 / Gen-2 / Unclassified for one TPID, across all of its waves.
 
-    Precedence (Section 6 of the requirements):
-      1. Any wave carrying AV36, AV36P, AV48 or AV52 -> **Gen-1**, even when other
-         SKUs are also present.
-      2. Otherwise, when the only populated SKU across every wave is AV64 -> **Gen-2**.
-      3. Otherwise (blank SKUs, or any combination the rules do not cover)
-         -> **Unclassified**.  Never silently folded into Gen-1 or Gen-2.
+    Precedence:
+      1. **Tags** decide it: any wave tagged "AVS Migration - Gen1" -> Gen-1,
+         "AVS Migration - Gen2" -> Gen-2 (Gen-1 wins if both appear).
+      2. With no generation tag anywhere, fall back to the host SKUs: any wave
+         carrying AV36 / AV36P / AV48 / AV52 -> Gen-1; only-AV64 -> Gen-2.
+      3. Otherwise -> **Unclassified**, reported separately and never silently
+         folded into a generation.
     """
+    tagged = generation_from_tags(tag_values or [])
+    if tagged:
+        return tagged
     found: set[str] = set()
     for value in sku_values:
         found |= sku_codes(value)
@@ -128,9 +164,12 @@ def generation_by_tpid(fact: pd.DataFrame) -> pd.Series:
     """Map of TPID -> generation, evaluating every wave belonging to the TPID."""
     if fact.empty or "avs_sku" not in fact.columns:
         return pd.Series(dtype="object")
-    keys = tpid_key(fact)
-    grouped = fact.assign(_key=keys).groupby("_key")["avs_sku"]
-    return grouped.apply(lambda s: classify_generation(s.tolist()))
+    df = fact.assign(_key=tpid_key(fact))
+    tags = df["tags"] if "tags" in df.columns else pd.Series("", index=df.index)
+    df = df.assign(_tags=tags)
+    return df.groupby("_key").apply(
+        lambda g: classify_generation(g["avs_sku"].tolist(), g["_tags"].tolist()),
+        include_groups=False)
 
 
 def tpid_key(fact: pd.DataFrame) -> pd.Series:
