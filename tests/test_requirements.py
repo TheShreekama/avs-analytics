@@ -312,3 +312,47 @@ def test_glossary_explains_every_headline_metric():
     assert "Tags" in glossary.GENERATION_RULE
     assert "latest wave" in glossary.MIGRATION_ENDS
     assert set(glossary.CATEGORY_HELP) == set(segments.CATEGORY_LABELS)
+
+
+# --------------------------------------------------------------------------- #
+# Data consistency: generation tag vs. EOS migration path
+# --------------------------------------------------------------------------- #
+def test_eos_consistency_reports_both_mismatches(raw_frame):
+    df = raw_frame.copy()
+    # 500 keeps its "Onprem to AVS" path but gains a Gen-2 tag -> tagged, no EOS
+    # path.  400 already sits on the EOS path with no tag -> path, no tag.
+    df.loc[df["TPID"] == "500", "Tags"] = "InternalAVS Migration - Gen2"
+    mp = mapping.resolve_mapping(list(df.columns))
+    built, _ = cleaning.build_fact_frame(df, mp, pd.Timestamp("2026-09-01"))
+
+    issues = segments.eos_consistency(built)
+    assert _tpids(issues["tagged_without_eos_path"]) == ["500"]
+    assert _tpids(issues["eos_path_without_tag"]) == ["400"]
+    # Wave-level on the path side: every offending wave is listed.
+    assert len(issues["eos_path_without_tag"]) == \
+        int((built["tpid"].astype(str) == "400").sum())
+
+
+def test_a_clean_file_reports_no_inconsistency(raw_frame):
+    df = raw_frame.copy()
+    df["Primary Migration Path"] = "AV36/AV36P/AV52 - EOS"
+    df["Tags"] = "Qualify and AccelerateAVS Migration - Gen1"
+    mp = mapping.resolve_mapping(list(df.columns))
+    built, _ = cleaning.build_fact_frame(df, mp, pd.Timestamp("2026-09-01"))
+    issues = segments.eos_consistency(built)
+    assert all(frame.empty for frame in issues.values())
+
+
+def test_every_eos_account_is_also_an_all_avs_migration(fact):
+    """EOS accounts roll up into All AVS Migrations, whatever their own path says."""
+    eos = fact[fact["is_eos_population"].astype(bool)]
+    all_avs = segments.population(fact, segments.CAT_ALL_AVS)
+    assert set(_tpids(eos)) <= set(_tpids(all_avs))
+
+
+def test_a_tagged_account_on_a_non_avs_path_still_counts_as_all_avs(raw_frame):
+    df = raw_frame.copy()
+    df.loc[df["TPID"] == "600", "Tags"] = "AVS Migration - Gen1"   # a (From AVS) path
+    mp = mapping.resolve_mapping(list(df.columns))
+    built, _ = cleaning.build_fact_frame(df, mp, pd.Timestamp("2026-09-01"))
+    assert "600" in _tpids(segments.population(built, segments.CAT_ALL_AVS))

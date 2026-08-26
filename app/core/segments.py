@@ -211,7 +211,10 @@ def population(fact: pd.DataFrame, category: str) -> pd.DataFrame:
     if fact.empty:
         return fact
     if category == CAT_ALL_AVS:
-        return fact[fact["is_avs_target"].astype(bool)]
+        # Every EOS Migration account is an AVS migration too, even when its own
+        # path does not read as AVS-targeting.
+        return fact[fact["is_avs_target"].astype(bool)
+                    | fact["is_eos_population"].astype(bool)]
     if category == CAT_AVS_NATIVE:
         return fact[fact["is_from_avs"].astype(bool)]
     if category == CAT_EOS_GEN1:
@@ -256,3 +259,45 @@ def category_label_series(fact: pd.DataFrame) -> pd.Series:
         lambda g: gen_label.get(g, CATEGORY_LABELS[CAT_EOS_UNCLASSIFIED]))
     out[fact["is_from_avs"].astype(bool)] = CATEGORY_LABELS[CAT_AVS_NATIVE]
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Data consistency between the generation tag and the EOS migration path
+# --------------------------------------------------------------------------- #
+def eos_consistency(fact: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Where the generation tag and the EOS migration path disagree.
+
+    Two ways an export can be inconsistent, both worth seeing before trusting a
+    number:
+
+    ``tagged_without_eos_path``
+        Accounts carrying an "AVS Migration - Gen1/Gen2" tag whose waves never
+        show an EOS migration path — in scope by tag alone.
+    ``eos_path_without_tag``
+        Waves on an EOS migration path belonging to accounts with no generation
+        tag anywhere — in scope by path alone, so no generation can be reported.
+    """
+    empty = pd.DataFrame(columns=["tpid", "customer_name", "phase",
+                                  "migration_path", "tags", "generation"])
+    if fact.empty:
+        return {"tagged_without_eos_path": empty, "eos_path_without_tag": empty}
+
+    keys = fact["tpid_key"] if "tpid_key" in fact.columns else tpid_key(fact)
+    tagged = fact["generation"].isin((GEN_1, GEN_2))
+    account_has_eos_path = fact["is_av36_eos"].astype(bool).groupby(keys).transform("any")
+
+    cols = [c for c in ("tpid", "customer_name", "phase", "migration_path",
+                        "factory_offering", "tags", "generation") if c in fact.columns]
+
+    # One row per account for the tag-side mismatch; wave-level for the path side,
+    # since a single untagged wave on an EOS path is what you want to look at.
+    tagged_no_path = fact[tagged & ~account_has_eos_path]
+    if not tagged_no_path.empty:
+        tagged_no_path = tagged_no_path.groupby(keys[tagged & ~account_has_eos_path],
+                                                as_index=False).first()
+    path_no_tag = fact[~tagged & fact["is_av36_eos"].astype(bool)]
+
+    return {
+        "tagged_without_eos_path": tagged_no_path[cols] if not tagged_no_path.empty else empty,
+        "eos_path_without_tag": path_no_tag[cols] if not path_no_tag.empty else empty,
+    }

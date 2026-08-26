@@ -123,6 +123,7 @@ def _sidebar_brand(ctx, state, app_name: str, tagline: str) -> None:
 
     from app.ui import components
     components.global_date_controls(ctx)
+    components.consistency_panel(ctx, sidebar=True)
 
     st.sidebar.radio(
         "Counting mode", [state.MODE_CUSTOMER, state.MODE_WAVE], key=state.MODE_KEY,

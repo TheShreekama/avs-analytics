@@ -80,7 +80,8 @@ under Streamlit's AppTest in both counting modes.
   NULL unless the sidebar's "Include N with no <date>" box is ticked (`_date.include_null`).
 
 - **Migration categories** (`segments.population`): `all_avs` = target platform is AVS
-  (on-prem / VMG / AWS-VMC / AVS-to-AVS / EOS); `avs_native` = `is_from_avs`; the three EOS
+  (on-prem / VMG / AWS-VMC / AVS-to-AVS / EOS) **plus every EOS account**, whatever its
+  own path says; `avs_native` = `is_from_avs`; the three EOS
   categories = the EOS population split by generation. There is only ever **one dataset**.
   **An account is EOS when ANY of its waves carries an "AVS Migration - Gen1/Gen2" tag**
   (that tag sets both scope and generation); with no tag on any wave, an
@@ -102,6 +103,10 @@ under Streamlit's AppTest in both counting modes.
 - **Terminology.** "AV36 EOS" is called **EOS Migration** everywhere in the UI. The
   AVS → Azure Native page labels the Total Cores metric **Cores Migrated**; the AVS
   categories call it **Hosts Migrated** (same column, different noun).
+- **Tag/path consistency** (`segments.eos_consistency`, shown in the sidebar and on Data &
+  Upload): accounts tagged Gen-1/Gen-2 with no EOS path on any wave, and waves on the EOS
+  path whose account carries no generation tag. Both are legitimate ways into EOS scope —
+  the panel just makes the disagreement visible.
 - **Explanations.** Every title carries an ⓘ (`theme.info_mark`, hover text) fed from
   `core/glossary.py` — one place for "what does this number mean", shared by tooltips and
   the Methodology page.

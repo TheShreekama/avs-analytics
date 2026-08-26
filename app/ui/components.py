@@ -415,3 +415,54 @@ def report_date_range(ctx: DataContext, key_prefix: str, label: str = "Reporting
               else "all dates in the dataset")
     st.caption(f"**{shown}** — {window}")
     return start, end, shown
+
+
+# --------------------------------------------------------------------------- #
+# Data consistency: generation tag vs. EOS migration path
+# --------------------------------------------------------------------------- #
+_CONSISTENCY_LABELS = {
+    "tagged_without_eos_path": (
+        "Tagged Gen-1/Gen-2, no EOS path",
+        "Accounts carrying an AVS Migration - Gen1/Gen2 tag whose waves never show "
+        "the AV36/AV36P/AV52 - EOS migration path. They are in EOS scope on the "
+        "strength of the tag alone.",
+    ),
+    "eos_path_without_tag": (
+        "EOS path, no generation tag",
+        "Waves on the AV36/AV36P/AV52 - EOS migration path whose account carries no "
+        "AVS Migration - Gen1/Gen2 tag on any wave. In scope by path, but no "
+        "generation can be reported — they appear under 'No generation tag'.",
+    ),
+}
+
+
+def consistency_panel(ctx: DataContext, sidebar: bool = False) -> None:
+    """Where the generation tag and the EOS migration path disagree.
+
+    Rendered compactly in the sidebar (counts plus an expander) and in full on
+    Data & Upload, so a mismatch is visible without hunting for it.
+    """
+    from ..core import segments
+    issues = segments.eos_consistency(ctx.fact)
+    total = sum(len(df) for df in issues.values())
+    target = st.sidebar if sidebar else st
+
+    target.markdown("### 🧪 Data consistency" if sidebar else "")
+    if not total:
+        target.caption("✅ Generation tags and EOS migration paths agree.")
+        return
+
+    target.warning(f"{fmt_int(total)} row(s) where the generation tag and the EOS "
+                   f"migration path disagree.")
+    for key, frame in issues.items():
+        label, explanation = _CONSISTENCY_LABELS[key]
+        if frame.empty:
+            continue
+        accounts = frame["tpid"].nunique() if "tpid" in frame.columns else len(frame)
+        with target.expander(f"{label} — {fmt_int(accounts)} account(s)"):
+            st.caption(explanation)
+            show_table(frame, height=min(320, 60 + 35 * min(len(frame), 8)))
+            st.download_button("⬇️ Export to CSV",
+                               frame.to_csv(index=False).encode("utf-8"),
+                               file_name=f"inconsistency-{key}.csv", mime="text/csv",
+                               key=f"consistency_{key}_{'sb' if sidebar else 'page'}")
