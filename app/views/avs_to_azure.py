@@ -27,9 +27,10 @@ def render() -> None:
             "every wave whose migration path moves <b>from AVS</b> to an Azure-native target"
     banner(f"<b>Scope:</b> {scope} (SQL DB/MI/IaaS, OSS DB, Azure VM, AKS, Oracle DB@Azure).")
 
+    date_filter = components.page_date_filter(
+        ctx, "a2a", "created_date", table=table, scope=SCOPE_FROM_AVS)
     filters, where = components.filter_sidebar(
-        ctx, ["region_geo", "migration_path", "azure_target", "eos_status"],
-        date_field="created_date", table=table, scope=SCOPE_FROM_AVS)
+        ctx, ["region_geo", "migration_path", "azure_target", "eos_status"], table=table, scope=SCOPE_FROM_AVS, date_filter=date_filter)
 
     con = ctx.con
     # The sidebar scope already constrains to AVS → Azure Native ("(From AVS)").

@@ -28,9 +28,11 @@ def render() -> None:
         components.banner_note("Customer mode: each account contributes once at its "
                                "<b>Wave-1</b> approval date.")
 
+    date_filter = components.page_date_filter(
+        ctx, "at", "approval_date", table=table, scope=SCOPE_PRIMARY)
     filters, where = components.filter_sidebar(
-        ctx, ["region_geo", "migration_path"], date_field=None,
-        table=table, scope=SCOPE_PRIMARY)
+        ctx, ["region_geo", "migration_path"], table=table, scope=SCOPE_PRIMARY,
+        date_filter=date_filter)
 
     con = ctx.con
     window = st.radio("Analysis window", ["Last 1 Year", "Last 2 Years", "Last 3 Years", "All"],

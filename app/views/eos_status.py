@@ -32,19 +32,21 @@ def render() -> None:
            "EOS status is derived from Current State, Milestone Status, Migration Status code "
            "and planned-end vs as-of date.")
 
+    date_filter = components.page_date_filter(
+        ctx, "eos", "planned_end_date", table=table, scope=None)
     filters, where = components.filter_sidebar(
-        ctx, ["region_geo", "eos_status", "migration_path"],
-        date_field="planned_end_date", table=table)
-    # Restrict the whole report to EOS Migration nominations.
-    where = analytics._where_and(where, '"is_av36_eos" = TRUE')
+        ctx, ["region_geo", "eos_status", "migration_path"], table=table, date_filter=date_filter)
+    # Restrict the report to the EOS Migration population — the same definition the
+    # EOS dashboards use, so the two never disagree.
+    where = analytics._where_and(where, '"is_eos_population" = TRUE')
 
     con = ctx.con
     n_av36 = analytics.total_rows(con, where)
     if n_av36 == 0:
         components.empty_state(
-            "No EOS Migration nominations in the current selection. (A nomination counts as "
-            "an EOS migration when its migration path, factory offering or linked offering "
-            "carries an AV36 / AV36P / AV52 / EOS / EGS / end-of-support marker.)")
+            "No EOS Migration nominations in the current selection. (An account is EOS "
+            "when any wave carries an AVS Migration - Gen1/Gen2 tag, or — untagged — its "
+            "migration path reads AV36/AV36P/AV52 - EOS.)")
         return
 
     # Status KPI tiles in canonical order

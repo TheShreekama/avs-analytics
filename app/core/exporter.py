@@ -22,7 +22,7 @@ from reportlab.platypus import (BaseDocTemplate, Frame, Image, PageBreak, PageTe
 
 from ..config import APP_NAME, APP_VERSION, PALETTE
 from ..ui import pdf_charts as pc
-from . import analytics, insights as insights_mod
+from . import analytics, segments, insights as insights_mod
 from .metrics import fmt_currency, fmt_int, headline_kpis
 
 _PRIMARY = colors.HexColor(PALETTE["primary"])
@@ -37,6 +37,8 @@ _SEV_COLOR = {"positive": colors.HexColor(PALETTE["good"]),
 
 # Section keys exposed on the Reports page.
 SECTION_LIBRARY = [
+    ("categories", "Migration category dashboards (EOS Gen-1/Gen-2, All AVS, Azure Native)"),
+    ("inconsistency", "Data inconsistency review"),
     ("overview", "Portfolio Overview (status, regions, delivery health)"),
     ("approved", "Nominations Approved (trend & regional)"),
     ("closed", "Nominations Closed (closure rate & aging)"),
@@ -266,6 +268,65 @@ def _sec_tables(con, where, ss) -> list:
     return out
 
 
+def _sec_categories(ctx, ss, categories, start=None, end=None) -> list:
+    """One block per selected migration category: headline metrics + monthly trend."""
+    from . import kpi as kpi_mod
+    story = [Paragraph("Migration Categories", ss["H1"])]
+    for category in categories:
+        pop = segments.population(ctx.fact, category)
+        label = segments.CATEGORY_LABELS.get(category, category)
+        story.append(Paragraph(label, ss["H2"]))
+        if pop.empty:
+            story.append(Paragraph("No nominations in this category.", ss["Muted"]))
+            continue
+        waves = kpi_mod.wave_index(pop)
+        rows = [
+            ["Metric", "Value"],
+            ["New engagements (unique TPIDs)",
+             fmt_int(kpi_mod.new_engagements(pop, start, end, firsts=waves.first).value)],
+            ["Migrations ended (unique TPIDs)",
+             fmt_int(kpi_mod.migration_ends(pop, start, end, lasts=waves.last).value)],
+            ["Hosts migrated (Total Cores)",
+             fmt_int(kpi_mod.hosts_migrated(pop, start, end).value)],
+            ["Nominations approved",
+             fmt_int(kpi_mod.nominations_approved(pop, start, end).value)],
+            ["Total ACR", fmt_currency(kpi_mod.current_acr(pop))],
+        ]
+        story += [_df_table(pd.DataFrame(rows[1:], columns=rows[0]), ss), Spacer(1, 0.3 * cm)]
+
+        trend, _ = kpi_mod.monthly_unique_tpids(pop, "approval_date", start, end,
+                                                firsts=waves.first)
+        if not trend.empty:
+            table = trend[["period", "Nominations", "Cumulative"]].rename(
+                columns={"period": "Month"})
+            story += [Paragraph("Nominations per month", ss["Body2"]),
+                      _df_table(table, ss), Spacer(1, 0.4 * cm)]
+    story.append(PageBreak())
+    return story
+
+
+def _sec_inconsistency(ctx, ss) -> list:
+    """Tag vs. EOS-path disagreements, with the offending accounts listed."""
+    issues = segments.eos_consistency(ctx.fact)
+    story = [Paragraph("Data Inconsistency Review", ss["H1"])]
+    labels = {"tagged_without_eos_path": "Tagged Gen-1/Gen-2, no EOS migration path",
+              "eos_path_without_tag": "EOS migration path, no generation tag"}
+    if not any(len(df) for df in issues.values()):
+        story += [Paragraph("No inconsistencies found — generation tags and EOS "
+                            "migration paths agree throughout.", ss["Body2"]), PageBreak()]
+        return story
+    for key, frame in issues.items():
+        story.append(Paragraph(f"{labels[key]} — {fmt_int(len(frame))} row(s)", ss["H2"]))
+        if frame.empty:
+            story.append(Paragraph("None.", ss["Muted"]))
+            continue
+        cols = [c for c in ("tpid", "customer_name", "phase", "migration_path", "tags")
+                if c in frame.columns]
+        story += [_df_table(frame[cols].head(25), ss), Spacer(1, 0.4 * cm)]
+    story.append(PageBreak())
+    return story
+
+
 _SECTION_FN = {
     "overview": _sec_overview, "approved": _sec_approved, "closed": _sec_closed,
     "eos": _sec_eos, "trends": _sec_trends, "avs_azure": _sec_avs_azure,
@@ -278,8 +339,16 @@ _SECTION_FN = {
 # --------------------------------------------------------------------------- #
 def build_report(ctx, where: str = "", scope_label: str = "All data",
                  sections: list[str] | None = None, table: str | None = None,
-                 unit_label: str = "Nominations") -> bytes:
-    """Build a PDF containing the selected sections (cover + summary always)."""
+                 unit_label: str = "Nominations", *, title: str = "AVS Migration Analytics",
+                 subtitle: str = "Executive Report", period_label: str = "",
+                 categories: list[str] | None = None,
+                 date_window: tuple | None = None) -> bytes:
+    """Build a PDF containing the selected sections (cover + summary always).
+
+    ``title`` / ``subtitle`` / ``period_label`` appear on the cover, ``categories``
+    chooses which migration dashboards the "categories" section renders, and
+    ``date_window`` is the (start, end) pair those metrics are measured over.
+    """
     if table:
         analytics.use_table(table)
     sections = sections or SECTION_KEYS
@@ -295,10 +364,13 @@ def build_report(ctx, where: str = "", scope_label: str = "All data",
     story: list = []
     # Cover
     story += [Spacer(1, 5 * cm),
-              Paragraph("AVS Migration Analytics", ss["CoverTitle"]),
-              Paragraph("Executive Report", ss["CoverSub"]),
+              Paragraph(title, ss["CoverTitle"]),
+              Paragraph(subtitle, ss["CoverSub"]),
               Spacer(1, 0.8 * cm),
-              Paragraph(f"Scope: {scope_label}", ss["CoverSub"]),
+              Paragraph(f"Scope: {scope_label}", ss["CoverSub"])]
+    if period_label:
+        story.append(Paragraph(f"Reporting period: {period_label}", ss["CoverSub"]))
+    story += [
               Paragraph(f"Dataset: {ctx.filename} &nbsp;·&nbsp; As-of "
                         f"{pd.Timestamp(ctx.as_of):%d %b %Y}", ss["CoverSub"]),
               Paragraph(f"Generated {datetime.now():%d %b %Y, %H:%M}", ss["CoverSub"]),
@@ -328,7 +400,15 @@ def build_report(ctx, where: str = "", scope_label: str = "All data",
 
     # Selected sections — each scoped to its reporting motion so "(From AVS)"
     # offerings only ever appear in the AVS → Azure Native section.
+    start, end = date_window or (None, None)
     for key in sections:
+        if key == "categories":
+            story += _sec_categories(ctx, ss, categories or list(segments.CATEGORY_LABELS),
+                                     start, end)
+            continue
+        if key == "inconsistency":
+            story += _sec_inconsistency(ctx, ss)
+            continue
         fn = _SECTION_FN.get(key)
         if fn:
             sec_scope = "from_avs" if key == "avs_azure" else "primary"

@@ -18,9 +18,11 @@ def render() -> None:
                 "Deterministic, rule-based insights derived directly from the data — no AI, no cloud.")
     components.data_quality_banner(ctx)
 
+    date_filter = components.page_date_filter(
+        ctx, "ins", "created_date", table=table, scope=SCOPE_PRIMARY)
     filters, where = components.filter_sidebar(
-        ctx, ["region_geo", "migration_path", "eos_status"], date_field="created_date",
-        table=table, scope=SCOPE_PRIMARY)
+        ctx, ["region_geo", "migration_path", "eos_status"],
+        table=table, scope=SCOPE_PRIMARY, date_filter=date_filter)
 
     fact = analytics.select_all(ctx.con, where)
     if fact.empty:

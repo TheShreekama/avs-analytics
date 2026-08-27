@@ -23,9 +23,10 @@ def render() -> None:
                            "AVS → Azure Native '(From AVS)' offerings are reported on their "
                            "own pages.")
 
+    date_filter = components.page_date_filter(
+        ctx, "ov", "created_date", table=table, scope=SCOPE_PRIMARY)
     filters, where = components.filter_sidebar(
-        ctx, ["region_geo", "migration_path", "migration_status_label", "eos_status"],
-        date_field="created_date", table=table, scope=SCOPE_PRIMARY)
+        ctx, ["region_geo", "migration_path", "migration_status_label", "eos_status"], table=table, scope=SCOPE_PRIMARY, date_filter=date_filter)
 
     fact = analytics.select_all(ctx.con, where)
     if fact.empty:

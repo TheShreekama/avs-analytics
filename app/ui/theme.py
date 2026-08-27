@@ -34,7 +34,15 @@ def inject_css() -> None:
             color: var(--ink);
         }}
         /* Hide default chrome for an app-like feel */
-        #MainMenu, header[data-testid="stHeader"], footer {{ visibility: hidden; }}
+        /* Hide the menu and footer, but NOT the header: it holds the control that
+           re-opens the sidebar once it has been collapsed. */
+        #MainMenu, footer {{ visibility: hidden; }}
+        header[data-testid="stHeader"] {{ background: transparent; box-shadow: none; }}
+        [data-testid="stSidebarCollapsedControl"],
+        [data-testid="stSidebarCollapseButton"] {{ visibility: visible; z-index: 1000; }}
+        [data-testid="stSidebarCollapsedControl"] button {{
+            background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+        }}
         .block-container {{ padding-top: 1.4rem; padding-bottom: 2rem; max-width: 1500px; }}
 
         /* Explanation marker: hover for the calculation behind a title */
