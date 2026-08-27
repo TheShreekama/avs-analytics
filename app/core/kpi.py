@@ -8,6 +8,11 @@ Every metric here follows the rules in the requirements document to the letter:
   over the qualifying wave records, each counted once.
 * **Migration completion always evaluates the latest wave** of a TPID.  A TPID
   with Wave 7 completed and Wave 8 outstanding is not a completed migration.
+* **On-Track** is read from the *Current State* column of the latest wave, not
+  inferred from "not finished": a blocked or waiting account is not on track.
+* **ACR claimed** is wave-level and period-bound: every wave whose *Actual End
+  Date* falls in the window contributes its ACR, so one account can claim in
+  several months.
 * **Cumulative** is the running total of the months actually displayed, never a
   separate population.
 
@@ -33,8 +38,16 @@ DRILLDOWN_COLUMNS = [
 
 COMPLETED_CODE = 7
 STATE_ON_TRACK = "On-Track"
-STATE_CLOSED = "Closed"
+STATE_COMPLETED = "Completed"
 STATE_CANCELLED = "Cancelled"
+STATE_OTHER = "Other"
+
+#: The only two states reported on the pipeline chart.  Cancelled accounts and
+#: accounts sitting in a blocked/waiting state are deliberately not shown there.
+REPORTED_STATES = (STATE_ON_TRACK, STATE_COMPLETED)
+
+#: "On Track", "On-Track", "on  track" — the Current State column is free text.
+_ON_TRACK_PATTERN = r"on\s*-?\s*track"
 
 
 @dataclass
@@ -124,8 +137,8 @@ def new_engagements(fact: pd.DataFrame, start=None, end=None,
     return Metric(len(hit), "customers", hit)
 
 
-def migration_ends(fact: pd.DataFrame, start=None, end=None,
-                   lasts: pd.DataFrame | None = None) -> Metric:
+def migrations_completed(fact: pd.DataFrame, start=None, end=None,
+                         lasts: pd.DataFrame | None = None) -> Metric:
     """Unique TPIDs whose **latest** wave is completed, dated by its actual end.
 
     A TPID whose last wave is still running is not counted, even when earlier
@@ -165,12 +178,32 @@ def hosts_migrated(fact: pd.DataFrame, start=None, end=None) -> Metric:
     return Metric(total, "hosts", rows)
 
 
-def nominations_approved(fact: pd.DataFrame, start=None, end=None) -> Metric:
-    """Nomination records approved in the period (wave-level, as nominated)."""
+def acr_claimed(fact: pd.DataFrame, start=None, end=None) -> Metric:
+    """ACR of every **wave** whose Actual End Date falls inside the period.
+
+    Claiming is wave-level, not account-level: if Waves 2 and 3 of one account
+    and Wave 5 of another ended inside the window, all three waves' ACR is
+    summed.  A wave that ended outside the window contributes nothing, even when
+    a sibling wave of the same account did end inside it.
+    """
     if fact.empty:
-        return Metric(0, "nominations")
-    rows = _dedupe_records(fact[in_window(fact["approval_date"], start, end)])
-    return Metric(len(rows), "nominations", rows)
+        return Metric(0.0, "ACR")
+    rows = _dedupe_records(fact[in_window(fact["actual_end_date"], start, end)])
+    total = float(pd.to_numeric(rows.get("total_acr"), errors="coerce").sum())
+    return Metric(total, "ACR", rows)
+
+
+def on_track_accounts(fact: pd.DataFrame,
+                      lasts: pd.DataFrame | None = None) -> Metric:
+    """Accounts whose **latest** wave reads On-Track in the Current State column.
+
+    Independent of the reporting period: this is where the pipeline stands now.
+    """
+    if fact.empty:
+        return Metric(0, "customers")
+    lasts = latest_wave(fact) if lasts is None else lasts
+    rows = lasts[state_of(lasts) == STATE_ON_TRACK]
+    return Metric(len(rows), "customers", rows)
 
 
 def _dedupe_records(df: pd.DataFrame) -> pd.DataFrame:
@@ -204,23 +237,17 @@ def monthly_unique_tpids(fact: pd.DataFrame, date_col: str = "approval_date",
     return _finish_trend(summary, "Nominations"), rows
 
 
-def monthly_acr(fact: pd.DataFrame, date_col: str = "approval_date",
-                start=None, end=None, firsts: pd.DataFrame | None = None
-                ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """ACR per month.  Each TPID's ACR (summed over its waves) lands in one month."""
-    if fact.empty:
-        return _empty_trend("ACR"), fact
-    df = _ordered(fact)
-    acr = (df.assign(_acr=pd.to_numeric(df.get("total_acr"), errors="coerce"))
-             .groupby("tpid_key", as_index=False)
-             .agg(total_acr=("_acr", "sum")))
-    anchor = (first_wave(fact) if firsts is None else firsts)[
-        ["tpid_key", date_col, "customer_name", "tpid", "generation"]]
-    rows = anchor.merge(acr, on="tpid_key", how="left")
-    rows = rows[in_window(rows[date_col], start, end)].copy()
-    rows["month"] = _month(rows[date_col])
-    summary = rows.groupby("month", as_index=False).agg(value=("total_acr", "sum"))
-    return _finish_trend(summary, "ACR"), rows
+def monthly_acr_claimed(fact: pd.DataFrame, start=None, end=None
+                        ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """ACR claimed per month, by the **Actual End Date** of each qualifying wave."""
+    metric = acr_claimed(fact, start, end)
+    rows = metric.records.copy()
+    if rows.empty:
+        return _empty_trend("ACR Claimed"), rows
+    rows["month"] = _month(rows["actual_end_date"])
+    rows["_acr"] = pd.to_numeric(rows.get("total_acr"), errors="coerce")
+    summary = rows.groupby("month", as_index=False).agg(value=("_acr", "sum"))
+    return _finish_trend(summary, "ACR Claimed"), rows
 
 
 def monthly_hosts(fact: pd.DataFrame, start=None, end=None) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -237,17 +264,17 @@ def monthly_hosts(fact: pd.DataFrame, start=None, end=None) -> tuple[pd.DataFram
     return _finish_trend(summary, "Hosts"), rows
 
 
-def monthly_migration_ends(fact: pd.DataFrame, start=None, end=None,
-                           lasts: pd.DataFrame | None = None
-                           ) -> tuple[pd.DataFrame, pd.DataFrame]:
+def monthly_migrations_completed(fact: pd.DataFrame, start=None, end=None,
+                                 lasts: pd.DataFrame | None = None
+                                 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Completed migrations per month (unique TPIDs, latest wave completed)."""
-    ends = migration_ends(fact, start, end, lasts)
-    rows = ends.records.copy()
+    done = migrations_completed(fact, start, end, lasts)
+    rows = done.records.copy()
     if rows.empty:
-        return _empty_trend("Migrations Ended"), rows
+        return _empty_trend("Migrations Completed"), rows
     rows["month"] = _month(rows["actual_end_date"])
     summary = rows.groupby("month", as_index=False).agg(value=("tpid_key", "nunique"))
-    return _finish_trend(summary, "Migrations Ended"), rows
+    return _finish_trend(summary, "Migrations Completed"), rows
 
 
 def _empty_trend(label: str) -> pd.DataFrame:
@@ -271,25 +298,59 @@ def _finish_trend(summary: pd.DataFrame, label: str) -> pd.DataFrame:
 # Current pipeline
 # --------------------------------------------------------------------------- #
 def state_of(df: pd.DataFrame) -> pd.Series:
-    """On-Track / Closed / Cancelled for one-row-per-TPID latest-wave records."""
+    """Current state of one-row-per-TPID latest-wave records.
+
+    Read from the **Current State** column of that latest wave, in this order:
+
+    1. **Completed** — the wave's Migration Status is "7 - Completed".
+    2. **Cancelled** — the wave resolved to a cancelled/archived status.
+    3. **On-Track** — Current State reads "On Track"/"On-Track".
+    4. **Other** — anything else Current State says: "Blocked - Customer",
+       "Waiting action on follow up date", and so on.  These are deliberately
+       *not* on track, which is why the state chart shows only (1) and (3).
+
+    A row whose Current State is blank falls back to "still in flight" (neither
+    completed nor cancelled ⇒ On-Track), so a file that never got the column
+    mapped still reports a pipeline instead of an empty one.
+    """
     if df.empty:
         return pd.Series(dtype="object")
-    closed = is_completed(df)
-    cancelled = df.get("eos_status", pd.Series("", index=df.index)).eq("Cancelled")
-    return pd.Series(
-        [STATE_CLOSED if c else (STATE_CANCELLED if x else STATE_ON_TRACK)
-         for c, x in zip(closed, cancelled.fillna(False))], index=df.index)
+    completed = is_completed(df)
+    cancelled = df.get("eos_status", pd.Series("", index=df.index)) \
+        .eq(STATE_CANCELLED).fillna(False)
+
+    raw = (df["current_state"].astype("string").str.strip()
+           if "current_state" in df.columns
+           else pd.Series(pd.NA, index=df.index, dtype="string"))
+    unstated = raw.isna() | raw.eq("")
+    on_track = raw.str.contains(_ON_TRACK_PATTERN, case=False, na=False, regex=True)
+
+    out = pd.Series(STATE_OTHER, index=df.index, dtype="object")
+    out[on_track | (unstated & ~completed & ~cancelled)] = STATE_ON_TRACK
+    out[cancelled] = STATE_CANCELLED
+    out[completed] = STATE_COMPLETED
+    return out
 
 
-def by_state(fact: pd.DataFrame,
-             lasts: pd.DataFrame | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Account count and ACR by current state, from each TPID's latest wave."""
+def by_state(fact: pd.DataFrame, lasts: pd.DataFrame | None = None,
+             only: tuple[str, ...] | None = REPORTED_STATES
+             ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Account count and ACR by current state, from each TPID's latest wave.
+
+    ``only`` restricts both the summary and the drill-down rows to the states
+    worth reporting — On-Track and Completed — so cancelled, blocked and waiting
+    accounts do not pad the chart.  Pass ``only=None`` for every state.
+    """
     if lasts is None:
         lasts = latest_wave(fact) if not fact.empty else fact
     if lasts.empty:
         return pd.DataFrame(columns=["category", "count", "acr"]), lasts
     rows = lasts.copy()
     rows["state"] = state_of(rows)
+    if only:
+        rows = rows[rows["state"].isin(only)]
+    if rows.empty:
+        return pd.DataFrame(columns=["category", "count", "acr"]), rows
     rows["_acr"] = pd.to_numeric(rows.get("total_acr"), errors="coerce")
     summary = (rows.groupby("state", as_index=False)
                    .agg(count=("tpid_key", "nunique"), acr=("_acr", "sum"))
@@ -318,14 +379,6 @@ def on_track_by_stage(fact: pd.DataFrame,
                    .rename(columns={"stage": "category"})
                    .sort_values("count", ascending=False))
     return summary.reset_index(drop=True), rows
-
-
-def current_acr(fact: pd.DataFrame) -> float:
-    """Total ACR of the population, each TPID's waves summed once."""
-    if fact.empty:
-        return 0.0
-    acr = pd.to_numeric(fact.get("total_acr"), errors="coerce")
-    return float(acr.sum())
 
 
 # --------------------------------------------------------------------------- #

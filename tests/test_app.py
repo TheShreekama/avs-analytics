@@ -26,7 +26,7 @@ PAGES = [
     # Category dashboards (one module, one entry point per migration category).
     "category_dashboard.eos_all",
     "category_dashboard.eos_gen1", "category_dashboard.eos_gen2",
-    "category_dashboard.eos_unclassified", "category_dashboard.all_avs",
+    "category_dashboard.all_avs",
     "category_dashboard.avs_native",
 ]
 
@@ -37,12 +37,17 @@ def _render(page: str, mode: str) -> AppTest:
     at = AppTest.from_file(_HARNESS, default_timeout=60)
     at.session_state["count_mode"] = mode
     at.run()
-    # Widen any date-range preset to "All time" so charts/tables populate, then re-run.
+    # Widen every date preset to "All time" so the populated code paths actually
+    # execute.  Reports carry their own period selector on the page ("<date field>
+    # — reporting period"); the sidebar carries the global "Date range" they
+    # default to, so both have to be widened.
     changed = False
     for sb in at.selectbox:
-        if sb.label and sb.label.endswith("range"):
-            sb.set_value("All time")
-            changed = True
+        label = (sb.label or "").lower()
+        if label.endswith("range") or "reporting period" in label:
+            if "All time" in list(sb.options):
+                sb.set_value("All time")
+                changed = True
     if changed:
         at.run()
     return at
@@ -143,3 +148,41 @@ def test_every_report_offers_a_reporting_period(page):
     # ...and no page hides a second date control in the sidebar.
     assert not [s for s in at.sidebar.selectbox if (s.label or "").endswith("range")
                 and s.label != "Date range"]
+
+
+# Status Reports must let a reader get from any chart to the records behind it.
+_STATUS_REPORTS = ["accounts_status", "approved", "closed", "eos_status",
+                   "avs_native_status"]
+
+
+@pytest.mark.parametrize("page", _STATUS_REPORTS)
+def test_status_reports_expose_their_underlying_data(page):
+    """Every Status Report offers the records behind its charts, exportable."""
+    at = _render(page, "Customer (deduplicated)")
+    assert not at.exception, f"{page} raised: {at.exception}"
+    # Each chart (or pair of charts) carries a panel holding the rows it was drawn
+    # from.  Panels are titled "Underlying …" and every one exports to CSV.
+    panels = [e.label for e in at.expander if "nderlying" in (e.label or "")]
+    assert len(panels) >= 2, \
+        f"{page} has too few underlying-data panels: {[e.label for e in at.expander]}"
+    assert all("0 rows" not in label for label in panels), \
+        f"{page} has an empty underlying-data panel: {panels}"
+
+
+def test_sidebar_no_longer_duplicates_the_inconsistency_report():
+    """Data Inconsistency lives on its own page; the sidebar must not repeat it."""
+    at = AppTest.from_file(_HOME, default_timeout=120)
+    at.run()
+    assert not at.exception, f"app failed to boot: {at.exception}"
+    headings = " ".join(m.value for m in at.sidebar.markdown)
+    assert "Data consistency" not in headings, \
+        "the sidebar still renders the inconsistency panel"
+    assert not [e for e in at.sidebar.expander if "no EOS path" in (e.label or "")]
+
+
+def test_navigation_drops_the_unclassified_category_page():
+    """EOS accounts with no generation tag are reported, not given a page."""
+    from app.core import segments
+    assert segments.CAT_EOS_UNCLASSIFIED not in segments.CATEGORY_LABELS
+    assert not hasattr(__import__("app.views.category_dashboard", fromlist=["x"]),
+                       "eos_unclassified")

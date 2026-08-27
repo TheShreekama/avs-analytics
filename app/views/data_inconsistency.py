@@ -23,8 +23,9 @@ _CHECK_HELP = {
     ),
     "eos_path_without_tag": (
         "Waves on the AV36/AV36P/AV52 - EOS migration path whose account carries no "
-        "generation tag on any wave. In scope through the path, but no generation "
-        "can be reported — they appear under 'EOS Migration — No generation tag'."
+        "generation tag on any wave. In scope through the path — they still count "
+        "on the EOS Migration dashboard — but no generation can be reported, so they "
+        "are never folded into Gen-1 or Gen-2. Add the tag at source to fix it."
     ),
     "bad_date": (
         "Values in a date column that could not be read as a date. Excel serial "
@@ -51,6 +52,13 @@ _CHECK_HELP = {
         "Rows with no TPID. TPID is the identifier every count and join relies on, "
         "so these rows fall back to the account name — which differs between "
         "worksheets and can split or merge accounts."
+    ),
+    "state_vs_status": (
+        "Waves whose Current State and Migration Status contradict each other — "
+        "Current State reads 'Done' while Migration Status is not '7 - Completed', "
+        "or the reverse. These accounts appear in NEITHER slice of 'Nominations by "
+        "state': they are not completed by status, and 'Done' is not On-Track. Fix "
+        "the disagreeing column at source and they land in the right slice."
     ),
     "duplicate_task": (
         "The same Task ID appearing on more than one row. Hosts and ACR are summed "
@@ -136,6 +144,7 @@ _LABELS = {
     "dirty_region": "WW Region needed cleaning",
     "missing_tpid": "Rows with no TPID",
     "duplicate_task": "Duplicate Task IDs",
+    "state_vs_status": "Current State contradicts Migration Status",
 }
 
 
@@ -171,6 +180,18 @@ def _collect(ctx, fact: pd.DataFrame, scoped: pd.DataFrame) -> list[tuple[str, p
         for key, needle in flags.items():
             hit = scoped[text.str.contains(needle, case=False, na=False)]
             checks.append((_LABELS[key], hit[cols]))
+
+    # Current State vs. Migration Status — the pair that decides which slice of the
+    # state chart an account lands in, so a disagreement is worth naming.
+    if {"current_state", "migration_status_label"} <= set(scoped.columns):
+        state = scoped["current_state"].astype("string").str.strip().str.lower().fillna("")
+        says_done = state.str.contains("done|complete", na=False, regex=True)
+        is_done = kpi.is_completed(scoped)
+        clash = scoped[(says_done & ~is_done) | (~says_done & is_done & state.ne(""))]
+        checks.append((_LABELS["state_vs_status"],
+                       clash[[c for c in (cols + ["current_state",
+                                                  "migration_status_label"])
+                              if c in clash.columns]]))
 
     # Identifiers.
     if "tpid" in scoped.columns:

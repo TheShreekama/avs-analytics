@@ -6,6 +6,9 @@ services).  These nominations are intentionally **excluded from every other
 status report** so the primary "AVS Migration Nominations" reporting stays
 focused on onboarding to AVS.  Trend analysis for these lives on the
 **AVS → Azure Native Migration Trends** page.
+
+Every chart opens the records behind it: click an offering, a target or a status
+and those nominations appear underneath, with a CSV export.
 """
 from __future__ import annotations
 
@@ -15,7 +18,7 @@ from app import state
 from app.config import EOS_STATUS_ORDER, SCOPE_FROM_AVS
 from app.core import analytics
 from app.core.metrics import fmt_currency, fmt_int
-from app.ui import charts, components
+from app.ui import charts, components, drilldown
 from app.ui.theme import banner, page_header, section
 
 _TRACK = "migration_path"   # full offering names, e.g. "SQL Server MI Migration (From AVS)"
@@ -61,47 +64,77 @@ def render() -> None:
     ])
     st.write("")
 
+    # One fetch of the selected records; every drill-down below reads from it.
+    records = analytics.select_all(con, where)
+
     section("By offering & target")
+    st.caption("Click a bar or a slice to open the nominations behind it.")
+    trk = analytics.count_by(con, where, _TRACK)
+    tgt = analytics.count_by(con, where, "azure_target")
     c1, c2 = st.columns(2)
     with c1:
-        trk = analytics.count_by(con, where, _TRACK)
-        st.plotly_chart(charts.bar(trk, "category", "count", horizontal=True,
-                                   title="Nominations by migration path (offering)"),
-                        width="stretch")
+        picked_path = drilldown.selectable_chart(
+            charts.bar(trk, "category", "count", horizontal=True,
+                       title="Nominations by migration path (offering)"), key="ans_path")
     with c2:
-        tgt = analytics.count_by(con, where, "azure_target")
-        st.plotly_chart(charts.donut(tgt, "category", "count",
-                                     title="Azure-native targets"), width="stretch")
+        picked_target = drilldown.selectable_chart(
+            charts.donut(tgt, "category", "count", title="Azure-native targets"),
+            key="ans_target")
+    drilldown.drilldown(records, _TRACK, picked_path, key="ans_path_rows",
+                        what="nominations by offering", max_rows=500)
+    drilldown.drilldown(records, "azure_target", picked_target, key="ans_target_rows",
+                        what="nominations by target", max_rows=500)
 
     section("Operational status")
     c3, c4 = st.columns(2)
+    pivot = analytics.crosstab(con, where, "eos_status", "region_geo")
+    heat = analytics.crosstab(con, where, _TRACK, "eos_status")
     with c3:
-        # x-axis = operational status; bars stacked by region.
-        pivot = analytics.crosstab(con, where, "eos_status", "region_geo")
         if not pivot.empty:
             order = [s for s in EOS_STATUS_ORDER if s in pivot.index]
             st.plotly_chart(charts.stacked_bar(pivot.reindex(order),
                                                title="Operational status by region"),
                             width="stretch")
     with c4:
-        # offering (full name) × status heatmap
-        heat = analytics.crosstab(con, where, _TRACK, "eos_status")
         if not heat.empty:
             cols = [c for c in EOS_STATUS_ORDER if c in heat.columns]
             st.plotly_chart(charts.heatmap(heat[cols] if cols else heat,
                                            title="Migration path × status heatmap"),
                             width="stretch")
+    if not pivot.empty:
+        drilldown.data_expander(
+            pivot.reset_index().rename(columns={"row": "Operational Status"}),
+            "ans_status_table", label="Underlying data — status × region")
+    if not heat.empty:
+        drilldown.data_expander(
+            heat.reset_index().rename(columns={"row": "Migration Path"}),
+            "ans_heat_table", label="Underlying data — migration path × status")
 
     section("Migration status pipeline")
-    pipe = analytics.crosstab(con, where, "migration_status_label", "region_geo")
-    if not pipe.empty:
-        st.plotly_chart(charts.stacked_bar(pipe, title="Migration status by region"),
-                        width="stretch")
+    st.caption("Click a bar to open the nominations at that stage.")
+    stages = analytics.count_by(con, where, "migration_status_label")
+    if not stages.empty:
+        pipe = analytics.crosstab(con, where, "migration_status_label", "region_geo")
+        fig = charts.stacked_bar(pipe, title="Migration status by region")
+        fig.update_xaxes(type="category")
+        drilldown.chart_with_drilldown(
+            fig, records, "migration_status_label", key="ans_pipe",
+            what="nominations", max_rows=500,
+            summary=stages.rename(columns={"category": "Migration Status",
+                                           "count": "Nominations"}),
+            summary_bucket="Migration Status")
 
     section("Nomination records")
+    st.caption("Every record in the current selection.")
     cols = ["task_id", "customer_name", "region_geo", "migration_path", "azure_target",
             "migration_status_label", "eos_status", "total_acr", "created_date"]
-    cols = [c for c in cols if c in ctx.fact.columns]
-    rows = analytics.fetch_rows(con, where, cols, "created_date", True, 500)
-    components.show_table(rows, height=420)
-    st.caption(f"Showing up to 500 of {fmt_int(total)} records.")
+    cols = [c for c in cols if c in records.columns]
+    frame = records[cols].sort_values("created_date", ascending=False)
+    components.show_table(frame.head(500), height=420)
+    if len(frame) > 500:
+        st.caption(f"Showing the first 500 of {fmt_int(len(frame))} records — "
+                   "the CSV export has them all.")
+    st.download_button("⬇️ Export all records to CSV",
+                       frame.to_csv(index=False).encode("utf-8"),
+                       file_name="avs-native-records.csv", mime="text/csv",
+                       key="ans_records_csv")

@@ -41,7 +41,12 @@ def render() -> None:
          "sub": f'{k["closure_rate"]:.0f}% closure rate', "tone": "good"},
         {"label": "Open / In-flight", "value": fmt_int(k["open"]),
          "sub": f'{k["median_age_days"]:.0f}d median age', "tone": "warn"},
-        {"label": "Total ACR", "value": fmt_currency(k["total_acr"]), "sub": f'{fmt_int(k["total_cores"])} cores'},
+        {"label": "ACR in View", "value": fmt_currency(k["total_acr"]),
+         "sub": f'{fmt_int(k["total_cores"])} cores',
+         "help": "Total ACR of every record in the current selection, whatever "
+                 "stage it is at. This is NOT ACR Claimed: the category dashboards "
+                 "report ACR claimed, which counts only the waves whose Actual End "
+                 "Date falls inside the reporting period."},
         {"label": "Data Quality", "value": fmt_int(k["dq_rows"]),
          "sub": "rows flagged", "tone": "bad" if k["dq_rows"] else "good"},
     ])

@@ -181,6 +181,24 @@ def select_all(con, where: str = "", table: str | None = None) -> pd.DataFrame:
 # --------------------------------------------------------------------------- #
 # Report-specific builders
 # --------------------------------------------------------------------------- #
+#: Operational age bands, oldest last.  ``aging_buckets`` (SQL) and
+#: ``aging_bucket`` (pandas) must always agree, so both read this list.
+AGING_BUCKETS = ["0-30 days", "31-60 days", "61-90 days", "91-180 days",
+                 "180+ days", "Unknown"]
+
+
+def aging_bucket(days) -> pd.Series:
+    """``aging_buckets`` applied to a pandas column, so a chart can drill down."""
+    d = pd.to_numeric(days, errors="coerce")
+    out = pd.Series("180+ days", index=d.index, dtype="object")
+    out[d <= 180] = "91-180 days"
+    out[d <= 90] = "61-90 days"
+    out[d <= 60] = "31-60 days"
+    out[d <= 30] = "0-30 days"
+    out[d.isna()] = "Unknown"
+    return out
+
+
 def aging_buckets(con, where: str, only_open: bool = True, table: str | None = None) -> pd.DataFrame:
     """Distribution of open-item age into operational buckets."""
     extra = '"is_open" = TRUE' if only_open else ""
@@ -199,8 +217,7 @@ def aging_buckets(con, where: str, only_open: bool = True, table: str | None = N
         ) GROUP BY 1
     """
     df = con.execute(sql).fetchdf()
-    order = ['0-30 days', '31-60 days', '61-90 days', '91-180 days', '180+ days', 'Unknown']
-    df["bucket"] = pd.Categorical(df["bucket"], categories=order, ordered=True)
+    df["bucket"] = pd.Categorical(df["bucket"], categories=AGING_BUCKETS, ordered=True)
     return df.sort_values("bucket").reset_index(drop=True)
 
 

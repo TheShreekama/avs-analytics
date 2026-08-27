@@ -50,7 +50,11 @@ def render() -> None:
         "done/completed.\n"
         "    - **ACR / cores = summed** across the customer's waves.\n"
         "- **Nomination (wave-level)** — every wave/row counts (raw detail).\n\n"
-        "Deduplication is by customer name (case-insensitive).")
+        "**Deduplication keys on TPID**, never on the account name — the same account "
+        "is spelled differently between worksheets and source systems. A row with no "
+        "TPID at all falls back to its account name so it still rolls up to something "
+        "rather than collapsing into every other untitled row; those rows are listed "
+        "on **Data → Data Inconsistency**.")
 
     # ------------------------------------------------------------------ #
     section("Region")
@@ -120,8 +124,8 @@ def render() -> None:
         "Migration** account is included here too, whatever its own path reads.\n"
         "- **AVS → Azure Native** — the '(From AVS)' offerings, moving workloads off "
         "AVS onto Azure-native services.\n"
-        "- **EOS Migration — Gen-1 / Gen-2 / Unclassified** — the EOS population, "
-        "split by generation.\n\n"
+        "- **EOS Migration** — every EOS account in one view. **Gen-1** and "
+        "**Gen-2** are subsets of it, one page each.\n\n"
         "**EOS population.** An account is an **EOS Migration** account when ANY of "
         "its waves carries an **\"AVS Migration - Gen1\"** or **\"AVS Migration - "
         "Gen2\"** tag — one tagged wave brings the whole account into scope, and the "
@@ -129,11 +133,11 @@ def render() -> None:
         "falls back to deciding it: a **Primary Migration Path** (or Factory / Linked "
         "Offering) reading **AV36/AV36P/AV52 - EOS** puts the account in scope with no "
         "generation. Everything comes from the single nominations export.\n\n"
-        "**Tag vs. path consistency.** The sidebar (and *Data & Upload*) lists the two "
-        "ways a file can disagree with itself: accounts **tagged Gen-1/Gen-2 with no EOS "
-        "path** on any wave, and **waves on the EOS path whose account has no tag**. "
-        "Both are still in EOS scope — the panel exists so the mismatch is visible "
-        "rather than silent.\n\n"
+        "**Tag vs. path consistency.** A file can disagree with itself two ways: "
+        "accounts **tagged Gen-1/Gen-2 with no EOS path** on any wave, and **waves on "
+        "the EOS path whose account carries no tag**. Both are still in EOS scope — "
+        "they are reported, with the offending records, on **Data → Data "
+        "Inconsistency**, which is the single place that lists them.\n\n"
         "**Generation is decided per TPID, across all of its waves:**\n"
         "1. Any wave tagged **\"AVS Migration - Gen1\"** → the account is **Gen-1**; "
         "**\"AVS Migration - Gen2\"** → **Gen-2**. Gen-1 wins if both appear on "
@@ -141,34 +145,99 @@ def render() -> None:
         "(*\"Qualify and AccelerateAVS Migration - Gen1\"*), so the marker is matched "
         "inside the cell regardless of spacing, dashes or neighbouring tags.\n"
         "2. No generation tag on any wave → no generation. If the account is in EOS "
-        "scope through its migration path (*AV36/AV36P/AV52 - EOS*) it is listed on "
-        "**EOS Migration — No generation tag**, never folded into a generation.")
+        "scope through its migration path (*AV36/AV36P/AV52 - EOS*) it still counts in "
+        "**EOS Migration**, but is **never folded into Gen-1 or Gen-2** — the "
+        "generation split on that page names it separately, and the records are listed "
+        "on **Data → Data Inconsistency** so the missing tag can be fixed at source.")
 
     # ------------------------------------------------------------------ #
-    section("Metric rules (unique TPIDs vs. hosts)")
+    section("Metric rules (unique TPIDs vs. records)")
     st.markdown(
         "**TPID is the authoritative identifier** for every join, lookup, "
         "classification and count. Account names differ between worksheets and "
         "source systems, so they are never used for matching.\n\n"
-        "| Metric | Rule | Unit |\n"
-        "| --- | --- | --- |\n"
-        "| New Engagements | Unique TPIDs whose **Wave-1** nomination approval date "
-        "falls in the period | Customers |\n"
-        "| Migration Ends | Unique TPIDs whose **latest** wave is `7 - Completed`, "
-        "dated by its Actual End Date | Customers |\n"
-        "| Hosts Migrated | **Sum of Total Cores** over completed wave records — "
-        "*not* a TPID count, each source record counted once | Hosts |\n"
-        "| Nominations Approved | Nomination records approved in the period | "
-        "Nominations |\n"
-        "| Nomination Count (MoM) | Unique TPIDs per month, each counted once | "
-        "Customers |\n"
-        "| ACR (MoM) | Each TPID's ACR summed across its waves, landing in one month "
-        "| Currency |\n\n"
-        "A TPID whose **Wave 7 is completed but Wave 8 is not** is *not* a completed "
-        "migration — completion always evaluates the latest wave.\n\n"
+        "| Metric | Rule | Unit | Dated by |\n"
+        "| --- | --- | --- | --- |\n"
+        "| New Engagements | Unique TPIDs whose **Wave-1** row (lowest wave number) "
+        "was approved inside the period | Customers | Nom. Approval Date |\n"
+        "| Migrations Completed | Unique TPIDs whose **latest** wave is "
+        "`7 - Completed` | Customers | Actual End Date |\n"
+        "| Hosts / Cores Migrated | **Sum of Total Cores** over `7 - Completed` wave "
+        "records — *not* a TPID count; each source record counted once | Hosts (Cores "
+        "on AVS → Azure Native) | Actual End Date |\n"
+        "| On-Track Accounts | Accounts whose **latest wave** reads *On Track* in the "
+        "**Current State** column | Customers | *snapshot — not period-bound* |\n"
+        "| ACR Claimed | **Sum of Total ACR over every wave** whose Actual End Date "
+        "falls in the period | Currency | Actual End Date |\n"
+        "| Nomination Count (MoM) | Unique TPIDs per month, each counted once, placed "
+        "in the month of its Wave-1 date | Customers | Wave-1 approval or created "
+        "date (your choice) |\n"
+        "| ACR Claimed (MoM) | The same claiming waves, split by the month each one "
+        "ended | Currency | Actual End Date |\n\n"
+        "**Completion always evaluates the latest wave.** A TPID whose Wave 7 is "
+        "completed but whose Wave 8 is still running is *not* a completed migration.\n\n"
+        "**ACR Claimed is wave-level, not account-level.** If Waves 2 and 3 of one "
+        "account and Wave 5 of another ended inside the window, all three waves' ACR "
+        "is summed. A wave that ended outside the window contributes nothing, even "
+        "when a sibling wave of the same account ended inside it; a wave with no "
+        "Actual End Date has not claimed and never counts. Across a multi-month "
+        "period the trend chart splits that same total by the month each wave ended, "
+        "so the months add back up to the tile.\n\n"
         "**Cumulative** is the final column of every trend table and is the running "
         "total of the months displayed, computed from the same population as the "
-        "monthly values.")
+        "monthly values.\n\n"
+        "Money is shown as **$1.2M / $840.0K** wherever it appears — tiles, trend "
+        "tables, drill-downs and detailed data alike.")
+
+    # ------------------------------------------------------------------ #
+    section("Current state & the pipeline chart")
+    st.markdown(
+        "**On-Track is read from the Current State column** of the account's latest "
+        "wave — it is not inferred from \"not finished yet\". The precedence, first "
+        "match winning:\n\n"
+        "1. **Completed** — that wave's Migration Status is `7 - Completed`.\n"
+        "2. **Cancelled** — the wave resolved to a cancelled/archived status.\n"
+        "3. **On-Track** — Current State reads *On Track* / *On-Track*.\n"
+        "4. **Other** — whatever else Current State says: *Blocked - Customer*, "
+        "*Blocked - Account team*, *Waiting action on follow up date*. These are "
+        "unfinished but **not on track**, and are counted in neither.\n\n"
+        "**Nominations by state shows only On-Track and Completed.** Cancelled, "
+        "blocked and waiting accounts are deliberately left out, so the slices will "
+        "**not** add up to every account in the category — the chart answers \"how "
+        "much is live, how much is done\", not \"where is everything\". The full "
+        "breakdown is always available in **Detailed data** at the bottom of each "
+        "dashboard, grouped by Current State.\n\n"
+        "*Fallback:* where Current State is blank, an account that is neither "
+        "completed nor cancelled falls back to On-Track, so an unmapped column cannot "
+        "silently empty the pipeline. **On-track by stage** then groups those same "
+        "accounts by the Migration Status label of their latest wave.\n\n"
+        "*When the two columns disagree* — Current State says *Done* but Migration "
+        "Status is not `7 - Completed` — the account is neither Completed nor "
+        "On-Track and appears in neither slice. That is not a silent loss: those "
+        "records are listed on **Data → Data Inconsistency** under *Current State "
+        "contradicts Migration Status*, so the disagreeing column can be fixed at "
+        "source.\n\n"
+        "Note that `eos_status` (the section below) is a *different*, derived "
+        "taxonomy used by the Status Reports; the two are not interchangeable.")
+
+    # ------------------------------------------------------------------ #
+    section("Drill-down — every number opens its records")
+    st.markdown(
+        "No number on this dashboard is a dead end. Each metric is computed together "
+        "with the rows that produced it, and those exact rows — never a recomputed "
+        "lookalike — are what a drill-down shows, so a table can never disagree with "
+        "the chart above it.\n\n"
+        "- **Charts** are selectable: click a bar, slice, point or month and the "
+        "records behind it open underneath.\n"
+        "- **Summary tables** select the same buckets: clicking the June row does what "
+        "clicking the June bar does.\n"
+        "- **Cross-tabs and heatmaps** have no single record-level bucket to click, so "
+        "they expose the table they were drawn from instead.\n"
+        "- **Every panel exports to CSV**, and an export always contains the whole "
+        "selection even when the on-screen table is capped for responsiveness.\n\n"
+        "Chart labels are drawn on a **category axis** so a click returns the label "
+        "exactly as written — otherwise a month written *2026-06* comes back as "
+        "*2026-06-01* and matches nothing.")
 
     # ------------------------------------------------------------------ #
     section("Date ranges & time windows")
@@ -241,7 +310,14 @@ def render() -> None:
         "numeric-prefixed regions, currency values contaminating count columns, dates "
         "landing in numeric columns, unparseable dates, approval-before-creation, "
         "missing creation dates, and invalid customer segments. Flagged values are "
-        "**nulled rather than allowed to corrupt metrics**.")
+        "**nulled rather than allowed to corrupt metrics**.\n\n"
+        "**Data → Data Inconsistency** is the report that lists them: every check with "
+        "its count, the offending records and a CSV export, over the whole file — "
+        "generation tag vs. EOS path (both directions), **Current State contradicting "
+        "Migration Status**, unreadable dates, dates out of order, invalid Customer "
+        "Segment, non-numeric values in numeric columns, regions needing cleaning, "
+        "rows with no TPID and duplicate Task IDs. It is the single home for that "
+        "detail; other pages only ever say whether there is anything to look at.")
 
     # ------------------------------------------------------------------ #
     section("Charts")
