@@ -22,6 +22,7 @@ PAGES = [
     "overview", "accounts_status", "approved", "closed", "eos_status",
     "nomination_trends", "approved_trends", "avs_to_azure", "avs_native_status",
     "insights_page", "methodology", "reports", "data_upload", "column_mapping",
+    "data_inconsistency",
     # Category dashboards (one module, one entry point per migration category).
     "category_dashboard.eos_all",
     "category_dashboard.eos_gen1", "category_dashboard.eos_gen2",
@@ -83,7 +84,8 @@ def test_page_renders_without_error(page, mode):
 # Regression: the default date preset used to be a one-week window, which left
 # almost every page showing "No records match the current filters" on first open.
 _REPORT_PAGES = [p for p in PAGES
-                 if p not in ("methodology", "data_upload", "column_mapping")
+                 if p not in ("methodology", "data_upload", "column_mapping",
+                              "data_inconsistency")
                  and not p.startswith("category_dashboard")]
 
 
@@ -127,3 +129,17 @@ def test_titles_carry_an_explanation(page):
     marked = [m.value for m in at.markdown if "avs-info" in m.value]
     assert len(marked) >= 5, f"{page} has too few explained titles: {len(marked)}"
     assert any('title="' in m for m in marked)
+
+
+@pytest.mark.parametrize("page", ["overview", "closed", "insights_page", "reports",
+                                  "data_inconsistency", "approved_trends"])
+def test_every_report_offers_a_reporting_period(page):
+    """The date range is chosen on the page, not hidden in the sidebar."""
+    at = _render_default(page, "Customer (deduplicated)")
+    assert not at.exception, f"{page} raised: {at.exception}"
+    labels = [s.label for s in at.selectbox]
+    assert any("reporting period" in (label or "").lower() for label in labels), \
+        f"{page} has no in-page reporting period: {labels}"
+    # ...and no page hides a second date control in the sidebar.
+    assert not [s for s in at.sidebar.selectbox if (s.label or "").endswith("range")
+                and s.label != "Date range"]

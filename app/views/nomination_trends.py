@@ -21,9 +21,10 @@ def render() -> None:
     components.data_quality_banner(ctx)
     components.banner_note("<b>Scope:</b> AVS Migration Nominations (onboarding to AVS).")
 
+    date_filter = components.page_date_filter(
+        ctx, "nt", "created_date", table=table, scope=SCOPE_PRIMARY)
     filters, where = components.filter_sidebar(
-        ctx, ["region_geo", "migration_path", "migration_status_label"],
-        date_field="created_date", table=table, scope=SCOPE_PRIMARY)
+        ctx, ["region_geo", "migration_path", "migration_status_label"], table=table, scope=SCOPE_PRIMARY, date_filter=date_filter)
 
     con = ctx.con
     view = st.radio("View", ["Monthly", "Quarterly", "Yearly"], horizontal=True, key="nt_view")

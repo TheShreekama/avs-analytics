@@ -34,10 +34,11 @@ def render() -> None:
            "SQL DB / MI / IaaS, OSS DB, Windows, Linux, Oracle DB@Azure, AKS. "
            "These are reported here and on the AVS → Azure Native <b>Trends</b> page only.")
 
+    date_filter = components.page_date_filter(
+        ctx, "ans", "created_date", table=table, scope=SCOPE_FROM_AVS)
     filters, where = components.filter_sidebar(
         ctx, ["region_geo", "migration_path", "azure_target",
-              "migration_status_label", "eos_status"],
-        date_field="created_date", table=table, scope=SCOPE_FROM_AVS)
+              "migration_status_label", "eos_status"], table=table, scope=SCOPE_FROM_AVS, date_filter=date_filter)
 
     con = ctx.con
     total = analytics.total_rows(con, where)

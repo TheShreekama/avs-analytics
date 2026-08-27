@@ -43,7 +43,9 @@ under Streamlit's AppTest in both counting modes.
 - `app/ui/` — `theme`, `charts` (Plotly, interactive/browser), `pdf_charts` (matplotlib,
   PDF static images — no bundled browser), `components` (filter sidebar, date-range
   controls, KPI rows, tables), `drilldown` (selectable charts → underlying records).
-- `app/views/` — report pages, plus `category_dashboard` which renders the standard
+- `app/views/` — report pages (`data_inconsistency` reviews everything the file
+  contradicts itself on; `reports` assembles the PDF from chosen modules, period,
+  categories and cover text), plus `category_dashboard` which renders the standard
   six-category dashboard (EOS combined + Gen-1/Gen-2/no-tag, All AVS, AVS → Azure Native) — one entry
   point per category, wired into `st.navigation`.
 
@@ -127,8 +129,10 @@ under Streamlit's AppTest in both counting modes.
   requirement-defined metrics live in `app/core/kpi.py` as pandas — the latest-wave and
   unique-TPID rules read far better there, and each returns the rows behind the number.
 - **Date ranges.** A global reporting period lives in the sidebar
-  (`components.global_date_controls`); every report can override it with
-  `components.report_date_range`, which returns `(start, end, description)`.
+  (`components.global_date_controls`); every report renders its own control **on the page**
+  via `components.page_date_filter` (which defaults to "Global range" and returns a `_date`
+  filter for `build_where`). There is no second date widget in the sidebar — one period,
+  one place to change it.
 - Charts: **Plotly** for the browser (JS, no binary); **matplotlib** for the PDF (headless
   Agg, no bundled Chromium). Value axes are integer-only.
 - Server binds **127.0.0.1** (`.streamlit/config.toml`). No `.bat`/`.ps1`/`.exe`; run from

@@ -105,13 +105,16 @@ _FILTER_LABELS.update({"region_geo": "Region", "migration_direction": "Direction
                        "migration_status_label": "Migration Status"})
 
 
-def filter_sidebar(ctx: DataContext, fields: list[str], date_field: str | None = "created_date",
+def filter_sidebar(ctx: DataContext, fields: list[str], date_field: str | None = None,
                    key_prefix: str = "f", table: str = "fact",
-                   scope: str | None = None) -> tuple[dict, str]:
+                   scope: str | None = None,
+                   date_filter: dict | None = None) -> tuple[dict, str]:
     """Render filter widgets in the sidebar; return (filters_dict, where_clause).
 
     ``fields`` are categorical column keys to expose as multiselects.
-    ``date_field`` (if given) adds a date-range *preset* selector on that column.
+    ``date_filter`` is the reporting window chosen *on the page* by
+    :func:`page_date_filter` — the date control lives with the report it dates,
+    not in the sidebar, so there is one place to change a period rather than two.
     ``table`` selects the counting grain (``fact`` or ``customer``).
     ``scope`` (``primary`` | ``from_avs`` | ``None``) restricts every query — and
     the filter option lists — to that reporting scope, so "(From AVS)" offerings
@@ -134,8 +137,8 @@ def filter_sidebar(ctx: DataContext, fields: list[str], date_field: str | None =
         if sel:
             filters[key] = sel
 
-    if date_field and date_field in frame.columns:
-        _date_preset_widget(ctx, filters, date_field, key_prefix, table, scope_where)
+    if date_filter and date_filter.get("col") in frame.columns:
+        filters["_date"] = date_filter
 
     where = analytics.apply_scope(analytics.build_where(filters), scope)
     n = analytics.total_rows(con, where, table=table)
@@ -200,62 +203,45 @@ def _record_diagnostics(ctx: DataContext, filters: dict, scope_where: str, table
 
 
 def _empty_selection_help(filters: dict, key_prefix: str) -> None:
-    """Sidebar warning + one-click widen when the current selection is empty."""
+    """Sidebar warning when the current selection is empty."""
     diag = st.session_state.get(_DIAG_KEY, {})
-    date_f = filters.get("_date")
     st.sidebar.warning(f"No {diag.get('unit', 'records')} match these filters.")
-    if date_f and diag.get("n_cats_only"):
-        col = date_f["col"]
-        if st.sidebar.button("📅 Widen to all time", width="stretch",
-                             key=f"{key_prefix}_alltime_{col}"):
-            # The preset defaults to "All time", so dropping the keys widens the
-            # window while keeping every other filter the user has chosen.
-            st.session_state.pop(f"{key_prefix}_preset_{col}", None)
-            st.session_state.pop(f"{key_prefix}_custom_{col}", None)
-            st.session_state.pop(f"{key_prefix}_nulls_{col}", None)
-            st.rerun()
+    if filters.get("_date") and diag.get("n_cats_only"):
+        st.sidebar.caption("Widen the **reporting period** at the top of the page, or "
+                           "clear the filters below.")
 
 
-def _date_preset_widget(ctx: DataContext, filters: dict, date_field: str, key_prefix: str,
-                        table: str = "fact", scope_where: str = "") -> None:
-    """Date-range preset selector (This/Last week, This/Last month, 3/6 months, FY, …)."""
-    label = _FILTER_LABELS.get(date_field, date_field.replace("_", " ").title())
-    preset = st.sidebar.selectbox(
-        f"{label} range", DATE_PRESETS,
-        index=DATE_PRESETS.index(DEFAULT_DATE_PRESET), key=f"{key_prefix}_preset_{date_field}",
-        help="Windows are anchored on the reporting as-of date in the sidebar.")
+def page_date_filter(ctx: DataContext, key_prefix: str, date_field: str,
+                     label: str | None = None, table: str = "fact",
+                     scope: str | None = None, columns=None) -> dict | None:
+    """The report's reporting-period control, rendered on the page.
 
-    start = end = None
-    if preset == "Custom":
-        lo, hi = analytics.date_bounds(ctx.con, date_field)
-        if lo is not None and hi is not None:
-            lo, hi = pd.Timestamp(lo).date(), pd.Timestamp(hi).date()
-            rng = st.sidebar.date_input("Custom range", value=(lo, hi), min_value=lo,
-                                        max_value=hi, key=f"{key_prefix}_custom_{date_field}")
-            if isinstance(rng, (tuple, list)) and len(rng) == 2:
-                start, end = rng
-    elif preset == "All time":
-        start = end = None
-    else:
-        rng = metrics.date_preset_range(ctx.as_of, preset, FY_START_MONTH)
-        if rng:
-            start, end = rng[0].date(), rng[1].date()
+    Follows the global sidebar window unless overridden here, and offers to keep
+    records whose date is missing (a range filter drops them otherwise).  Returns
+    a ``_date`` filter for :func:`filter_sidebar` / ``analytics.build_where``, or
+    ``None`` when the window is unbounded.
+    """
+    from ..core import glossary
+    label = label or _FILTER_LABELS.get(date_field, date_field.replace("_", " ").title())
+    left, right = st.columns(columns or [2, 3])
+    with left:
+        start, end, _shown = report_date_range(ctx, key_prefix, f"{label} — reporting period")
+    if start is None:
+        with right:
+            st.caption(glossary.REPORTING_PERIOD.split("\n")[0])
+        return None
 
-    if start is not None and end is not None:
-        # A range filter silently drops rows whose date is missing — on pages
-        # keyed to an optional date (planned/actual end) that can be most of the
-        # dataset, so make it visible and opt-in-able.
-        missing = analytics.total_rows(
-            ctx.con, analytics._where_and(scope_where, f'"{date_field}" IS NULL'), table=table)
-        include_null = False
+    include_null = False
+    scope_where = analytics.apply_scope("", scope)
+    missing = analytics.total_rows(
+        ctx.con, analytics._where_and(scope_where, f'"{date_field}" IS NULL'), table=table)
+    with right:
         if missing:
-            include_null = st.sidebar.checkbox(
+            include_null = st.checkbox(
                 f"Include {fmt_int(missing)} with no {label.lower()}",
                 key=f"{key_prefix}_nulls_{date_field}",
-                help="Records missing this date fall outside any date range.")
-        filters["_date"] = {"col": date_field, "start": start, "end": end,
-                            "include_null": include_null}
-        st.sidebar.caption(f"📅 {start:%d %b %Y} → {end:%d %b %Y}")
+                help="A date range excludes records whose date is blank.")
+    return {"col": date_field, "start": start, "end": end, "include_null": include_null}
 
 
 # --------------------------------------------------------------------------- #

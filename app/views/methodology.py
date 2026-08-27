@@ -177,7 +177,8 @@ def render() -> None:
     presets = ", ".join(p for p in DATE_PRESETS if p not in ("Custom",))
     st.markdown(
         f"A **global reporting period** in the sidebar drives every report; each report "
-        f"can override it with its own selector (default **{DEFAULT_DATE_PRESET}**): "
+        f"has its own selector at the top of the page that overrides it (default "
+        f"**{DEFAULT_DATE_PRESET}**): "
         f"{presets}, plus **Custom**. Ranges are anchored on the **reporting as-of "
         f"date** in the sidebar (which defaults to **today**, so This FY follows the "
         f"calendar; change it there to report as of any other day).\n\n"

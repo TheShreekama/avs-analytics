@@ -424,3 +424,44 @@ def test_drilldown_matches_plotly_month_labels():
     assert drilldown.normalize_bucket(" 2026/06/15 ") == "2026-06"
     assert drilldown.normalize_bucket("Executing Migration") == "Executing Migration"
     assert drilldown.normalize_bucket(None) == ""
+
+
+# --------------------------------------------------------------------------- #
+# PDF export: sections, cover text and the reporting window
+# --------------------------------------------------------------------------- #
+def _ctx_for_export():
+    from app import state
+    from app.config import SAMPLE_DATA
+    return state.build_context(SAMPLE_DATA.name, SAMPLE_DATA.read_bytes(), is_sample=True)
+
+
+def test_report_builds_with_every_section():
+    from app.core import exporter
+    ctx = _ctx_for_export()
+    pdf = exporter.build_report(ctx, "", "All data", exporter.SECTION_KEYS,
+                                table="fact", unit_label="Nominations",
+                                title="Quarterly Review", subtitle="EOS programme",
+                                period_label="01 Jul 2026 → 30 Jun 2027")
+    assert pdf[:4] == b"%PDF"
+    assert len(pdf) > 5000
+
+
+def test_category_section_reports_each_selected_category():
+    from reportlab.platypus import Paragraph
+    from app.core import exporter, segments
+    ctx = _ctx_for_export()
+    story = exporter._sec_categories(ctx, exporter._styles(),
+                                     [segments.CAT_ALL_AVS, segments.CAT_AVS_NATIVE])
+    text = [f.getPlainText() for f in story if isinstance(f, Paragraph)]
+    assert segments.CATEGORY_LABELS[segments.CAT_ALL_AVS] in text
+    assert segments.CATEGORY_LABELS[segments.CAT_AVS_NATIVE] in text
+
+
+def test_inconsistency_section_names_each_check():
+    from reportlab.platypus import Paragraph
+    from app.core import exporter
+    ctx = _ctx_for_export()
+    text = " ".join(f.getPlainText() for f in exporter._sec_inconsistency(ctx, exporter._styles())
+                    if isinstance(f, Paragraph))
+    assert "Data Inconsistency Review" in text
+    assert "no EOS migration path" in text and "no generation tag" in text

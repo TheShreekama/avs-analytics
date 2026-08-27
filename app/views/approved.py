@@ -22,9 +22,10 @@ def render() -> None:
         components.banner_note("Customer mode: each account's approval date is its "
                                "<b>Wave-1</b> approval date.")
 
+    date_filter = components.page_date_filter(
+        ctx, "app", "approval_date", table=table, scope=SCOPE_PRIMARY)
     filters, where = components.filter_sidebar(
-        ctx, ["region_geo", "migration_path", "migration_status_label"],
-        date_field="approval_date", table=table, scope=SCOPE_PRIMARY)
+        ctx, ["region_geo", "migration_path", "migration_status_label"], table=table, scope=SCOPE_PRIMARY, date_filter=date_filter)
 
     con = ctx.con
     # restrict to approved items for this report

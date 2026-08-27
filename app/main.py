@@ -26,8 +26,8 @@ def run() -> None:
     from app.ui.theme import inject_css
     from app.views import (accounts_status, approved, approved_trends, avs_native_status,
                            avs_to_azure, category_dashboard, closed, column_mapping,
-                           data_upload, eos_status, insights_page, methodology,
-                           nomination_trends, overview, reports)
+                           data_inconsistency, data_upload, eos_status, insights_page,
+                           methodology, nomination_trends, overview, reports)
 
     global _BOOT_LOGGED
     if not _BOOT_LOGGED:                    # once per server start, into the console
@@ -84,6 +84,8 @@ def run() -> None:
                     icon=":material/swap_horiz:", url_path="avs-to-azure"),
         ],
         "Data": [
+            st.Page(data_inconsistency.render, title="Data Inconsistency",
+                    icon=":material/rule:", url_path="data-inconsistency"),
             st.Page(data_upload.render, title="Data & Upload", icon=":material/upload_file:",
                     url_path="data-upload"),
             st.Page(column_mapping.render, title="Column Mapping",

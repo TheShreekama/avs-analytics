@@ -22,9 +22,10 @@ def render() -> None:
         components.banner_note("Customer mode: an account is <b>closed</b> when its "
                                "<b>last wave</b> is done/completed.")
 
+    date_filter = components.page_date_filter(
+        ctx, "cls", "actual_end_date", table=table, scope=SCOPE_PRIMARY)
     filters, where = components.filter_sidebar(
-        ctx, ["region_geo", "migration_path", "eos_status"],
-        date_field="actual_end_date", table=table, scope=SCOPE_PRIMARY)
+        ctx, ["region_geo", "migration_path", "eos_status"], table=table, scope=SCOPE_PRIMARY, date_filter=date_filter)
 
     con = ctx.con
     closed_where = analytics._where_and(where, '"is_closed" = TRUE')
