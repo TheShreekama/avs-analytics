@@ -35,14 +35,21 @@ CAT_EOS_UNCLASSIFIED = "eos_unclassified"
 CAT_ALL_AVS = "all_avs"
 CAT_AVS_NATIVE = "avs_native"
 
+#: The categories that get a page and a report of their own.
 CATEGORY_LABELS = {
     CAT_EOS_ALL: "EOS Migration",
     CAT_EOS_GEN1: "EOS Migration — Gen-1",
     CAT_EOS_GEN2: "EOS Migration — Gen-2",
-    CAT_EOS_UNCLASSIFIED: "EOS Migration — No generation tag",
     CAT_ALL_AVS: "All AVS Migrations",
     CAT_AVS_NATIVE: "AVS → Azure Native",
 }
+
+#: EOS accounts in scope through their migration path with no generation tag.
+#: They are *inside* CAT_EOS_ALL and counted there; they no longer get a report
+#: of their own, because the Data Inconsistency page is where that disagreement
+#: belongs.  ``population(fact, CAT_EOS_UNCLASSIFIED)`` still selects them, and
+#: this is the label a drill-down row carries.
+UNCLASSIFIED_LABEL = "EOS Migration — No generation tag"
 
 # --------------------------------------------------------------------------- #
 # Platforms
@@ -260,7 +267,7 @@ def category_label_series(fact: pd.DataFrame) -> pd.Series:
     out[avs] = CATEGORY_LABELS[CAT_ALL_AVS]
     eos = fact["is_eos_population"].astype(bool)
     out[eos] = fact.loc[eos, "generation"].map(
-        lambda g: gen_label.get(g, CATEGORY_LABELS[CAT_EOS_UNCLASSIFIED]))
+        lambda g: gen_label.get(g, UNCLASSIFIED_LABEL))
     out[fact["is_from_avs"].astype(bool)] = CATEGORY_LABELS[CAT_AVS_NATIVE]
     return out
 

@@ -284,13 +284,14 @@ def _sec_categories(ctx, ss, categories, start=None, end=None) -> list:
             ["Metric", "Value"],
             ["New engagements (unique TPIDs)",
              fmt_int(kpi_mod.new_engagements(pop, start, end, firsts=waves.first).value)],
-            ["Migrations ended (unique TPIDs)",
-             fmt_int(kpi_mod.migration_ends(pop, start, end, lasts=waves.last).value)],
+            ["Migrations completed (unique TPIDs)",
+             fmt_int(kpi_mod.migrations_completed(pop, start, end, lasts=waves.last).value)],
             ["Hosts migrated (Total Cores)",
              fmt_int(kpi_mod.hosts_migrated(pop, start, end).value)],
-            ["Nominations approved",
-             fmt_int(kpi_mod.nominations_approved(pop, start, end).value)],
-            ["Total ACR", fmt_currency(kpi_mod.current_acr(pop))],
+            ["On-track accounts (Current State)",
+             fmt_int(kpi_mod.on_track_accounts(pop, lasts=waves.last).value)],
+            ["ACR claimed (waves ended in period)",
+             fmt_currency(kpi_mod.acr_claimed(pop, start, end).value)],
         ]
         story += [_df_table(pd.DataFrame(rows[1:], columns=rows[0]), ss), Spacer(1, 0.3 * cm)]
 

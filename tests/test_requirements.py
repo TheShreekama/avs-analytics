@@ -45,6 +45,18 @@ _HEADERS = {
 }
 
 
+# "Current State" is what decides On-Track.  Written with the real vocabulary of
+# the export, including the states that are emphatically *not* on track.
+_CURRENT_STATE = {
+    "1": "Done", "2": "Done",                 # A — both waves finished
+    "3": "Done", "4": "On Track",             # B — Wave 8 still running, on track
+    "5": "Done", "6": "Done",                 # C — finished
+    "7": "Blocked - Customer",                # D — blocked, so NOT on track
+    "8": "Waiting action on follow up date",  # E — waiting, so NOT on track
+    "9": "Done",                              # F
+}
+
+
 # The Tags column is what puts an account in EOS scope and fixes its generation.
 # Written the way the real export writes them: several tags glued together.
 _TAGS = {
@@ -65,6 +77,7 @@ def raw_frame():
     raw["Nomination Status"] = "Approved"
     raw["Nom. Created Date"] = raw["Nom. Approval Date"]
     raw["Tags"] = raw["TPID"].map(_TAGS)
+    raw["Current State"] = raw["Task ID"].map(_CURRENT_STATE)
     return raw
 
 
@@ -181,12 +194,12 @@ def test_new_engagements_counts_unique_tpids_on_wave1_approval(fact):
     assert kpi.new_engagements(eos, "2026-03-01", "2026-03-31").count == 0
 
 
-def test_migration_ends_requires_the_latest_wave_to_be_completed(fact):
+def test_migrations_completed_requires_the_latest_wave_to_be_completed(fact):
     eos = segments.population(fact, segments.CAT_EOS_GEN1)
-    m = kpi.migration_ends(eos, "2026-07-01", "2026-07-31")
+    m = kpi.migrations_completed(eos, "2026-07-01", "2026-07-31")
     # A's last wave completed in July; B has Wave 8 outstanding, so B never counts.
     assert _tpids(m.records) == ["100"]
-    assert kpi.migration_ends(eos, None, None).count == 1
+    assert kpi.migrations_completed(eos, None, None).count == 1
 
 
 def test_hosts_migrated_sums_cores_and_is_not_a_tpid_count(fact):
@@ -204,11 +217,9 @@ def test_hosts_migrated_counts_each_source_record_once(fact):
         kpi.hosts_migrated(eos2, None, None).value
 
 
-def test_nominations_approved_follows_the_selected_window(fact):
-    all_avs = segments.population(fact, segments.CAT_ALL_AVS)
-    # Jan–Feb: A wave 1, B waves 7 and 8, C waves 1 and 2 — five nomination records.
-    assert kpi.nominations_approved(all_avs, "2026-01-01", "2026-02-28").count == 5
-    assert kpi.nominations_approved(all_avs, "2026-04-01", "2026-04-30").count == 1
+def test_the_dropped_nominations_approved_metric_is_gone(fact):
+    """Removed from the executive summary, and with it the metric behind it."""
+    assert not hasattr(kpi, "nominations_approved")
 
 
 # --------------------------------------------------------------------------- #
@@ -227,11 +238,24 @@ def test_cumulative_is_the_final_column_and_runs_over_displayed_months(fact):
     assert list(table["Cumulative"]) == list(table["Hosts"].cumsum())
 
 
-def test_monthly_acr_attributes_each_tpid_once(fact):
+def test_acr_claimed_sums_the_waves_that_ended_in_the_window(fact):
     eos = segments.population(fact, segments.CAT_EOS_GEN1)
-    table, _rows = kpi.monthly_acr(eos, "approval_date")
-    # A: 100k + 50k, B: 200k + 10k — every wave's ACR, counted in one month per TPID.
-    assert table["ACR"].sum() == 360_000
+    # Waves with an Actual End Date: A/W1 Feb $100k, A/W2 Jul $50k, B/W7 Jul $200k.
+    # B/W8 never ended, so its $10k is not claimed by anything.
+    assert kpi.acr_claimed(eos, None, None).value == 350_000
+    july = kpi.acr_claimed(eos, "2026-07-01", "2026-07-31")
+    assert july.value == 250_000                 # two waves, two different accounts
+    assert len(july.records) == 2
+    assert kpi.acr_claimed(eos, "2026-09-01", "2026-09-30").value == 0
+
+
+def test_monthly_acr_claimed_splits_by_the_month_each_wave_ended(fact):
+    eos = segments.population(fact, segments.CAT_EOS_GEN1)
+    table, _rows = kpi.monthly_acr_claimed(eos)
+    assert list(table["period"]) == ["2026-02", "2026-07"]
+    assert list(table["ACR Claimed"]) == [100_000, 250_000]
+    assert list(table.columns)[-1] == "Cumulative"
+    assert table["ACR Claimed"].sum() == kpi.acr_claimed(eos, None, None).value
 
 
 # --------------------------------------------------------------------------- #
@@ -241,13 +265,33 @@ def test_state_and_stage_use_the_latest_wave(fact):
     eos = segments.population(fact, segments.CAT_EOS_GEN1)
     states, _rows = kpi.by_state(eos)
     counts = dict(zip(states["category"], states["count"]))
-    assert counts.get(kpi.STATE_CLOSED) == 1        # A
+    assert counts.get(kpi.STATE_COMPLETED) == 1    # A
     assert counts.get(kpi.STATE_ON_TRACK) == 1      # B, still executing on Wave 8
 
     stages, stage_rows = kpi.on_track_by_stage(eos)
     assert list(stages["category"]) == ["Migration In Progress"]
     assert int(stages.loc[0, "count"]) == 1
     assert float(stages.loc[0, "acr"]) == 10_000    # B's latest wave
+
+
+def test_on_track_reads_current_state_not_merely_unfinished(fact):
+    all_avs = segments.population(fact, segments.CAT_ALL_AVS)
+    # B's Wave 8 says "On Track".  D is "Blocked - Customer" and E is "Waiting
+    # action on follow up date" — both unfinished, neither on track.
+    assert _tpids(kpi.on_track_accounts(all_avs).records) == ["200"]
+
+
+def test_state_chart_reports_only_on_track_and_completed(fact):
+    all_avs = segments.population(fact, segments.CAT_ALL_AVS)
+    states, rows = kpi.by_state(all_avs)
+    assert set(states["category"]) <= set(kpi.REPORTED_STATES)
+    counts = dict(zip(states["category"], states["count"]))
+    assert counts[kpi.STATE_COMPLETED] == 2         # A and C
+    assert counts[kpi.STATE_ON_TRACK] == 1          # B
+    assert "400" not in set(rows["tpid"])           # blocked is not a reported state
+    # Every state is still available on request, for anyone who needs the rest.
+    everything, _ = kpi.by_state(all_avs, only=None)
+    assert everything["count"].sum() == all_avs["tpid_key"].nunique()
 
 
 def test_rollup_deduplicates_on_tpid(fact):
@@ -305,12 +349,14 @@ def test_eos_categories_need_no_side_worksheet(fact):
 
 def test_glossary_explains_every_headline_metric():
     from app.core import glossary
-    for text in (glossary.NEW_ENGAGEMENTS, glossary.MIGRATION_ENDS,
-                 glossary.HOSTS_MIGRATED, glossary.NOMINATIONS_APPROVED,
-                 glossary.TOTAL_ACR, glossary.GENERATION_RULE):
+    for text in (glossary.NEW_ENGAGEMENTS, glossary.MIGRATIONS_COMPLETED,
+                 glossary.HOSTS_MIGRATED, glossary.ON_TRACK_ACCOUNTS,
+                 glossary.ACR_CLAIMED, glossary.GENERATION_RULE):
         assert len(text) > 80                      # a real explanation, not a label
     assert "Tags" in glossary.GENERATION_RULE
-    assert "latest wave" in glossary.MIGRATION_ENDS
+    assert "latest wave" in glossary.MIGRATIONS_COMPLETED
+    assert "Current State" in glossary.ON_TRACK_ACCOUNTS
+    assert "ACTUAL END DATE" in glossary.ACR_CLAIMED
     assert set(glossary.CATEGORY_HELP) == set(segments.CATEGORY_LABELS)
 
 
@@ -371,3 +417,28 @@ def test_combined_eos_tab_is_the_union_of_its_generations(fact):
     # The parts do not overlap, so the combined count is their sum.
     assert len(gen1) + len(gen2) + len(untagged) == len(combined)
     assert combined["is_eos_population"].all()
+
+
+# --------------------------------------------------------------------------- #
+# Presentation rules that apply everywhere
+# --------------------------------------------------------------------------- #
+def test_every_table_renders_money_as_currency():
+    """ACR is $1.2M / $840.0K wherever it appears — no caller can forget it."""
+    from app.ui.components import format_money
+    frame = pd.DataFrame({"total_acr": [1_200_000, 840_000, 500, None],
+                          "acr": [2_000_000.0, 0.0, 1.0, 3.0],
+                          "total_cores": [10, 20, 30, 40],
+                          "customer_name": ["A", "B", "C", "D"]})
+    out = format_money(frame)
+    assert list(out["total_acr"]) == ["$1.20M", "$840.0K", "$500", "—"]
+    assert out.loc[0, "acr"] == "$2.00M"
+    assert list(out["total_cores"]) == [10, 20, 30, 40]   # counts stay numeric
+    assert list(out["customer_name"]) == ["A", "B", "C", "D"]
+    assert list(frame["total_acr"])[0] == 1_200_000       # the source is untouched
+
+
+def test_money_formatting_leaves_already_formatted_columns_alone():
+    """A table that formatted its own ACR is not double-formatted."""
+    from app.ui.components import format_money
+    frame = pd.DataFrame({"ACR": ["$1.20M", "$840.0K"]})
+    assert list(format_money(frame)["ACR"]) == ["$1.20M", "$840.0K"]

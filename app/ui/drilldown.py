@@ -14,8 +14,8 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from ..core import kpi
-from ..core.metrics import fmt_int
-from .components import show_table
+from ..core.metrics import fmt_currency, fmt_int
+from .components import format_money, show_table
 
 
 _MONTHISH = re.compile(r"^\d{4}[-/]\d{1,2}")
@@ -63,6 +63,7 @@ def selectable_table(df: pd.DataFrame, key: str, bucket_col: str) -> list[str]:
     if df.empty or bucket_col not in df.columns:
         show_table(df)
         return []
+    df = format_money(df)
     event = st.dataframe(df, width="stretch", hide_index=True, key=key,
                          on_select="rerun", selection_mode="multi-row")
     rows = []
@@ -80,7 +81,8 @@ def selectable_table(df: pd.DataFrame, key: str, bucket_col: str) -> list[str]:
 
 
 def drilldown(records: pd.DataFrame, bucket_col: str, selected: list[str], *,
-              key: str, what: str = "records", unit_col: str | None = None) -> None:
+              key: str, what: str = "records", unit_col: str | None = None,
+              max_rows: int | None = None) -> None:
     """Show the rows behind the selected chart points (all rows when none picked).
 
     ``bucket_col`` is the column matching the chart's x-axis / label, so a click
@@ -104,9 +106,14 @@ def drilldown(records: pd.DataFrame, bucket_col: str, selected: list[str], *,
             return
         if unit_col and unit_col in table.columns:
             total = pd.to_numeric(table[unit_col], errors="coerce").sum()
-            st.caption(f"Total **{unit_col.replace('_', ' ')}** in this selection: "
-                       f"**{fmt_int(total)}**")
-        show_table(frame, height=min(420, 60 + 35 * min(len(frame), 10)))
+            label = "ACR" if unit_col in ("total_acr", "acr") else unit_col.replace("_", " ")
+            amount = fmt_currency(total) if label == "ACR" else fmt_int(total)
+            st.caption(f"Total **{label}** in this selection: **{amount}**")
+        shown = frame if max_rows is None or len(frame) <= max_rows else frame.head(max_rows)
+        if len(shown) < len(frame):
+            st.caption(f"Showing the first {fmt_int(len(shown))} of "
+                       f"{fmt_int(len(frame))} rows — the CSV export has them all.")
+        show_table(shown, height=min(420, 60 + 35 * min(len(shown), 10)))
         st.download_button("⬇️ Export to CSV", frame.to_csv(index=False).encode("utf-8"),
                            file_name=f"{key}.csv", mime="text/csv", key=f"{key}_csv")
 
@@ -115,7 +122,8 @@ def chart_with_drilldown(fig: go.Figure, records: pd.DataFrame, bucket_col: str,
                          key: str, what: str = "records", unit_col: str | None = None,
                          summary: pd.DataFrame | None = None,
                          summary_bucket: str | None = None,
-                         summary_width: list | None = None) -> None:
+                         summary_width: list | None = None,
+                         max_rows: int | None = None) -> None:
     """A chart and its summary table, either of which drills into the same records.
 
     Clicking a bar selects that month; clicking the matching table row does the
@@ -130,7 +138,42 @@ def chart_with_drilldown(fig: go.Figure, records: pd.DataFrame, bucket_col: str,
             picked += selectable_table(summary, key=f"{key}_table", bucket_col=summary_bucket)
     else:
         picked += selectable_chart(fig, key=key)
-    drilldown(records, bucket_col, picked, key=key, what=what, unit_col=unit_col)
+    drilldown(records, bucket_col, picked, key=key, what=what, unit_col=unit_col,
+              max_rows=max_rows)
+
+
+def data_expander(frame: pd.DataFrame, key: str, *, label: str = "Underlying data",
+                  caption: str | None = None, height: int | None = None) -> None:
+    """The numbers behind a chart that has no record-level bucket to click.
+
+    Cross-tabs, heatmaps and rate charts are aggregates of aggregates; what a
+    reader needs there is the table the chart was drawn from, exportable.
+    """
+    if frame is None or frame.empty:
+        return
+    with st.expander(f"🔎 {label} ({fmt_int(len(frame))} rows)"):
+        if caption:
+            st.caption(caption)
+        show_table(frame, height=height)
+        st.download_button("⬇️ Export to CSV", frame.to_csv(index=False).encode("utf-8"),
+                           file_name=f"{key}.csv", mime="text/csv", key=f"{key}_csv")
+
+
+def charts_with_drilldown(figs: list[go.Figure], records: pd.DataFrame, bucket_col: str, *,
+                          key: str, what: str = "records", unit_col: str | None = None,
+                          max_rows: int | None = None) -> None:
+    """A row of charts that all read the same column, sharing one drill-down.
+
+    Two views of one breakdown (a donut of nominations and a bar of accounts by
+    the same status) should not each grow their own records table underneath —
+    clicking either one filters the single table below both.
+    """
+    picked: list[str] = []
+    for i, (col, fig) in enumerate(zip(st.columns(len(figs)), figs)):
+        with col:
+            picked += selectable_chart(fig, key=f"{key}_{i}")
+    drilldown(records, bucket_col, picked, key=key, what=what, unit_col=unit_col,
+              max_rows=max_rows)
 
 
 def pivot_explorer(records: pd.DataFrame, key: str,

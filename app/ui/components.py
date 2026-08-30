@@ -10,7 +10,7 @@ import streamlit as st
 from ..config import (DATE_PRESETS, DEFAULT_DATE_PRESET, FY_START_MONTH,
                       GLOBAL_DATE_PRESETS)
 from ..core import analytics, metrics, schema
-from ..core.metrics import fmt_int
+from ..core.metrics import fmt_currency, fmt_int
 from ..state import DataContext
 from .theme import banner, info_mark as banner_info
 
@@ -257,8 +257,32 @@ _NICE.update({
 })
 
 
+#: Columns holding money.  Every table renders these as $1.2M / $840.0K rather
+#: than a raw number — a rule applied here so no caller can forget it.
+_MONEY_COLUMNS = {"total_acr", "acr", "acr_claimed", "total acr", "acr claimed",
+                  "estimated_acr", "estimated acr"}
+
+
+def _is_money(column: str) -> bool:
+    return str(column).strip().lower() in _MONEY_COLUMNS
+
+
+def format_money(df: pd.DataFrame) -> pd.DataFrame:
+    """A copy of ``df`` with its money columns rendered as currency."""
+    money = [c for c in df.columns if _is_money(c) and
+             pd.api.types.is_numeric_dtype(df[c])]
+    if not money:
+        return df
+    out = df.copy()
+    for col in money:
+        out[col] = out[col].map(fmt_currency)
+    return out
+
+
 def show_table(df: pd.DataFrame, height: int | None = None, hide_index: bool = True) -> None:
-    disp = df.rename(columns={c: _NICE.get(c, c.replace("_", " ").title()) for c in df.columns})
+    disp = format_money(df)
+    disp = disp.rename(columns={c: _NICE.get(c, c.replace("_", " ").title())
+                                for c in disp.columns})
     kwargs = {"width": "stretch", "hide_index": hide_index}
     if height is not None:
         kwargs["height"] = height
@@ -406,49 +430,22 @@ def report_date_range(ctx: DataContext, key_prefix: str, label: str = "Reporting
 # --------------------------------------------------------------------------- #
 # Data consistency: generation tag vs. EOS migration path
 # --------------------------------------------------------------------------- #
-_CONSISTENCY_LABELS = {
-    "tagged_without_eos_path": (
-        "Tagged Gen-1/Gen-2, no EOS path",
-        "Accounts carrying an AVS Migration - Gen1/Gen2 tag whose waves never show "
-        "the AV36/AV36P/AV52 - EOS migration path. They are in EOS scope on the "
-        "strength of the tag alone.",
-    ),
-    "eos_path_without_tag": (
-        "EOS path, no generation tag",
-        "Waves on the AV36/AV36P/AV52 - EOS migration path whose account carries no "
-        "AVS Migration - Gen1/Gen2 tag on any wave. In scope by path, but no "
-        "generation can be reported — they appear under 'No generation tag'.",
-    ),
-}
+def consistency_summary(ctx: DataContext) -> None:
+    """A one-line verdict on tag vs. EOS-path agreement, pointing at the report.
 
-
-def consistency_panel(ctx: DataContext, sidebar: bool = False) -> None:
-    """Where the generation tag and the EOS migration path disagree.
-
-    Rendered compactly in the sidebar (counts plus an expander) and in full on
-    Data & Upload, so a mismatch is visible without hunting for it.
+    The records themselves live on the **Data Inconsistency** page, which is the
+    single place that lists them — this is only the "is there anything to look
+    at" signal shown where a file is loaded.
     """
     from ..core import segments
     issues = segments.eos_consistency(ctx.fact)
     total = sum(len(df) for df in issues.values())
-    target = st.sidebar if sidebar else st
-
-    target.markdown("### 🧪 Data consistency" if sidebar else "")
     if not total:
-        target.caption("✅ Generation tags and EOS migration paths agree.")
+        st.success("✅ Generation tags and EOS migration paths agree throughout.")
         return
-
-    target.warning(f"{fmt_int(total)} row(s) where the generation tag and the EOS "
-                   f"migration path disagree.")
-    for key, frame in issues.items():
-        label, explanation = _CONSISTENCY_LABELS[key]
-        if frame.empty:
-            continue
-        accounts = frame["tpid"].nunique() if "tpid" in frame.columns else len(frame)
-        with target.expander(f"{label} — {fmt_int(accounts)} account(s)"):
-            st.caption(explanation)
-            show_table(frame, height=min(320, 60 + 35 * min(len(frame), 8)))
-            st.download_button("⬇️ Export to CSV",
-                               frame.to_csv(index=False).encode("utf-8"),
-                               file_name=f"inconsistency-{key}.csv", mime="text/csv",
-                               key=f"consistency_{key}_{'sb' if sidebar else 'page'}")
+    accounts = sum(int(df["tpid"].nunique()) if "tpid" in df.columns else len(df)
+                   for df in issues.values())
+    st.warning(f"{fmt_int(total)} row(s) across {fmt_int(accounts)} account(s) where "
+               f"the generation tag and the EOS migration path disagree.")
+    st.caption("Open **Data → Data Inconsistency** for the records, the reason each "
+               "one is flagged, and a CSV export.")

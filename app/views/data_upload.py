@@ -102,7 +102,7 @@ def _classification_panel(ctx) -> None:
                     .reset_index(name="Rows"))
         components.show_table(tags)
     section("Data consistency — tag vs. EOS migration path")
-    components.consistency_panel(ctx)
+    components.consistency_summary(ctx)
 
     st.caption("A generation is read from a wave tagged **AVS Migration - Gen1** or "
                "**- Gen2** anywhere in the Tags cell. If everything lands in "

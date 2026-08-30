@@ -19,7 +19,7 @@ NEW_ENGAGEMENTS = (
     "• Counts each TPID once — later waves of the same account never add to it."
 )
 
-MIGRATION_ENDS = (
+MIGRATIONS_COMPLETED = (
     "Unique customers (TPIDs) whose migration finished inside the period.\n"
     "• Takes each TPID's LATEST wave (highest Phase/Wave number).\n"
     "• That wave's Migration Status must be '7 - Completed'.\n"
@@ -37,20 +37,30 @@ HOSTS_MIGRATED = (
 
 CORES_MIGRATED = HOSTS_MIGRATED.replace("nodes/hosts", "cores")
 
-NOMINATIONS_APPROVED = (
-    "Nomination records (wave rows) whose Nom. Approval Date falls inside the "
-    "reporting period. Unlike the customer metrics this counts nominations, so an "
-    "account with three approved waves contributes three."
-)
-
 ON_TRACK_ACCOUNTS = (
-    "Customers (TPIDs) whose latest wave is neither completed nor cancelled — the "
-    "live pipeline for this category."
+    "Customers (TPIDs) whose LATEST wave reads On-Track in the Current State "
+    "column.\n"
+    "• Taken from Current State literally — 'On Track' / 'On-Track'.\n"
+    "• 'Blocked - Customer', 'Blocked - Account team' and 'Waiting action on "
+    "follow up date' are NOT on track, and are not counted here.\n"
+    "• A latest wave that is '7 - Completed', or a cancelled account, is "
+    "reported under its own state instead.\n"
+    "• Where Current State is blank the account falls back to on-track if it is "
+    "neither completed nor cancelled, so an unmapped column cannot empty the "
+    "pipeline.\n"
+    "This tile is a snapshot of where the category stands now — the reporting "
+    "period does not narrow it."
 )
 
-TOTAL_ACR = (
-    "Total ACR of the category: the Total ACR column summed across every wave in "
-    "the current population. Shown as $1.2M / $840.0K."
+ACR_CLAIMED = (
+    "ACR of every wave whose ACTUAL END DATE falls inside the reporting period.\n"
+    "• Wave-level, not account-level: if Waves 2 and 3 of one account and Wave 5 "
+    "of another ended inside the window, all three waves' Total ACR is summed.\n"
+    "• A wave that ended outside the window contributes nothing, even when a "
+    "sibling wave of the same account ended inside it.\n"
+    "• A wave with no Actual End Date has not claimed and is never counted.\n"
+    "Shown as $1.2M / $840.0K. Across a multi-month period the trend chart splits "
+    "the same total by the month each wave ended."
 )
 
 # --------------------------------------------------------------------------- #
@@ -75,9 +85,10 @@ TREND_NOMINATIONS = (
 )
 
 TREND_ACR = (
-    "ACR per month. Each TPID's Total ACR is summed across all of its waves and "
-    "attributed to the single month of its Wave-1 date, so no account is counted "
-    "twice."
+    "ACR claimed per month: each wave's Total ACR placed in the month of its "
+    "Actual End Date. An account with waves ending in two months appears in "
+    "both, each time for that wave's ACR only — the months add up to the ACR "
+    "Claimed tile above."
 )
 
 TREND_HOSTS = (
@@ -85,7 +96,7 @@ TREND_HOSTS = (
     "Migration Status is '7 - Completed'. Record-level, not a customer count."
 )
 
-TREND_ENDS = (
+TREND_COMPLETED = (
     "Completed migrations per month: unique TPIDs whose latest wave is "
     "'7 - Completed', placed in the month of that wave's Actual End Date."
 )
@@ -96,15 +107,19 @@ PIPELINE = (
 )
 
 BY_STATE = (
-    "Customers by current state, from each TPID's latest wave:\n"
-    "• Closed — that wave is '7 - Completed'.\n"
-    "• Cancelled — the wave resolved to a cancelled status.\n"
-    "• On-Track — anything still in flight.\n"
-    "ACR is the account's Total ACR summed across its waves."
+    "Customers by current state, from each TPID's latest wave. Only two states "
+    "are reported:\n"
+    "• Completed — that wave's Migration Status is '7 - Completed'.\n"
+    "• On-Track — that wave's Current State reads 'On Track'.\n"
+    "Cancelled accounts, and accounts sitting in a blocked or waiting state, are "
+    "deliberately left out, so the chart shows live and finished work only — the "
+    "slices will not add up to every account in the category.\n"
+    "ACR is the latest wave's Total ACR."
 )
 
 BY_STAGE = (
-    "On-track customers grouped by the stage of their latest wave (the Migration "
+    "On-track customers (Current State = On-Track) grouped by the stage of their "
+    "latest wave (the Migration "
     "Status label, e.g. 'Executing Pre-Requisites', 'Migration In Progress'), with "
     "the account count and ACR for each stage."
 )
@@ -151,19 +166,20 @@ EOS_POPULATION = (
 EOS_UNTAGGED = (
     "EOS accounts that got here through the offering fallback: no wave carries an "
     "'AVS Migration - Gen1/Gen2' tag, but the migration path reads as EOS (e.g. "
-    "'AV36/AV36P/AV52 - EOS'). In scope, but with no generation to report — never "
-    "folded into Gen-1 or Gen-2."
+    "'AV36/AV36P/AV52 - EOS'). They count on the EOS Migration dashboard, but with "
+    "no generation to report — never folded into Gen-1 or Gen-2. The records are "
+    "listed on Data → Data Inconsistency."
 )
 
 CATEGORY_HELP = {
     segments.CAT_EOS_ALL: (
         "Every EOS Migration account in one view — Gen-1, Gen-2 and any account in "
-        "scope through its migration path with no generation tag. The generation "
-        "pages are subsets of this one.\n\n" + EOS_POPULATION
+        "scope through its migration path with no generation tag. The two generation "
+        "pages are subsets of this one; the untagged accounts have no page of their "
+        "own and are listed on Data → Data Inconsistency instead.\n\n" + EOS_POPULATION
     ),
     segments.CAT_EOS_GEN1: f"{EOS_POPULATION}\n\n{GENERATION_RULE}",
     segments.CAT_EOS_GEN2: f"{EOS_POPULATION}\n\n{GENERATION_RULE}",
-    segments.CAT_EOS_UNCLASSIFIED: f"{EOS_UNTAGGED}\n\n{GENERATION_RULE}",
     segments.CAT_ALL_AVS: (
         "Every nomination whose TARGET platform is AVS, whatever it migrates from "
         "— on-premises, VMG, AWS/VMC, AVS-to-AVS and EOS refreshes. Derived from "

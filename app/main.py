@@ -55,9 +55,6 @@ def run() -> None:
                     icon=":material/memory:", url_path="eos-gen1"),
             st.Page(category_dashboard.eos_gen2, title="EOS Migration — Gen-2",
                     icon=":material/developer_board:", url_path="eos-gen2"),
-            st.Page(category_dashboard.eos_unclassified,
-                    title="EOS Migration — Unclassified",
-                    icon=":material/help_outline:", url_path="eos-unclassified"),
             st.Page(category_dashboard.all_avs, title="All AVS Migrations",
                     icon=":material/cloud:", url_path="all-avs"),
             st.Page(category_dashboard.avs_native, title="AVS → Azure Native",
@@ -129,7 +126,6 @@ def _sidebar_brand(ctx, state, app_name: str, tagline: str) -> None:
 
     from app.ui import components
     components.global_date_controls(ctx)
-    components.consistency_panel(ctx, sidebar=True)
 
     st.sidebar.radio(
         "Counting mode", [state.MODE_CUSTOMER, state.MODE_WAVE], key=state.MODE_KEY,
