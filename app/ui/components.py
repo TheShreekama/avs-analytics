@@ -225,7 +225,8 @@ def page_date_filter(ctx: DataContext, key_prefix: str, date_field: str,
     label = label or _FILTER_LABELS.get(date_field, date_field.replace("_", " ").title())
     left, right = st.columns(columns or [2, 3])
     with left:
-        start, end, _shown = report_date_range(ctx, key_prefix, f"{label} — reporting period")
+        start, end, _shown, _preset = report_date_range(
+            ctx, key_prefix, f"{label} — reporting period")
     if start is None:
         with right:
             st.caption(glossary.REPORTING_PERIOD.split("\n")[0])
@@ -400,8 +401,11 @@ def global_range(ctx: DataContext):
 def report_date_range(ctx: DataContext, key_prefix: str, label: str = "Reporting period"):
     """Per-report date selector that defaults to the global window.
 
-    Returns ``(start, end, description)`` — dates are inclusive, and ``None``
-    means unbounded.
+    Returns ``(start, end, description, preset)`` — dates are inclusive and
+    ``None`` means unbounded.  ``description`` is for display ("This FY
+    (global)"); ``preset`` is the resolved preset name on its own, which is what
+    a report tests against to decide how to behave ("All time" splits its trends
+    by fiscal year, anything but "This FY" gains a This-FY comparison row).
     """
     from ..core import glossary
     options = [USE_GLOBAL] + list(DATE_PRESETS)
@@ -412,6 +416,7 @@ def report_date_range(ctx: DataContext, key_prefix: str, label: str = "Reporting
         start, end = global_range(ctx)
         shown = f"{preset} (global)"
     else:
+        preset = choice
         custom = None
         if choice == "Custom":
             lo, hi = analytics.date_bounds(ctx.con, "created_date")
@@ -424,7 +429,7 @@ def report_date_range(ctx: DataContext, key_prefix: str, label: str = "Reporting
     window = (f"{start:%d %b %Y} → {end:%d %b %Y}" if start is not None
               else "all dates in the dataset")
     st.caption(f"**{shown}** — {window}")
-    return start, end, shown
+    return start, end, shown, preset
 
 
 # --------------------------------------------------------------------------- #

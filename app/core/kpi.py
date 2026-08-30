@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from . import segments
+from . import metrics, segments
 
 # Columns offered in every drill-down table, in this order (missing ones are skipped).
 DRILLDOWN_COLUMNS = [
@@ -292,6 +292,48 @@ def _finish_trend(summary: pd.DataFrame, label: str) -> pd.DataFrame:
     summary["Cumulative"] = summary[label].cumsum()
     summary["month"] = summary["month"].dt.to_timestamp()
     return summary[["month", "period", label, "Cumulative"]].reset_index(drop=True)
+
+
+# --------------------------------------------------------------------------- #
+# Fiscal-year split (the "All time" view of every trend)
+# --------------------------------------------------------------------------- #
+#: How a point on an FY-split chart names itself, so a click can find its rows.
+def fy_bucket(fy: str, month_name: str) -> str:
+    return f"{fy} {month_name}"
+
+
+def split_by_fiscal_year(table: pd.DataFrame, value_col: str,
+                         fy_start_month: int = 7) -> pd.DataFrame:
+    """A monthly trend re-cut as one series per fiscal year.
+
+    Over "All time" a single continuous line just gets longer; laying the fiscal
+    years on top of one another over a shared Jul→Jun axis is what makes
+    year-over-year movement readable.  Returns long-form rows
+    (fy, fy_month, bucket, value), never a cumulative column: cumulative across
+    unrelated years is meaningless.
+    """
+    if table is None or table.empty:
+        return pd.DataFrame(columns=["fy", "fy_month", "bucket", value_col])
+    out = table.copy()
+    months = pd.to_datetime(out["month"])
+    out["fy"] = [metrics.fiscal_year_label(m, fy_start_month) for m in months]
+    out["fy_month"] = months.dt.strftime("%b")
+    out["bucket"] = [fy_bucket(f, m) for f, m in zip(out["fy"], out["fy_month"])]
+    return out[["fy", "fy_month", "bucket", value_col]].reset_index(drop=True)
+
+
+def label_fiscal_year(rows: pd.DataFrame, date_col: str,
+                      fy_start_month: int = 7) -> pd.DataFrame:
+    """Tag records with the FY-split chart's bucket, so a click can filter them."""
+    if rows is None or rows.empty:
+        return rows if rows is not None else pd.DataFrame()
+    out = rows.copy()
+    dates = pd.to_datetime(out[date_col], errors="coerce")
+    out["fy"] = [metrics.fiscal_year_label(d, fy_start_month) if pd.notna(d) else ""
+                 for d in dates]
+    out["fy_month"] = dates.dt.strftime("%b").fillna("")
+    out["bucket"] = [fy_bucket(f, m) if f else "" for f, m in zip(out["fy"], out["fy_month"])]
+    return out
 
 
 # --------------------------------------------------------------------------- #

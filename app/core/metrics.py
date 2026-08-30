@@ -50,6 +50,28 @@ def fiscal_year_end(fy_start: pd.Timestamp) -> pd.Timestamp:
     return pd.Timestamp(fy_start) + pd.DateOffset(years=1) - pd.Timedelta(days=1)
 
 
+def fiscal_year_label(value, fy_start_month: int = 7) -> str:
+    """The fiscal year a date falls in, named the way the business names it.
+
+    A July FY runs Jul 2026 → Jun 2027 and is called **FY27**, after the calendar
+    year it ends in.
+    """
+    ts = pd.Timestamp(value)
+    end_year = ts.year + 1 if ts.month >= fy_start_month else ts.year
+    return f"FY{end_year % 100:02d}"
+
+
+def fiscal_month_order(fy_start_month: int = 7) -> list[str]:
+    """Month abbreviations in fiscal order — Jul, Aug … Jun for a July FY."""
+    return [pd.Timestamp(2000, ((fy_start_month - 1 + i) % 12) + 1, 1).strftime("%b")
+            for i in range(12)]
+
+
+def fiscal_month_name(value) -> str:
+    """The month abbreviation a date falls in ("Sep")."""
+    return pd.Timestamp(value).strftime("%b")
+
+
 def date_preset_range(as_of: pd.Timestamp, name: str,
                       fy_start_month: int = 7) -> tuple[pd.Timestamp, pd.Timestamp] | None:
     """Resolve a named date-range preset to (start, end) anchored on ``as_of``.

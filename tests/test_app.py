@@ -186,3 +186,60 @@ def test_navigation_drops_the_unclassified_category_page():
     assert segments.CAT_EOS_UNCLASSIFIED not in segments.CATEGORY_LABELS
     assert not hasattr(__import__("app.views.category_dashboard", fromlist=["x"]),
                        "eos_unclassified")
+
+
+def _with_period(page: str, preset: str) -> AppTest:
+    """Render a category dashboard with its in-page reporting period set."""
+    os.environ["AVS_AS_OF"] = _sample_as_of()
+    os.environ["AVS_PAGE"] = page
+    at = AppTest.from_file(_HARNESS, default_timeout=60)
+    at.session_state["count_mode"] = "Customer (deduplicated)"
+    at.run()
+    for sb in at.selectbox:
+        if "reporting period" in (sb.label or "").lower() and preset in list(sb.options):
+            sb.set_value(preset)
+    at.run()
+    return at
+
+
+def _tile_panels(at: AppTest) -> list[str]:
+    return [e.label for e in at.expander if "Records behind these tiles" in (e.label or "")]
+
+
+def test_this_fy_shows_one_summary_row():
+    at = _with_period("category_dashboard.all_avs", "This FY")
+    assert not at.exception, f"raised: {at.exception}"
+    assert len(_tile_panels(at)) == 1, _tile_panels(at)
+
+
+@pytest.mark.parametrize("preset", ["This month", "Last month", "This quarter", "All time"])
+def test_other_periods_add_a_this_fy_row_above(preset):
+    """Any period but This FY gets the fiscal year it sits in for context."""
+    at = _with_period("category_dashboard.all_avs", preset)
+    assert not at.exception, f"{preset} raised: {at.exception}"
+    panels = _tile_panels(at)
+    assert len(panels) == 2, f"{preset} rendered {panels}"
+    # This FY first, then the selected period — each with its own records.
+    assert "This FY" in panels[0]
+    assert preset in panels[1]
+
+
+def test_all_time_trends_split_by_fiscal_year():
+    """All time draws a line per FY, with the years side by side underneath."""
+    at = _with_period("category_dashboard.all_avs", "All time")
+    assert not at.exception, f"raised: {at.exception}"
+    grids = [e.label for e in at.expander if "fiscal years side by side" in (e.label or "")]
+    assert grids, [e.label for e in at.expander]
+    # ...and a bounded period does not.
+    month = _with_period("category_dashboard.all_avs", "This month")
+    assert not [e for e in month.expander if "fiscal years side by side" in (e.label or "")]
+
+
+def test_sections_state_the_period_they_are_measured_over():
+    at = _with_period("category_dashboard.all_avs", "This month")
+    assert not at.exception, f"raised: {at.exception}"
+    pills = [m.value for m in at.markdown if 'class="avs-period"' in m.value]
+    assert pills, "no section states its reporting period"
+    assert any("This month" in p for p in pills)
+    # The pipeline is a snapshot and says so, rather than inheriting the period.
+    assert any("not filtered by the reporting period" in p for p in pills), pills

@@ -60,6 +60,12 @@ def inject_css() -> None:
         .avs-sub {{ color: var(--muted); font-size: .95rem; margin-top: .1rem; margin-bottom: .6rem; }}
         .avs-section {{ font-size: 1.15rem; font-weight:700; color: var(--primary-dark);
             margin: 1.1rem 0 .4rem 0; padding-bottom:.3rem; border-bottom: 2px solid var(--border); }}
+        /* The reporting period a section is measured over, under its title */
+        .avs-period {{
+            display:inline-block; font-size:.78rem; font-weight:600; color: var(--primary-dark);
+            background: #EAF2FA; border: 1px solid var(--border); border-radius: 999px;
+            padding: .1rem .55rem; margin: -.15rem 0 .5rem 0; letter-spacing:.01em;
+        }}
 
         /* KPI cards */
         .kpi-grid {{ display:flex; gap: 14px; flex-wrap: wrap; }}
@@ -127,15 +133,27 @@ def page_header(title: str, subtitle: str = "", help: str | None = None) -> None
         st.markdown(f'<div class="avs-sub">{subtitle}</div>', unsafe_allow_html=True)
 
 
-def section(title: str, help: str | None = None) -> None:
+def section(title: str, help: str | None = None, period: str | None = None) -> None:
     st.markdown(f'<div class="avs-section">{title}{info_mark(help)}</div>',
                 unsafe_allow_html=True)
+    period_note(period)
 
 
-def subheading(title: str, help: str | None = None) -> None:
+def subheading(title: str, help: str | None = None, period: str | None = None) -> None:
     """A bold sub-title inside a section, with the same ⓘ explanation."""
     st.markdown(f'<div class="avs-subheading">{title}{info_mark(help)}</div>',
                 unsafe_allow_html=True)
+    period_note(period)
+
+
+def period_note(period: str | None) -> None:
+    """The reporting period a section is measured over, under its title.
+
+    Every section states its own window, because they are not all the same one:
+    the pipeline is a snapshot, and the executive summary can show two.
+    """
+    if period:
+        st.markdown(f'<div class="avs-period">{period}</div>', unsafe_allow_html=True)
 
 
 def banner(text: str, kind: str = "info") -> None:

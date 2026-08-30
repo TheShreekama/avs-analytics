@@ -18,7 +18,10 @@ def _base_layout(fig: go.Figure, height: int = 360, title: str | None = None,
                  showlegend: bool = True, int_y: bool = True) -> go.Figure:
     fig.update_layout(
         height=height,
-        title=dict(text=title, font=dict(size=15, color=PALETTE["ink"])) if title else None,
+        # An explicit empty string, never None: `title=None` serialises as
+        # `"title": {}`, and Plotly.js then draws a title element whose text is
+        # undefined — which is exactly what it prints, top-left of every chart.
+        title=dict(text=title or "", font=dict(size=15, color=PALETTE["ink"])),
         font=_FONT,
         margin=dict(l=10, r=10, t=40 if title else 16, b=10),
         paper_bgcolor="white",
@@ -144,6 +147,28 @@ def multi_line(df: pd.DataFrame, x: str, series_col: str, y: str, title: str | N
     return _base_layout(fig, height, title)
 
 
+def fy_lines(df: pd.DataFrame, x: str, series_col: str, y: str, x_order: list[str],
+             title: str | None = None, height: int = 360,
+             currency: bool = False) -> go.Figure:
+    """One line per fiscal year over a shared Jul→Jun month axis.
+
+    Used when the reporting period is "All time": laying the fiscal years on top
+    of one another is what makes year-over-year movement readable, where a single
+    continuous line just gets longer.  The x-axis is categorical so that a click
+    returns the month label exactly as drawn.
+    """
+    fig = go.Figure()
+    for i, key in enumerate(sorted(df[series_col].unique())):
+        g = df[df[series_col] == key]
+        add_line(fig, g, x, y, color=CATEGORICAL_SEQUENCE[i % len(CATEGORICAL_SEQUENCE)],
+                 name=str(key))
+    fig = _base_layout(fig, height, title, int_y=not currency)
+    fig.update_xaxes(type="category", categoryorder="array", categoryarray=x_order)
+    if currency:
+        fig.update_yaxes(tickprefix="$", tickformat="~s")
+    return fig
+
+
 def sankey(nodes: list[str], links: list[tuple[int, int, float]],
            title: str | None = None, height: int = 460,
            node_colors: list[str] | None = None) -> go.Figure:
@@ -158,7 +183,7 @@ def sankey(nodes: list[str], links: list[tuple[int, int, float]],
     ))
     fig.update_layout(height=height, font=_FONT, paper_bgcolor="white",
                       margin=dict(l=10, r=10, t=40 if title else 10, b=10),
-                      title=dict(text=title, font=dict(size=15)) if title else None)
+                      title=dict(text=title or "", font=dict(size=15)))
     return fig
 
 
