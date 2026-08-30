@@ -221,6 +221,40 @@ def render() -> None:
         "taxonomy used by the Status Reports; the two are not interchangeable.")
 
     # ------------------------------------------------------------------ #
+    section("How the reporting period changes a page")
+    st.markdown(
+        "The period selector at the top of every Migration Analytics page does "
+        "more than filter. **Each section states the window it is measured over, "
+        "under its own title**, because they are not all the same one.\n\n"
+        "**A This-FY row above the selected one.** When the selected period is "
+        "anything other than *This FY*, the executive summary shows two rows: the "
+        "fiscal year you are in, then the period you picked. A month or a quarter "
+        "on its own loses the year it sits in, so the year is put back above it. "
+        "The two rows are **computed independently** — each metric is recalculated "
+        "from its own window, with its own underlying records behind its own "
+        "drill-down — never one derived from the other. Selecting *This FY* shows "
+        "the single row, since the two would be identical.\n\n"
+        "**All time splits the trends by fiscal year.** Over a bounded window each "
+        "trend is bars plus a cumulative line. Over *All time* that line just gets "
+        "longer every year, so the shape changes instead: **one line per fiscal "
+        "year on a shared Jul → Jun axis**, a colour each, which is what makes "
+        "year-over-year movement readable. Nomination count, ACR claimed, hosts "
+        "(cores) migrated and migrations completed all switch together. Two things "
+        "follow from it:\n"
+        "- **No Cumulative column** in that view — a running total across unrelated "
+        "fiscal years would not mean anything. Per-FY totals are printed under the "
+        "chart, and the years sit side by side in the underlying-data panel.\n"
+        "- **Points are keyed `FY27 Sep`**, not `Sep`: every year has a September, "
+        "so the line a point sits on is part of its identity. Click-through works "
+        "the same as anywhere else.\n\n"
+        "**The pipeline ignores the period.** *Current pipeline* — nominations by "
+        "state and on-track by stage — is a snapshot of where accounts stand now. "
+        "It shows **every** account in the category at its latest wave, whatever "
+        "its nomination date and whichever window is selected, and says so under "
+        "its title. Narrowing a snapshot by a historical window would answer a "
+        "question nobody asked.")
+
+    # ------------------------------------------------------------------ #
     section("Drill-down — every number opens its records")
     st.markdown(
         "No number on this dashboard is a dead end. Each metric is computed together "
@@ -237,7 +271,9 @@ def render() -> None:
         "selection even when the on-screen table is capped for responsiveness.\n\n"
         "Chart labels are drawn on a **category axis** so a click returns the label "
         "exactly as written — otherwise a month written *2026-06* comes back as "
-        "*2026-06-01* and matches nothing.")
+        "*2026-06-01* and matches nothing. On a fiscal-year-split chart the label "
+        "alone is still ambiguous, so the trace a point belongs to is read too and "
+        "the selection becomes *FY27 Sep*.")
 
     # ------------------------------------------------------------------ #
     section("Date ranges & time windows")

@@ -21,10 +21,14 @@ import pandas as pd
 import streamlit as st
 
 from app import state
-from app.core import glossary, kpi, segments
+from app.config import FY_START_MONTH
+from app.core import glossary, kpi, metrics, segments
 from app.core.metrics import fmt_currency, fmt_int
 from app.ui import charts, components, drilldown
 from app.ui.theme import banner, page_header, section, subheading
+
+THIS_FY = "This FY"
+ALL_TIME = "All time"
 
 # The AVS → Azure Native motion moves *cores* to Azure-native services; the AVS
 # categories move *hosts*.  Both are the Total Cores column — only the noun differs.
@@ -66,7 +70,7 @@ def render(category: str) -> None:
     # Reporting window: the global one unless this report overrides it.
     top = st.columns([2, 3])
     with top[0]:
-        start, end, _shown = components.report_date_range(ctx, key)
+        start, end, shown, preset = components.report_date_range(ctx, key)
     with top[1]:
         _population_note(ctx, category, fact)
 
@@ -78,10 +82,11 @@ def render(category: str) -> None:
     # One wave sort for the whole page: every metric below reuses it.
     waves = kpi.wave_index(fact)
     unit_label, unit_short = _unit(category)
-    _executive_summary(fact, waves, start, end, key, unit_label, category)
-    _trends(fact, waves, start, end, key, unit_label, unit_short)
+    _executive_summary(ctx, fact, waves, start, end, key, unit_label, category,
+                       shown, preset)
+    _trends(fact, waves, start, end, key, unit_label, unit_short, shown, preset)
     _pipeline(fact, waves, key)
-    _detailed_data(fact, waves, start, end, key)
+    _detailed_data(fact, waves, start, end, key, shown)
 
 
 # --------------------------------------------------------------------------- #
@@ -118,9 +123,33 @@ def _why_empty(ctx, category: str) -> None:
                "Tags field at the right column, then come back.")
 
 
-def _executive_summary(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str,
-                       unit_label: str, category: str) -> None:
-    section("Executive summary", help=glossary.EXECUTIVE_SUMMARY)
+def _executive_summary(ctx, fact: pd.DataFrame, waves: kpi.WaveIndex, start, end,
+                       key: str, unit_label: str, category: str,
+                       shown: str, preset: str) -> None:
+    """Headline tiles for the selected period, over a This-FY row when they differ.
+
+    Selecting "This Month" answers "how did this month go?" but loses the year it
+    sits in, so anything other than This FY gets the fiscal year above it for
+    context.  The two rows are computed independently — each from its own window,
+    with its own records — never one derived from the other.
+    """
+    fy_start, fy_end = _this_fy(ctx)
+    show_fy_row = preset != THIS_FY and fy_start is not None
+
+    section("Executive summary", help=glossary.EXECUTIVE_SUMMARY,
+            period=None if show_fy_row else shown)
+    if show_fy_row:
+        st.caption("Two periods: the fiscal year you are in, then the period you "
+                   "selected. Each row is measured over its own window.")
+        _summary_row(fact, waves, fy_start, fy_end, f"{key}_fy", unit_label, category,
+                     _fy_label(ctx))
+    _summary_row(fact, waves, start, end, key, unit_label, category, shown)
+
+
+def _summary_row(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str,
+                 unit_label: str, category: str, period_label: str) -> None:
+    """One period's tiles, with the records behind them."""
+    subheading(period_label)
     engagements = kpi.new_engagements(fact, start, end, firsts=waves.first)
     completed = kpi.migrations_completed(fact, start, end, lasts=waves.last)
     hosts = kpi.hosts_migrated(fact, start, end)
@@ -138,11 +167,11 @@ def _executive_summary(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key
         {"label": unit_label, "value": fmt_int(hosts.value),
          "sub": "sum of Total Cores", "help": cores_help},
         {"label": "On-Track Accounts", "value": fmt_int(on_track.value), "tone": "warn",
-         "sub": "latest wave reads On-Track", "help": glossary.ON_TRACK_ACCOUNTS},
+         "sub": "current — not period-bound", "help": glossary.ON_TRACK_ACCOUNTS},
         {"label": "ACR Claimed", "value": fmt_currency(acr.value),
          "sub": "waves ended in the period", "help": glossary.ACR_CLAIMED},
     ])
-    with st.expander("🔎 Records behind these tiles"):
+    with st.expander(f"🔎 Records behind these tiles — {period_label}"):
         panels = [
             ("New Engagements", engagements, "new-engagements"),
             ("Migrations Completed", completed, "migrations-completed"),
@@ -163,11 +192,31 @@ def _executive_summary(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key
                                    key=f"{key}_{name}_csv")
 
 
+def _this_fy(ctx):
+    """The fiscal year the reporting as-of date sits in."""
+    rng = metrics.date_preset_range(ctx.as_of, THIS_FY, FY_START_MONTH)
+    return (rng[0].date(), rng[1].date()) if rng else (None, None)
+
+
+def _fy_label(ctx) -> str:
+    fy_start, fy_end = _this_fy(ctx)
+    if fy_start is None:
+        return THIS_FY
+    return (f"This FY ({metrics.fiscal_year_label(fy_start, FY_START_MONTH)}) — "
+            f"{fy_start:%d %b %Y} → {fy_end:%d %b %Y}")
+
+
 def _trends(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str,
-            unit_label: str, unit_short: str) -> None:
-    section("Trends — month over month", help=glossary.TRENDS)
-    st.caption("Click a bar **or a row of the table** to open the records behind "
-               "that month.")
+            unit_label: str, unit_short: str, shown: str, preset: str) -> None:
+    by_fy = preset == ALL_TIME
+    section("Trends — month over month", help=glossary.TRENDS, period=shown)
+    if by_fy:
+        st.caption("**All time** — each fiscal year is its own line over a shared "
+                   "Jul → Jun axis, so the years can be read against each other. "
+                   "Click a point **or a table row** to open that month's records.")
+    else:
+        st.caption("Click a bar **or a row of the table** to open the records behind "
+                   "that month.")
     basis = st.radio(
         "Trend basis (nomination count only)",
         ["Nomination approval date", "Nomination created date"],
@@ -193,26 +242,87 @@ def _trends(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str,
     ]
     for title, table, rows, value_col, row_date, unit_col, currency, what, help_text in trends:
         display_col = unit_short if value_col == "Hosts" else value_col
-        subheading(title, help=help_text)
+        subheading(title, help=help_text, period=shown)
         if table.empty:
             components.empty_state(f"No {what} in the selected period.")
             continue
-        fig = charts.trend_chart(table, "period", value_col, "Cumulative",
-                                 currency=currency, height=320)
-        drilldown.chart_with_drilldown(
-            fig, _with_period(rows, row_date), "period",
-            key=f"{key}_{value_col}".replace(" ", "_"), what=what, unit_col=unit_col,
-            summary=_display_trend(table, display_col, currency), summary_bucket="Month")
+        if by_fy:
+            _fy_trend(table, rows, value_col, display_col, row_date, unit_col, currency,
+                      what, key)
+        else:
+            fig = charts.trend_chart(table, "period", value_col, "Cumulative",
+                                     currency=currency, height=320)
+            drilldown.chart_with_drilldown(
+                fig, _with_period(rows, row_date), "period",
+                key=f"{key}_{value_col}".replace(" ", "_"), what=what, unit_col=unit_col,
+                summary=_display_trend(table, display_col, currency),
+                summary_bucket="Month")
         st.write("")
 
 
+def _fy_trend(table: pd.DataFrame, rows: pd.DataFrame, value_col: str, display_col: str,
+              row_date: str, unit_col: str | None, currency: bool, what: str,
+              key: str) -> None:
+    """One line per fiscal year, with the same click-through to the records.
+
+    A month label alone is ambiguous here — every year has a September — so the
+    chart, the summary table and the records are all keyed on "FY27 Sep", and
+    the line a point sits on is what tells the two Septembers apart.  The
+    year-over-year grid lives in the underlying-data panel, where it can be read
+    side by side without breaking that key.
+    """
+    split = kpi.split_by_fiscal_year(table, value_col, FY_START_MONTH)
+    if split.empty:
+        components.empty_state(f"No {what} to chart.")
+        return
+    years = sorted(split["fy"].unique())
+    order = metrics.fiscal_month_order(FY_START_MONTH)
+
+    fig = charts.fy_lines(split, "fy_month", "fy", value_col, order,
+                          currency=currency, height=340)
+    summary = split.rename(columns={"bucket": "Period", "fy": "FY", "fy_month": "Month",
+                                    value_col: display_col})
+    summary = summary[["Period", "FY", "Month", display_col]]
+    if currency:
+        summary[display_col] = summary[display_col].map(fmt_currency)
+    drilldown.chart_with_drilldown(
+        fig, kpi.label_fiscal_year(rows, row_date, FY_START_MONTH), "bucket",
+        key=f"{key}_{value_col}_fy".replace(" ", "_"), what=what, unit_col=unit_col,
+        summary=summary, summary_bucket="Period", curve_labels=years)
+
+    grid = split.pivot_table(index="fy_month", columns="fy", values=value_col,
+                             aggfunc="sum")
+    grid = grid.reindex([m for m in order if m in grid.index]).fillna(0)
+    totals = split.groupby("fy")[value_col].sum()
+    st.caption("Totals per fiscal year: " + " · ".join(
+        f"**{fy}** {fmt_currency(v) if currency else fmt_int(v)}"
+        for fy, v in totals.items()) +
+        " — no cumulative column here, because a running total across unrelated "
+        "fiscal years would not mean anything.")
+    display = grid.copy()
+    if currency:
+        for col in display.columns:
+            display[col] = display[col].map(fmt_currency)
+    drilldown.data_expander(
+        display.reset_index().rename(columns={"fy_month": "Month"}),
+        f"{key}_{value_col}_fy_grid".replace(" ", "_"),
+        label="Underlying data — fiscal years side by side",
+        caption="The same numbers as the chart, one column per fiscal year.")
+
+
 def _pipeline(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
-    section("Current pipeline", help=glossary.PIPELINE)
-    st.caption("Click a slice, bar or table row to open the accounts behind it.")
+    # Deliberately not given the reporting period: this section answers "where
+    # does the pipeline stand right now", which no date window should narrow.
+    section("Current pipeline", help=glossary.PIPELINE,
+            period="Current state — not filtered by the reporting period")
+    st.caption("Every account in this category at its latest wave, whatever its "
+               "nomination date. Click a slice, bar or table row to open the "
+               "accounts behind it.")
     states, state_rows = kpi.by_state(fact, lasts=waves.last)
     stages, stage_rows = kpi.on_track_by_stage(fact, lasts=waves.last)
 
-    subheading("Nominations by state", help=glossary.BY_STATE)
+    subheading("Nominations by state", help=glossary.BY_STATE,
+               period="Current state — not filtered by the reporting period")
     if states.empty:
         components.empty_state("No On-Track or Completed accounts to report.")
     else:
@@ -224,7 +334,8 @@ def _pipeline(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
                                            "acr": "ACR"}),
             summary_bucket="State")
 
-    subheading("On-track nominations by stage", help=glossary.BY_STAGE)
+    subheading("On-track nominations by stage", help=glossary.BY_STAGE,
+               period="All On-Track accounts — not filtered by the reporting period")
     if stages.empty:
         components.empty_state("No on-track accounts to report.")
     else:
@@ -237,8 +348,9 @@ def _pipeline(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
             summary_bucket="Stage")
 
 
-def _detailed_data(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str) -> None:
-    section("Detailed data", help=glossary.DETAILED_DATA)
+def _detailed_data(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str,
+                   shown: str) -> None:
+    section("Detailed data", help=glossary.DETAILED_DATA, period=shown)
     st.caption("Every record in this category, inheriting the filters and reporting "
                "period above. Group it, read the subtotals, then export.")
     c1, c2 = st.columns([2, 2])

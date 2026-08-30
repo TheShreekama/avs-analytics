@@ -442,3 +442,56 @@ def test_money_formatting_leaves_already_formatted_columns_alone():
     from app.ui.components import format_money
     frame = pd.DataFrame({"ACR": ["$1.20M", "$840.0K"]})
     assert list(format_money(frame)["ACR"]) == ["$1.20M", "$840.0K"]
+
+
+# --------------------------------------------------------------------------- #
+# Fiscal-year split — the "All time" view of every trend
+# --------------------------------------------------------------------------- #
+def test_fiscal_year_label_names_the_year_the_fy_ends_in():
+    from app.core.metrics import fiscal_month_order, fiscal_year_label
+    assert fiscal_year_label("2026-07-01") == "FY27"     # first day of FY27
+    assert fiscal_year_label("2027-06-30") == "FY27"     # last day of FY27
+    assert fiscal_year_label("2026-06-30") == "FY26"
+    assert fiscal_month_order()[0] == "Jul"
+    assert fiscal_month_order()[-1] == "Jun"
+    assert len(fiscal_month_order()) == 12
+
+
+def test_split_by_fiscal_year_keeps_every_month_and_its_total(fact):
+    all_avs = segments.population(fact, segments.CAT_ALL_AVS)
+    table, rows = kpi.monthly_unique_tpids(all_avs, "approval_date")
+    split = kpi.split_by_fiscal_year(table, "Nominations")
+    assert split["Nominations"].sum() == table["Nominations"].sum()
+    assert len(split) == len(table)
+    # Every month lands in the fiscal year that contains it, Jul→Jun: January
+    # 2026 belongs to FY26 (Jul 2025 → Jun 2026), where A and B were approved.
+    assert dict(zip(split["bucket"], split["Nominations"]))["FY26 Jan"] == 2
+    # Cumulative is deliberately absent: it would run across unrelated years.
+    assert "Cumulative" not in split.columns
+
+
+def test_fy_chart_buckets_resolve_to_records(fact):
+    """A click on "FY26 Sep" must find the rows behind that point."""
+    all_avs = segments.population(fact, segments.CAT_ALL_AVS)
+    table, rows = kpi.monthly_unique_tpids(all_avs, "approval_date")
+    split = kpi.split_by_fiscal_year(table, "Nominations")
+    labelled = kpi.label_fiscal_year(rows, "approval_date")
+    assert set(split["bucket"]) <= set(labelled["bucket"])
+    for bucket in split["bucket"]:
+        assert not labelled[labelled["bucket"] == bucket].empty
+
+
+def test_charts_never_emit_a_title_without_text():
+    """Regression: `title=None` serialises as {} and Plotly.js draws "undefined"."""
+    import json
+
+    from app.ui import charts
+    df = pd.DataFrame({"category": ["A", "B"], "count": [3, 4]})
+    figs = [charts.bar(df, "category", "count"),
+            charts.donut(df, "category", "count"),
+            charts.line(df, "category", "count"),
+            charts.bar(df, "category", "count", title="Named")]
+    for fig in figs:
+        title = json.loads(fig.to_json())["layout"].get("title")
+        assert title is not None and "text" in title, \
+            f"title {title!r} would render as undefined"

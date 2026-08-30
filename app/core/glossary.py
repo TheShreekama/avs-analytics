@@ -75,7 +75,13 @@ EXECUTIVE_SUMMARY = (
 TRENDS = (
     "Month-by-month movement for this category. Each table's final column is "
     "Cumulative — the running total of the months shown, never a different "
-    "population. Click a bar or a table row to open that month's records."
+    "population. Click a bar or a table row to open that month's records.\n"
+    "Over 'All time' the shape changes: each fiscal year becomes its own line "
+    "on a shared Jul → Jun axis, so the years read against one another instead "
+    "of stretching into one ever-longer series. There is no Cumulative column "
+    "in that view — a running total across unrelated fiscal years would not "
+    "mean anything. Points are keyed 'FY27 Sep', since every year has a "
+    "September."
 )
 
 TREND_NOMINATIONS = (
@@ -102,8 +108,11 @@ TREND_COMPLETED = (
 )
 
 PIPELINE = (
-    "Where the category stands right now, taken from each customer's latest wave "
-    "— independent of the reporting period above."
+    "Where the category stands RIGHT NOW, taken from each customer's latest "
+    "wave. Deliberately independent of the reporting period: every account in "
+    "the category is here, whatever its nomination date and whichever window is "
+    "selected above. Narrowing a snapshot by a historical window would answer a "
+    "question nobody asked."
 )
 
 BY_STATE = (
@@ -118,7 +127,8 @@ BY_STATE = (
 )
 
 BY_STAGE = (
-    "On-track customers (Current State = On-Track) grouped by the stage of their "
+    "ALL on-track customers (Current State = On-Track), whatever the reporting "
+    "period says, grouped by the stage of their "
     "latest wave (the Migration "
     "Status label, e.g. 'Executing Pre-Requisites', 'Migration In Progress'), with "
     "the account count and ACR for each stage."
@@ -135,7 +145,15 @@ REPORTING_PERIOD = (
     "the sidebar setting; any other choice overrides it for this page only. "
     "Windows are anchored on the reporting as-of date in the sidebar, which "
     "defaults to today — so This FY is the fiscal year you are currently in, "
-    "covering the whole year (1 Jul → 30 Jun) rather than year-to-date."
+    "covering the whole year (1 Jul → 30 Jun) rather than year-to-date.\n"
+    "Two choices change what the page shows, not just what it filters:\n"
+    "• Anything OTHER than This FY adds a This-FY row above the executive "
+    "summary, so a month or a quarter is read against the year it sits in. The "
+    "two rows are computed independently, each from its own window with its own "
+    "records.\n"
+    "• 'All time' splits every trend into one line per fiscal year.\n"
+    "The Current pipeline section ignores this setting entirely: it is a "
+    "snapshot of where accounts stand now."
 )
 
 # --------------------------------------------------------------------------- #

@@ -38,8 +38,15 @@ def normalize_bucket(value) -> str:
     return text
 
 
-def selectable_chart(fig: go.Figure, key: str) -> list[str]:
-    """Render a chart and return the x-values / labels the user selected."""
+def selectable_chart(fig: go.Figure, key: str,
+                     curve_labels: list[str] | None = None) -> list[str]:
+    """Render a chart and return the x-values / labels the user selected.
+
+    ``curve_labels`` names each trace, for a chart whose x-axis alone is
+    ambiguous: on an FY-split trend every year has a "Sep", so a click there
+    only identifies a month once the line it belongs to is named too.  The
+    selection then reads "FY27 Sep", matching the bucket on the records.
+    """
     event = st.plotly_chart(fig, width="stretch", key=key, on_select="rerun",
                             selection_mode=("points", "box", "lasso"))
     points = (event or {}).get("selection", {}).get("points", []) or []
@@ -49,6 +56,10 @@ def selectable_chart(fig: go.Figure, key: str) -> list[str]:
         if value is None:
             value = pt.get("x")
         value = normalize_bucket(value)
+        if value and curve_labels:
+            curve = pt.get("curve_number")
+            if isinstance(curve, int) and 0 <= curve < len(curve_labels):
+                value = f"{curve_labels[curve]} {value}"
         if value and value not in picked:
             picked.append(value)
     return picked
@@ -123,7 +134,8 @@ def chart_with_drilldown(fig: go.Figure, records: pd.DataFrame, bucket_col: str,
                          summary: pd.DataFrame | None = None,
                          summary_bucket: str | None = None,
                          summary_width: list | None = None,
-                         max_rows: int | None = None) -> None:
+                         max_rows: int | None = None,
+                         curve_labels: list[str] | None = None) -> None:
     """A chart and its summary table, either of which drills into the same records.
 
     Clicking a bar selects that month; clicking the matching table row does the
@@ -133,11 +145,11 @@ def chart_with_drilldown(fig: go.Figure, records: pd.DataFrame, bucket_col: str,
     if summary is not None and summary_bucket:
         left, right = st.columns(summary_width or [3, 2])
         with left:
-            picked += selectable_chart(fig, key=key)
+            picked += selectable_chart(fig, key=key, curve_labels=curve_labels)
         with right:
             picked += selectable_table(summary, key=f"{key}_table", bucket_col=summary_bucket)
     else:
-        picked += selectable_chart(fig, key=key)
+        picked += selectable_chart(fig, key=key, curve_labels=curve_labels)
     drilldown(records, bucket_col, picked, key=key, what=what, unit_col=unit_col,
               max_rows=max_rows)
 
