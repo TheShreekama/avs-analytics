@@ -391,17 +391,28 @@ def test_a_clean_file_reports_no_inconsistency(raw_frame):
 
 def test_every_eos_account_is_also_an_all_avs_migration(fact):
     """EOS accounts roll up into All AVS Migrations, whatever their own path says."""
-    eos = fact[fact["is_eos_population"].astype(bool)]
+    eos = fact[fact["is_eos_population"].astype(bool) & ~fact["is_from_avs"].astype(bool)]
     all_avs = segments.population(fact, segments.CAT_ALL_AVS)
     assert set(_tpids(eos)) <= set(_tpids(all_avs))
 
 
-def test_a_tagged_account_on_a_non_avs_path_still_counts_as_all_avs(raw_frame):
+def test_from_avs_stays_out_of_every_other_category_even_when_tagged(raw_frame):
+    """AVS → Azure Native is reported on its own page and nowhere else.
+
+    A "(From AVS)" nomination is leaving AVS. Counting it under All AVS
+    Migrations (onboarding TO AVS) or EOS Migration (refreshing ageing AVS
+    hosts) would put it in the wrong story — so not even a Gen-1 tag pulls it in.
+    """
     df = raw_frame.copy()
     df.loc[df["TPID"] == "600", "Tags"] = "AVS Migration - Gen1"   # a (From AVS) path
     mp = mapping.resolve_mapping(list(df.columns))
     built, _ = cleaning.build_fact_frame(df, mp, pd.Timestamp("2026-09-01"))
-    assert "600" in _tpids(segments.population(built, segments.CAT_ALL_AVS))
+    assert _tpids(segments.population(built, segments.CAT_AVS_NATIVE)) == ["600"]
+    for category in (segments.CAT_ALL_AVS, segments.CAT_EOS_ALL,
+                     segments.CAT_EOS_GEN1, segments.CAT_EOS_GEN2):
+        assert "600" not in _tpids(segments.population(built, category)), category
+    # ...and it is not counted into the EOS population at all.
+    assert not built.loc[built["tpid"] == "600", "is_eos_population"].any()
 
 
 def test_combined_eos_tab_is_the_union_of_its_generations(fact):
@@ -495,3 +506,48 @@ def test_charts_never_emit_a_title_without_text():
         title = json.loads(fig.to_json())["layout"].get("title")
         assert title is not None and "text" in title, \
             f"title {title!r} would render as undefined"
+
+
+# --------------------------------------------------------------------------- #
+# Ownership columns and the in-flight On-Track rule
+# --------------------------------------------------------------------------- #
+def test_drilldowns_name_who_owns_the_account(fact):
+    """Every record table says which SA and Factory PM to go and talk to."""
+    frame = kpi.drilldown_frame(kpi.latest_wave(fact))
+    assert "solution_architect" in frame.columns
+    assert "assigned_pm" in frame.columns
+
+
+def test_on_track_requires_an_in_flight_migration_status(raw_frame):
+    """Only statuses 1-4 are in flight; 5/6/7 can never be On-Track.
+
+    B's Wave 8 says "On Track" in Current State. Deferring it must take it out
+    of On-Track even though that text is untouched.
+    """
+    df = raw_frame.copy()
+    on_track_before = _on_track_tpids(df)
+    assert "200" in on_track_before
+
+    df.loc[df["Task ID"] == "4", "Migration Status"] = "5 - Deferred by Customer"
+    assert "200" not in _on_track_tpids(df)
+
+    # ...and each of the four in-flight statuses does keep it on track.
+    for status in ("1 - Validating Commitment & Initial Scope",
+                   "2 - Executing Pre-Requisites",
+                   "3 - Finalize Scope",
+                   "4 - Executing Migration"):
+        df.loc[df["Task ID"] == "4", "Migration Status"] = status
+        assert "200" in _on_track_tpids(df), status
+
+
+def _on_track_tpids(raw: pd.DataFrame) -> list[str]:
+    mp = mapping.resolve_mapping(list(raw.columns))
+    built, _ = cleaning.build_fact_frame(raw, mp, pd.Timestamp("2026-09-01"))
+    pop = segments.population(built, segments.CAT_ALL_AVS)
+    return _tpids(kpi.on_track_accounts(pop).records)
+
+
+def test_in_flight_is_exactly_statuses_one_to_four():
+    df = pd.DataFrame({"migration_status_code": [1, 2, 3, 4, 5, 6, 7, None]})
+    assert list(kpi.in_flight(df)) == [True, True, True, True,
+                                       False, False, False, False]

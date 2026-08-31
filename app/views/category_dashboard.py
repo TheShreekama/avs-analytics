@@ -21,7 +21,7 @@ import pandas as pd
 import streamlit as st
 
 from app import state
-from app.config import FY_START_MONTH
+from app.config import EOS_STATUS_ORDER, FY_START_MONTH
 from app.core import glossary, kpi, metrics, segments
 from app.core.metrics import fmt_currency, fmt_int
 from app.ui import charts, components, drilldown
@@ -29,6 +29,11 @@ from app.ui.theme import banner, page_header, section, subheading
 
 THIS_FY = "This FY"
 ALL_TIME = "All time"
+
+#: Categories broad enough for a region cut to say something. The two generation
+#: pages are subsets of EOS Migration (All), which already carries it.
+_REGIONAL_BREAKDOWN = (segments.CAT_EOS_ALL, segments.CAT_ALL_AVS,
+                       segments.CAT_AVS_NATIVE)
 
 # The AVS → Azure Native motion moves *cores* to Azure-native services; the AVS
 # categories move *hosts*.  Both are the Total Cores column — only the noun differs.
@@ -86,6 +91,10 @@ def render(category: str) -> None:
                        shown, preset)
     _trends(fact, waves, start, end, key, unit_label, unit_short, shown, preset)
     _pipeline(fact, waves, key)
+    if category == segments.CAT_AVS_NATIVE:
+        _offering_and_target(fact, key)
+    if category in _REGIONAL_BREAKDOWN:
+        _regional_breakdown(fact, waves, key)
     _detailed_data(fact, waves, start, end, key, shown)
 
 
@@ -346,6 +355,132 @@ def _pipeline(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
             summary=stages.rename(columns={"category": "Stage", "count": "Accounts",
                                            "acr": "ACR"}),
             summary_bucket="Stage")
+
+
+def _regional_breakdown(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
+    """Where the category sits geographically, by migration status.
+
+    Account-grain (each TPID's latest wave), so an account with five waves is one
+    account here rather than five rows — which is what the state chart above it
+    counts too.
+    """
+    section("Regional breakdown", help=glossary.REGIONAL_BREAKDOWN,
+            period="Current state — not filtered by the reporting period")
+    st.caption("Accounts at their latest wave, by region and migration status. "
+               "Click a bar to open the accounts behind it.")
+    rows = waves.last
+    if rows.empty or "region_geo" not in rows.columns:
+        components.empty_state("No regional data to report.")
+        return
+    rows = rows.assign(
+        _status=rows["migration_status_label"].astype("string")
+                                              .replace({"": pd.NA}).fillna("Unknown"),
+        _region=rows["region_geo"].astype("string")
+                                  .replace({"": pd.NA}).fillna("Unknown"))
+    pivot = pd.crosstab(rows["_status"], rows["_region"])
+    heat = pd.crosstab(rows["_region"], rows["_status"])
+
+    c1, c2 = st.columns(2)
+    with c1:
+        mode = st.radio("View", ["Counts", "Share %"], horizontal=True,
+                        key=f"{key}_region_mode", label_visibility="collapsed")
+        st.plotly_chart(charts.stacked_bar(pivot, title="Migration status by region",
+                                           percent=(mode == "Share %")),
+                        width="stretch")
+    with c2:
+        st.plotly_chart(charts.heatmap(heat, title="Region × status heatmap"),
+                        width="stretch")
+
+    counts = (rows.groupby("_region", as_index=False)
+                  .agg(count=("tpid_key", "nunique"))
+                  .rename(columns={"_region": "category"})
+                  .sort_values("count", ascending=False))
+    fig = charts.bar(counts, "category", "count", horizontal=True, height=300,
+                     title="Accounts by region")
+    drilldown.chart_with_drilldown(
+        fig, rows.assign(bucket=rows["_region"]), "bucket",
+        key=f"{key}_region", what="accounts",
+        summary=counts.rename(columns={"category": "Region", "count": "Accounts"}),
+        summary_bucket="Region")
+    drilldown.data_expander(
+        pivot.reset_index().rename(columns={"_status": "Migration Status"}),
+        f"{key}_region_grid", label="Underlying data — status × region",
+        caption="Account counts per migration status and region: the numbers "
+                "both charts above are drawn from.")
+
+
+def _offering_and_target(fact: pd.DataFrame, key: str) -> None:
+    """The AVS → Azure Native cut: which offering, which Azure service.
+
+    Lives here rather than on the status report because this is the page that
+    owns the motion — one place to read it, not two.
+    """
+    section("By offering & target", help=glossary.OFFERING_AND_TARGET,
+            period="Every nomination in this category — not filtered by the "
+                   "reporting period")
+    st.caption("Full offering names (the migration path), and the Azure-native "
+               "service each one lands on. Click a bar or slice to open the "
+               "nominations behind it.")
+    paths = _count_by(fact, "migration_path")
+    targets = _count_by(fact, "azure_target")
+    c1, c2 = st.columns(2)
+    with c1:
+        picked_path = drilldown.selectable_chart(
+            charts.bar(paths, "category", "count", horizontal=True,
+                       title="Nominations by migration path (offering)"),
+            key=f"{key}_offering")
+    with c2:
+        picked_target = drilldown.selectable_chart(
+            charts.donut(targets, "category", "count", title="Azure-native targets"),
+            key=f"{key}_target")
+    drilldown.drilldown(fact, "migration_path", picked_path,
+                        key=f"{key}_offering_rows", what="nominations by offering",
+                        max_rows=500)
+    drilldown.drilldown(fact, "azure_target", picked_target,
+                        key=f"{key}_target_rows", what="nominations by target",
+                        max_rows=500)
+
+    section("Operational status", help=glossary.OPERATIONAL_STATUS,
+            period="Every nomination in this category — not filtered by the "
+                   "reporting period")
+    st.caption("Delivery health, derived from Current State, Milestone Status, "
+               "Migration Status and planned-end vs the as-of date. This is a "
+               "different taxonomy from the On-Track / Completed pipeline above.")
+    if "eos_status" not in fact.columns:
+        components.empty_state("No operational status to report.")
+        return
+    status = _count_by(fact, "eos_status")
+    order = [s for s in EOS_STATUS_ORDER if s in set(status["category"])]
+    if order:
+        status = (status.set_index("category").reindex(order).reset_index()
+                        .dropna(subset=["count"]))
+    by_region = pd.crosstab(fact["eos_status"], fact["region_geo"])
+    c3, c4 = st.columns(2)
+    with c3:
+        picked_status = drilldown.selectable_chart(
+            charts.bar(status, "category", "count", color_status=True,
+                       title="Operational status"), key=f"{key}_opstatus")
+    with c4:
+        if not by_region.empty:
+            rows_order = [s for s in EOS_STATUS_ORDER if s in by_region.index]
+            st.plotly_chart(
+                charts.stacked_bar(by_region.reindex(rows_order) if rows_order
+                                   else by_region,
+                                   title="Operational status by region"),
+                width="stretch")
+    drilldown.drilldown(fact, "eos_status", picked_status,
+                        key=f"{key}_opstatus_rows", what="nominations", max_rows=500)
+    drilldown.data_expander(
+        by_region.reset_index().rename(columns={"eos_status": "Operational Status"}),
+        f"{key}_opstatus_grid", label="Underlying data — status × region")
+
+
+def _count_by(fact: pd.DataFrame, column: str) -> pd.DataFrame:
+    """Nomination counts per value of ``column``, biggest first."""
+    values = (fact[column].astype("string").replace({"": pd.NA}).fillna("Unknown")
+              if column in fact.columns else pd.Series(dtype="string"))
+    return (values.value_counts().rename_axis("category").reset_index(name="count")
+            if not values.empty else pd.DataFrame(columns=["category", "count"]))
 
 
 def _detailed_data(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str,

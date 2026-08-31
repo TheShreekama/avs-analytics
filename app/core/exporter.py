@@ -194,11 +194,11 @@ def _sec_eos(con, where, ss) -> list:
            Paragraph("Scope: nominations with an AV36/EOS migration path.", ss["Muted"])]
     dist = analytics.count_by(con, w, "eos_status")
     if not dist.empty:
-        out += [Paragraph("EOS Status Distribution", ss["H2"]),
+        out += [Paragraph("Operational Status Distribution", ss["H2"]),
                 _img(pc.bar_png(dist, "category", "count", color_status=True, height_px=290))]
     pivot = analytics.crosstab(con, w, "region_geo", "eos_status")
     if not pivot.empty:
-        out += [Paragraph("Region × EOS Status", ss["H2"]),
+        out += [Paragraph("Region × Operational Status", ss["H2"]),
                 _img(pc.heatmap_png(pivot, cmap="RdYlGn_r", height_px=300))]
     out.append(PageBreak())
     return out

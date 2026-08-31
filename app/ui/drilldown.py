@@ -51,10 +51,16 @@ def selectable_chart(fig: go.Figure, key: str,
                             selection_mode=("points", "box", "lasso"))
     points = (event or {}).get("selection", {}).get("points", []) or []
     picked: list[str] = []
+    labels = _trace_labels(fig)
     for pt in points:
         value = pt.get("label")
         if value is None:
             value = pt.get("x")
+        if value is None:
+            # A pie slice can come back carrying only its position. Read the
+            # category off the figure it was drawn from rather than losing the
+            # click.
+            value = _label_at(labels, pt)
         value = normalize_bucket(value)
         if value and curve_labels:
             curve = pt.get("curve_number")
@@ -63,6 +69,30 @@ def selectable_chart(fig: go.Figure, key: str,
         if value and value not in picked:
             picked.append(value)
     return picked
+
+
+def _trace_labels(fig: go.Figure) -> list[list[str]]:
+    """Each trace's category labels, in the order they were plotted."""
+    out = []
+    for trace in fig.data:
+        values = getattr(trace, "labels", None)
+        if values is None:
+            values = getattr(trace, "x", None)
+        out.append([str(v) for v in values] if values is not None else [])
+    return out
+
+
+def _label_at(labels: list[list[str]], point: dict) -> str | None:
+    """The category a selected point refers to, by trace and position."""
+    curve = point.get("curve_number", 0)
+    index = point.get("point_index")
+    if index is None:
+        index = point.get("point_number")
+    if not isinstance(curve, int) or not isinstance(index, int):
+        return None
+    if 0 <= curve < len(labels) and 0 <= index < len(labels[curve]):
+        return labels[curve][index]
+    return None
 
 
 def selectable_table(df: pd.DataFrame, key: str, bucket_col: str) -> list[str]:

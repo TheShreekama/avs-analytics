@@ -66,9 +66,18 @@ def render() -> None:
         "(e.g. *“1800 Americas”*) is stripped and flagged as a data-quality issue.")
 
     # ------------------------------------------------------------------ #
-    section("Operational / EOS status")
+    section("Operational status")
     st.markdown(
-        "`eos_status` is a single derived status, unified from several raw signals. "
+        "Shown as **Operational Status** throughout. It is a single derived "
+        "delivery-health status, unified from several raw signals — and despite "
+        "the internal column name `eos_status`, it has **nothing to do with EOS "
+        "(End-of-Support) migrations**: it applies to every nomination in the "
+        "file, whatever its category. The name is a leftover from when this "
+        "dashboard only covered EOS.\n\n"
+        "It is also **not** the same thing as the *Current pipeline* states "
+        "(On-Track / Completed), which read Migration Status and Current State "
+        "directly — see 'Current state & the pipeline chart' above. Operational "
+        "Status is the richer taxonomy used by the Status Reports.\n\n"
         "The **first matching rule wins** (top to bottom):")
     st.table({
         "Status": ["Completed", "Cancelled", "Blocked", "At Risk", "Delayed",
@@ -123,7 +132,13 @@ def render() -> None:
         "on-premises, VMG, AWS/VMC, AVS-to-AVS and EOS refreshes. Every **EOS "
         "Migration** account is included here too, whatever its own path reads.\n"
         "- **AVS → Azure Native** — the '(From AVS)' offerings, moving workloads off "
-        "AVS onto Azure-native services.\n"
+        "AVS onto Azure-native services. **Reported there and nowhere else**: a "
+        "(From AVS) nomination is leaving AVS, so counting it under All AVS "
+        "Migrations (onboarding *to* AVS) or under an EOS category (refreshing "
+        "ageing AVS hosts) would file it in the wrong story. Not even an 'AVS "
+        "Migration - Gen1/Gen2' tag pulls one in — every other category excludes "
+        "`is_from_avs`, and such a row is not counted into the EOS population at "
+        "all.\n"
         "- **EOS Migration** — every EOS account in one view. **Gen-1** and "
         "**Gen-2** are subsets of it, one page each.\n\n"
         "**EOS population.** An account is an **EOS Migration** account when ANY of "
@@ -197,10 +212,16 @@ def render() -> None:
         "match winning:\n\n"
         "1. **Completed** — that wave's Migration Status is `7 - Completed`.\n"
         "2. **Cancelled** — the wave resolved to a cancelled/archived status.\n"
-        "3. **On-Track** — Current State reads *On Track* / *On-Track*.\n"
-        "4. **Other** — whatever else Current State says: *Blocked - Customer*, "
-        "*Blocked - Account team*, *Waiting action on follow up date*. These are "
-        "unfinished but **not on track**, and are counted in neither.\n\n"
+        "3. **On-Track** — **both** conditions hold:\n"
+        "    - Migration Status is one of the four **in-flight** codes: "
+        "`1 - Validating Commitment & Initial Scope`, `2 - Executing "
+        "Pre-Requisites`, `3 - Finalize Scope`, `4 - Executing Migration`; and\n"
+        "    - Current State reads *On Track* / *On-Track*.\n"
+        "4. **Other** — everything else. A wave that is `5 - Deferred by "
+        "Customer` is not on track however its Current State reads; nor is one "
+        "whose Current State says *Blocked - Customer*, *Blocked - Account "
+        "team* or *Waiting action on follow up date* however its status "
+        "reads.\n\n"
         "**Nominations by state shows only On-Track and Completed.** Cancelled, "
         "blocked and waiting accounts are deliberately left out, so the slices will "
         "**not** add up to every account in the category — the chart answers \"how "
@@ -219,6 +240,28 @@ def render() -> None:
         "source.\n\n"
         "Note that `eos_status` (the section below) is a *different*, derived "
         "taxonomy used by the Status Reports; the two are not interchangeable.")
+
+    # ------------------------------------------------------------------ #
+    section("Where each cut of the data lives")
+    st.markdown(
+        "One page owns each view, so the same numbers are not maintained in two "
+        "places:\n\n"
+        "- **Migration Analytics → AVS → Azure Native** owns that motion "
+        "entirely — its metrics, trends, pipeline, **By offering & target** "
+        "(full offering names and the Azure-native service each lands on) and "
+        "**Operational status**. The Status Report of the same name keeps the "
+        "delivery pipeline and the record list only.\n"
+        "- **Regional breakdown** — *Migration status by region* and the "
+        "*Region × status heatmap* — appears on **EOS Migration (All)**, **All "
+        "AVS Migrations** and **AVS → Azure Native**. The Gen-1 and Gen-2 pages "
+        "are subsets of EOS Migration (All) and do not repeat it.\n"
+        "  Note the grain: on a Migration Analytics page these count "
+        "**accounts** (each TPID's latest wave), matching the state chart above "
+        "them; the Status Reports count **nomination waves**. The same region "
+        "will therefore read differently in the two places, and should.\n\n"
+        "Every drill-down table names the **Solution Architect** and the "
+        "**Factory PM** for each record, so a number leads to the person who "
+        "owns it.")
 
     # ------------------------------------------------------------------ #
     section("How the reporting period changes a page")

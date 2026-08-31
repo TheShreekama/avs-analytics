@@ -33,7 +33,7 @@ def render() -> None:
              "status follows the customer's <b>last wave</b>") if state.is_customer_mode() else \
             "every wave that is an EOS migration"
     banner(f"<b>Scope:</b> EOS Migration nominations — {scope}. "
-           "EOS status is derived from Current State, Milestone Status, Migration Status code "
+           "Operational status is derived from Current State, Milestone Status, Migration Status code "
            "and planned-end vs as-of date.")
 
     date_filter = components.page_date_filter(
@@ -73,12 +73,12 @@ def render() -> None:
     st.caption("Click a slice or a bar to open the nominations in that status.")
     dist = analytics.count_by(con, where, "eos_status")
     drilldown.charts_with_drilldown(
-        [charts.donut(dist, "category", "count", title="EOS status share"),
+        [charts.donut(dist, "category", "count", title="Operational status share"),
          charts.bar(dist, "category", "count", color_status=True,
-                    title="EOS status counts")],
+                    title="Operational status counts")],
         records, "eos_status", key="eos_dist", what="nominations", max_rows=500)
 
-    section("Region vs EOS status")
+    section("Region vs operational status")
     pivot = analytics.crosstab(con, where, "region_geo", "eos_status")
     if not pivot.empty:
         ordered = [c for c in EOS_STATUS_ORDER if c in pivot.columns]
@@ -88,7 +88,7 @@ def render() -> None:
         drilldown.data_expander(
             pivot[ordered].reset_index().rename(columns={"row": "Region"}),
             "eos_region_table", label="Underlying data — region × status",
-            caption="Nomination counts per region and EOS status.")
+            caption="Nomination counts per region and operational status.")
 
     section("Status trend over time")
     sql = f'''SELECT date_trunc('month', created_date) AS period, eos_status,
@@ -99,19 +99,19 @@ def render() -> None:
     with c3:
         if not long.empty:
             st.plotly_chart(charts.multi_line(long, "period", "eos_status", "value",
-                                              title="EOS status by month"),
+                                              title="Operational status by month"),
                             width="stretch")
     with c4:
         pivot2 = analytics.crosstab(con, where, "migration_path", "eos_status")
         if not pivot2.empty:
             ordered2 = [c for c in EOS_STATUS_ORDER if c in pivot2.columns]
             st.plotly_chart(charts.stacked_bar(pivot2[ordered2], horizontal=True,
-                                               title="EOS status by migration path"),
+                                               title="Operational status by migration path"),
                             width="stretch")
     if not long.empty:
         drilldown.data_expander(
             long.assign(period=pd.to_datetime(long["period"]).dt.strftime("%Y-%m"))
-                .rename(columns={"period": "Month", "eos_status": "EOS Status",
+                .rename(columns={"period": "Month", "eos_status": "Operational Status",
                                  "value": "Nominations"}),
             "eos_trend_table", label="Underlying data — status by month")
     if not pivot2.empty:

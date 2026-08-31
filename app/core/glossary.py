@@ -38,16 +38,18 @@ HOSTS_MIGRATED = (
 CORES_MIGRATED = HOSTS_MIGRATED.replace("nodes/hosts", "cores")
 
 ON_TRACK_ACCOUNTS = (
-    "Customers (TPIDs) whose LATEST wave reads On-Track in the Current State "
-    "column.\n"
-    "• Taken from Current State literally — 'On Track' / 'On-Track'.\n"
-    "• 'Blocked - Customer', 'Blocked - Account team' and 'Waiting action on "
-    "follow up date' are NOT on track, and are not counted here.\n"
-    "• A latest wave that is '7 - Completed', or a cancelled account, is "
-    "reported under its own state instead.\n"
-    "• Where Current State is blank the account falls back to on-track if it is "
-    "neither completed nor cancelled, so an unmapped column cannot empty the "
-    "pipeline.\n"
+    "Customers (TPIDs) whose LATEST wave is genuinely in flight. BOTH must "
+    "hold:\n"
+    "1. Migration Status is one of the four in-flight codes — '1 - Validating "
+    "Commitment & Initial Scope', '2 - Executing Pre-Requisites', '3 - Finalize "
+    "Scope', '4 - Executing Migration'. A wave that is '5 - Deferred by "
+    "Customer', '6 - Cancelled / Archived' or '7 - Completed' is never on "
+    "track, whatever its Current State says.\n"
+    "2. Current State reads 'On Track' / 'On-Track'. 'Blocked - Customer', "
+    "'Blocked - Account team' and 'Waiting action on follow up date' are not on "
+    "track, whatever the status says.\n"
+    "Where Current State is blank the status alone decides, so an unmapped "
+    "column cannot empty the pipeline.\n"
     "This tile is a snapshot of where the category stands now — the reporting "
     "period does not narrow it."
 )
@@ -119,7 +121,8 @@ BY_STATE = (
     "Customers by current state, from each TPID's latest wave. Only two states "
     "are reported:\n"
     "• Completed — that wave's Migration Status is '7 - Completed'.\n"
-    "• On-Track — that wave's Current State reads 'On Track'.\n"
+    "• On-Track — that wave is in flight (Migration Status 1-4) AND its Current "
+    "State reads 'On Track'.\n"
     "Cancelled accounts, and accounts sitting in a blocked or waiting state, are "
     "deliberately left out, so the chart shows live and finished work only — the "
     "slices will not add up to every account in the category.\n"
@@ -127,11 +130,40 @@ BY_STATE = (
 )
 
 BY_STAGE = (
-    "ALL on-track customers (Current State = On-Track), whatever the reporting "
-    "period says, grouped by the stage of their "
-    "latest wave (the Migration "
+    "ALL on-track customers — in-flight Migration Status (1-4) with Current "
+    "State reading On-Track — whatever the reporting period says, grouped by "
+    "the stage of their latest wave (the Migration "
     "Status label, e.g. 'Executing Pre-Requisites', 'Migration In Progress'), with "
     "the account count and ACR for each stage."
+)
+
+OPERATIONAL_STATUS = (
+    "Delivery health, derived from Current State, Milestone Status, the "
+    "Migration Status code and planned-end vs the reporting as-of date: "
+    "Completed, Cancelled, Blocked, At Risk, Delayed, On Track (first matching "
+    "rule wins).\n"
+    "Despite the internal column name 'eos_status' this has NOTHING to do with "
+    "EOS (End-of-Support) migrations — it applies to every nomination whatever "
+    "its category. The name is a leftover from when this dashboard only covered "
+    "EOS.\n"
+    "It is also a different thing from the On-Track / Completed pipeline "
+    "states, which read Migration Status and Current State directly. See the "
+    "Methodology page for both tables side by side."
+)
+
+REGIONAL_BREAKDOWN = (
+    "Where the category sits geographically, by migration status. Counted at "
+    "ACCOUNT grain — each TPID's latest wave — so an account with five waves is "
+    "one account here, matching the state chart above rather than the wave "
+    "counts on the Status Reports.\n"
+    "A snapshot: the reporting period does not narrow it."
+)
+
+OFFERING_AND_TARGET = (
+    "Which '(From AVS)' offering each nomination is, by its full Primary "
+    "Migration Path ('SQL Server MI Migration (From AVS)'), and which "
+    "Azure-native service it lands on. Wave-level counts over every nomination "
+    "in the category, not narrowed by the reporting period."
 )
 
 DETAILED_DATA = (
@@ -199,14 +231,19 @@ CATEGORY_HELP = {
     segments.CAT_EOS_GEN1: f"{EOS_POPULATION}\n\n{GENERATION_RULE}",
     segments.CAT_EOS_GEN2: f"{EOS_POPULATION}\n\n{GENERATION_RULE}",
     segments.CAT_ALL_AVS: (
-        "Every nomination whose TARGET platform is AVS, whatever it migrates from "
-        "— on-premises, VMG, AWS/VMC, AVS-to-AVS and EOS refreshes. Derived from "
-        "the Primary Migration Path and Factory Offering; paths reading "
-        "'(From AVS)' are excluded, since those leave AVS."
+        "Every nomination whose TARGET platform is AVS, whatever it migrates "
+        "from — on-premises, VMG, AWS/VMC, AVS-to-AVS and EOS refreshes. "
+        "Derived from the Primary Migration Path and Factory Offering. Paths "
+        "reading '(From AVS)' are excluded and reported only under AVS → Azure "
+        "Native, since those are leaving AVS rather than onboarding to it."
     ),
     segments.CAT_AVS_NATIVE: (
         "Nominations migrating AWAY from AVS to Azure-native services — the "
         "offerings whose Primary Migration Path contains '(From AVS)', e.g. "
-        "'SQL Server MI Migration (From AVS)'."
+        "'SQL Server MI Migration (From AVS)'.\n"
+        "This motion is reported HERE AND NOWHERE ELSE. It is excluded from All "
+        "AVS Migrations (which is onboarding TO AVS) and from every EOS "
+        "category (which is refreshing ageing AVS hosts) — not even an 'AVS "
+        "Migration - Gen1/Gen2' tag pulls a (From AVS) account into them."
     ),
 }

@@ -30,7 +30,8 @@ from . import metrics, segments
 
 # Columns offered in every drill-down table, in this order (missing ones are skipped).
 DRILLDOWN_COLUMNS = [
-    "tpid", "customer_name", "migration_category", "generation", "source_platform",
+    "tpid", "customer_name", "solution_architect", "assigned_pm",
+    "migration_category", "generation", "source_platform",
     "target_platform", "phase", "avs_sku", "migration_status_label", "approval_date",
     "actual_start_date", "actual_end_date", "total_cores", "total_acr",
     "current_state", "eos_status", "region_geo", "migration_path",
@@ -48,6 +49,12 @@ REPORTED_STATES = (STATE_ON_TRACK, STATE_COMPLETED)
 
 #: "On Track", "On-Track", "on  track" — the Current State column is free text.
 _ON_TRACK_PATTERN = r"on\s*-?\s*track"
+
+#: Migration Status codes that describe a migration still in flight:
+#: 1 - Validating Commitment & Initial Scope, 2 - Executing Pre-Requisites,
+#: 3 - Finalize Scope, 4 - Executing Migration.  Everything else is deferred (5),
+#: cancelled (6) or completed (7) and can never be On-Track.
+IN_FLIGHT_CODES = (1, 2, 3, 4)
 
 
 @dataclass
@@ -339,36 +346,54 @@ def label_fiscal_year(rows: pd.DataFrame, date_col: str,
 # --------------------------------------------------------------------------- #
 # Current pipeline
 # --------------------------------------------------------------------------- #
+def in_flight(df: pd.DataFrame) -> pd.Series:
+    """Migration Status is one of the four in-flight codes (1, 2, 3, 4).
+
+    A migration that is deferred, cancelled or completed is not in flight, so it
+    can never be On-Track however its Current State reads.
+    """
+    if df.empty:
+        return pd.Series(dtype=bool)
+    code = pd.to_numeric(df.get("migration_status_code"), errors="coerce")
+    return code.isin(IN_FLIGHT_CODES).fillna(False)
+
+
 def state_of(df: pd.DataFrame) -> pd.Series:
     """Current state of one-row-per-TPID latest-wave records.
 
-    Read from the **Current State** column of that latest wave, in this order:
+    Read from the latest wave, in this order:
 
     1. **Completed** — the wave's Migration Status is "7 - Completed".
     2. **Cancelled** — the wave resolved to a cancelled/archived status.
-    3. **On-Track** — Current State reads "On Track"/"On-Track".
-    4. **Other** — anything else Current State says: "Blocked - Customer",
-       "Waiting action on follow up date", and so on.  These are deliberately
-       *not* on track, which is why the state chart shows only (1) and (3).
+    3. **On-Track** — BOTH conditions hold:
+       * Migration Status is one of the four in-flight codes — "1 - Validating
+         Commitment & Initial Scope", "2 - Executing Pre-Requisites",
+         "3 - Finalize Scope", "4 - Executing Migration"; and
+       * Current State reads "On Track"/"On-Track".
+    4. **Other** — everything else.  A wave deferred ("5 - Deferred by
+       Customer") is not on track however its Current State reads; nor is one
+       whose Current State says "Blocked - Customer" or "Waiting action on
+       follow up date" however its status reads.
 
-    A row whose Current State is blank falls back to "still in flight" (neither
-    completed nor cancelled ⇒ On-Track), so a file that never got the column
-    mapped still reports a pipeline instead of an empty one.
+    A row whose Current State is blank falls back to the status alone, so a file
+    that never got that column mapped still reports a pipeline rather than an
+    empty one.
     """
     if df.empty:
         return pd.Series(dtype="object")
     completed = is_completed(df)
     cancelled = df.get("eos_status", pd.Series("", index=df.index)) \
         .eq(STATE_CANCELLED).fillna(False)
+    moving = in_flight(df)
 
     raw = (df["current_state"].astype("string").str.strip()
            if "current_state" in df.columns
            else pd.Series(pd.NA, index=df.index, dtype="string"))
     unstated = raw.isna() | raw.eq("")
-    on_track = raw.str.contains(_ON_TRACK_PATTERN, case=False, na=False, regex=True)
+    reads_on_track = raw.str.contains(_ON_TRACK_PATTERN, case=False, na=False, regex=True)
 
     out = pd.Series(STATE_OTHER, index=df.index, dtype="object")
-    out[on_track | (unstated & ~completed & ~cancelled)] = STATE_ON_TRACK
+    out[moving & (reads_on_track | unstated)] = STATE_ON_TRACK
     out[cancelled] = STATE_CANCELLED
     out[completed] = STATE_COMPLETED
     return out

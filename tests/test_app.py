@@ -243,3 +243,37 @@ def test_sections_state_the_period_they_are_measured_over():
     assert any("This month" in p for p in pills)
     # The pipeline is a snapshot and says so, rather than inheriting the period.
     assert any("not filtered by the reporting period" in p for p in pills), pills
+
+
+def _sections(at: AppTest) -> list[str]:
+    import re
+    return [re.sub(r"<[^>]+>", "", m.value).replace("ⓘ", "")
+            for m in at.markdown if 'class="avs-section"' in m.value]
+
+
+@pytest.mark.parametrize("page", ["category_dashboard.eos_all",
+                                  "category_dashboard.all_avs",
+                                  "category_dashboard.avs_native"])
+def test_broad_categories_carry_a_regional_breakdown(page):
+    at = _render(page, "Customer (deduplicated)")
+    assert not at.exception, f"{page} raised: {at.exception}"
+    assert "Regional breakdown" in _sections(at), _sections(at)
+
+
+def test_offering_and_operational_status_live_on_the_category_page():
+    """They moved off the status report; exactly one page owns each now."""
+    dashboard = _sections(_render("category_dashboard.avs_native",
+                                  "Customer (deduplicated)"))
+    assert "By offering & target" in dashboard, dashboard
+    assert "Operational status" in dashboard, dashboard
+
+    report = _sections(_render("avs_native_status", "Customer (deduplicated)"))
+    assert "By offering & target" not in report, report
+    assert "Operational status" not in report, report
+
+
+def test_the_generation_pages_do_not_repeat_the_regional_breakdown():
+    """Gen-1/Gen-2 are subsets of EOS Migration (All), which already carries it."""
+    at = _render("category_dashboard.eos_gen1", "Customer (deduplicated)")
+    assert not at.exception, f"raised: {at.exception}"
+    assert "Regional breakdown" not in _sections(at)
