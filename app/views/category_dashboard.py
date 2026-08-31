@@ -21,7 +21,7 @@ import pandas as pd
 import streamlit as st
 
 from app import state
-from app.config import EOS_STATUS_ORDER, FY_START_MONTH
+from app.config import FY_START_MONTH
 from app.core import glossary, kpi, metrics, segments
 from app.core.metrics import fmt_currency, fmt_int
 from app.ui import charts, components, drilldown
@@ -439,40 +439,6 @@ def _offering_and_target(fact: pd.DataFrame, key: str) -> None:
     drilldown.drilldown(fact, "azure_target", picked_target,
                         key=f"{key}_target_rows", what="nominations by target",
                         max_rows=500)
-
-    section("Operational status", help=glossary.OPERATIONAL_STATUS,
-            period="Every nomination in this category — not filtered by the "
-                   "reporting period")
-    st.caption("Delivery health, derived from Current State, Milestone Status, "
-               "Migration Status and planned-end vs the as-of date. This is a "
-               "different taxonomy from the On-Track / Completed pipeline above.")
-    if "eos_status" not in fact.columns:
-        components.empty_state("No operational status to report.")
-        return
-    status = _count_by(fact, "eos_status")
-    order = [s for s in EOS_STATUS_ORDER if s in set(status["category"])]
-    if order:
-        status = (status.set_index("category").reindex(order).reset_index()
-                        .dropna(subset=["count"]))
-    by_region = pd.crosstab(fact["eos_status"], fact["region_geo"])
-    c3, c4 = st.columns(2)
-    with c3:
-        picked_status = drilldown.selectable_chart(
-            charts.bar(status, "category", "count", color_status=True,
-                       title="Operational status"), key=f"{key}_opstatus")
-    with c4:
-        if not by_region.empty:
-            rows_order = [s for s in EOS_STATUS_ORDER if s in by_region.index]
-            st.plotly_chart(
-                charts.stacked_bar(by_region.reindex(rows_order) if rows_order
-                                   else by_region,
-                                   title="Operational status by region"),
-                width="stretch")
-    drilldown.drilldown(fact, "eos_status", picked_status,
-                        key=f"{key}_opstatus_rows", what="nominations", max_rows=500)
-    drilldown.data_expander(
-        by_region.reset_index().rename(columns={"eos_status": "Operational Status"}),
-        f"{key}_opstatus_grid", label="Underlying data — status × region")
 
 
 def _count_by(fact: pd.DataFrame, column: str) -> pd.DataFrame:

@@ -9,8 +9,7 @@ from __future__ import annotations
 import streamlit as st
 
 from app import state
-from app.config import (DATE_PRESETS, DEFAULT_DATE_PRESET, EOS_STATUS_ORDER,
-                        FY_START_MONTH)
+from app.config import DATE_PRESETS, DEFAULT_DATE_PRESET, FY_START_MONTH
 from app.core.metrics import date_preset_range
 from app.ui.theme import page_header, section
 
@@ -66,44 +65,21 @@ def render() -> None:
         "(e.g. *“1800 Americas”*) is stripped and flagged as a data-quality issue.")
 
     # ------------------------------------------------------------------ #
-    section("Operational status")
-    st.markdown(
-        "Shown as **Operational Status** throughout. It is a single derived "
-        "delivery-health status, unified from several raw signals — and despite "
-        "the internal column name `eos_status`, it has **nothing to do with EOS "
-        "(End-of-Support) migrations**: it applies to every nomination in the "
-        "file, whatever its category. The name is a leftover from when this "
-        "dashboard only covered EOS.\n\n"
-        "It is also **not** the same thing as the *Current pipeline* states "
-        "(On-Track / Completed), which read Migration Status and Current State "
-        "directly — see 'Current state & the pipeline chart' above. Operational "
-        "Status is the richer taxonomy used by the Status Reports.\n\n"
-        "The **first matching rule wins** (top to bottom):")
-    st.table({
-        "Status": ["Completed", "Cancelled", "Blocked", "At Risk", "Delayed",
-                   "At Risk", "On Track"],
-        "Derived when…": [
-            "migration status code = 7, label/state says complete/done, milestone "
-            "“completed”, or an actual end date exists",
-            "code = 6, label says cancel/archive, or milestone “cancelled”",
-            "Current State contains “blocked”",
-            "deferred — code = 5 or label/state says “defer”",
-            "has a planned-end date, no actual-end date, and planned-end is before the "
-            "as-of date (schedule overdue)",
-            "a follow-up date is past due, or Current State starts with “waiting”",
-            "none of the above (default)",
-        ],
-    })
-    st.caption(f"Display order: {' → '.join(EOS_STATUS_ORDER)}.")
-
-    # ------------------------------------------------------------------ #
     section("Risk")
     st.markdown(
-        "“**Risk**” = any nomination whose `eos_status` is **At Risk, Delayed or "
-        "Blocked** (see the rules above). The *EOS risk hotspot* insight reports the "
-        "region with the most such items, plus the **share of the portfolio** in any "
-        "risk state. There is no scoring model — it is a direct count of those three "
-        "statuses.")
+        "Internally, every nomination carries a derived delivery-health status "
+        "(Completed, Cancelled, Blocked, At Risk, Delayed, On Track — first "
+        "matching rule wins, from Current State, Milestone Status, the Migration "
+        "Status code and planned-end vs the as-of date). It is not shown as its "
+        "own report or column — the dashboards surface it only through **Risk**: "
+        "any nomination in the At Risk, Delayed or Blocked state. The *Risk "
+        "hotspot* insight reports the region with the most such items, plus the "
+        "**share of the portfolio** in any risk state. There is no scoring model "
+        "— it is a direct count of those three statuses.\n\n"
+        "This is a different thing from the *Current pipeline* states "
+        "(On-Track / Completed) used on the Migration Analytics dashboards, which "
+        "read Migration Status and Current State directly — see 'Current state "
+        "& the pipeline chart' above.")
 
     # ------------------------------------------------------------------ #
     section("Approval, closure, aging & cycle time")
@@ -238,8 +214,9 @@ def render() -> None:
         "records are listed on **Data → Data Inconsistency** under *Current State "
         "contradicts Migration Status*, so the disagreeing column can be fixed at "
         "source.\n\n"
-        "Note that `eos_status` (the section below) is a *different*, derived "
-        "taxonomy used by the Status Reports; the two are not interchangeable.")
+        "Note that the internal delivery-health status described under 'Risk' "
+        "below is a *different*, derived taxonomy feeding the Risk insight; the "
+        "two are not interchangeable.")
 
     # ------------------------------------------------------------------ #
     section("Where each cut of the data lives")
@@ -247,18 +224,17 @@ def render() -> None:
         "One page owns each view, so the same numbers are not maintained in two "
         "places:\n\n"
         "- **Migration Analytics → AVS → Azure Native** owns that motion "
-        "entirely — its metrics, trends, pipeline, **By offering & target** "
-        "(full offering names and the Azure-native service each lands on) and "
-        "**Operational status**. The Status Report of the same name keeps the "
-        "delivery pipeline and the record list only.\n"
+        "entirely — its metrics, trends, pipeline and **By offering & target** "
+        "(full offering names and the Azure-native service each lands on). The "
+        "Status Report of the same name keeps the delivery pipeline and the "
+        "record list only.\n"
         "- **Regional breakdown** — *Migration status by region* and the "
         "*Region × status heatmap* — appears on **EOS Migration (All)**, **All "
         "AVS Migrations** and **AVS → Azure Native**. The Gen-1 and Gen-2 pages "
-        "are subsets of EOS Migration (All) and do not repeat it.\n"
-        "  Note the grain: on a Migration Analytics page these count "
-        "**accounts** (each TPID's latest wave), matching the state chart above "
-        "them; the Status Reports count **nomination waves**. The same region "
-        "will therefore read differently in the two places, and should.\n\n"
+        "are subsets of EOS Migration (All) and do not repeat it. The equivalent "
+        "section on **Status Reports → Accounts by Migration Status** counts the "
+        "same way — **accounts** (each TPID's latest wave), regardless of the "
+        "sidebar's Counting mode toggle — so the two never disagree.\n\n"
         "Every drill-down table names the **Solution Architect** and the "
         "**Factory PM** for each record, so a number leads to the person who "
         "owns it.")
@@ -377,7 +353,7 @@ def render() -> None:
         "rule guards against thin data so it degrades gracefully on small slices. "
         "Insights include: portfolio scope, largest region, highest/lowest approval-"
         "rate region, overall closure rate, fastest-closing region, approval velocity, "
-        "oldest open nomination, most common migration status, EOS risk hotspot, "
+        "oldest open nomination, most common migration status, risk hotspot, "
         "fastest-growing path, top Azure-native destination, ACR concentration, and "
         "data-quality issues.")
 

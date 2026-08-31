@@ -39,10 +39,9 @@ _SEV_COLOR = {"positive": colors.HexColor(PALETTE["good"]),
 SECTION_LIBRARY = [
     ("categories", "Migration category dashboards (EOS Gen-1/Gen-2, All AVS, Azure Native)"),
     ("inconsistency", "Data inconsistency review"),
-    ("overview", "Portfolio Overview (status, regions, delivery health)"),
+    ("overview", "Portfolio Overview (status, regions)"),
     ("approved", "Nominations Approved (trend & regional)"),
     ("closed", "Nominations Closed (closure rate & aging)"),
-    ("eos", "EOS Migration Status"),
     ("trends", "Nomination Trends"),
     ("avs_azure", "AVS → Azure Native"),
     ("insights", "Insights"),
@@ -188,22 +187,6 @@ def _sec_closed(con, where, ss) -> list:
     return out
 
 
-def _sec_eos(con, where, ss) -> list:
-    w = analytics._where_and(where, '"is_av36_eos" = TRUE')
-    out = [Paragraph("EOS Migration Status", ss["H1"]),
-           Paragraph("Scope: nominations with an AV36/EOS migration path.", ss["Muted"])]
-    dist = analytics.count_by(con, w, "eos_status")
-    if not dist.empty:
-        out += [Paragraph("Operational Status Distribution", ss["H2"]),
-                _img(pc.bar_png(dist, "category", "count", color_status=True, height_px=290))]
-    pivot = analytics.crosstab(con, w, "region_geo", "eos_status")
-    if not pivot.empty:
-        out += [Paragraph("Region × Operational Status", ss["H2"]),
-                _img(pc.heatmap_png(pivot, cmap="RdYlGn_r", height_px=300))]
-    out.append(PageBreak())
-    return out
-
-
 def _sec_trends(con, where, ss) -> list:
     out = [Paragraph("Nomination Trends", ss["H1"])]
     ts = analytics.timeseries(con, where, "created_date", "month")
@@ -255,16 +238,16 @@ def _sec_tables(con, where, ss) -> list:
         out += [Paragraph("Closure Rate by Region", ss["H2"]),
                 _df_table(cr.head(12), ss, col_widths=[7 * cm, 3 * cm, 3 * cm, 4 * cm]),
                 Spacer(1, 0.4 * cm)]
-    cols = ["customer_name", "migration_path", "region_geo", "eos_status", "aging_days"]
+    cols = ["customer_name", "migration_path", "region_geo", "aging_days"]
     longest = analytics.fetch_rows(con, analytics._where_and(where, '"is_open" = TRUE'),
                                    cols, "aging_days", True, 10)
     if not longest.empty:
         longest = longest.rename(columns={"customer_name": "Customer", "migration_path": "Path",
-                                          "region_geo": "Region", "eos_status": "Status",
+                                          "region_geo": "Region",
                                           "aging_days": "Age (d)"})
         out += [Paragraph("Longest-Open Nominations", ss["H2"]),
                 _df_table(longest, ss,
-                          col_widths=[5 * cm, 4.5 * cm, 3.5 * cm, 2.5 * cm, 1.5 * cm])]
+                          col_widths=[6 * cm, 5.5 * cm, 4 * cm, 1.5 * cm])]
     return out
 
 
@@ -330,7 +313,7 @@ def _sec_inconsistency(ctx, ss) -> list:
 
 _SECTION_FN = {
     "overview": _sec_overview, "approved": _sec_approved, "closed": _sec_closed,
-    "eos": _sec_eos, "trends": _sec_trends, "avs_azure": _sec_avs_azure,
+    "trends": _sec_trends, "avs_azure": _sec_avs_azure,
     "insights": _sec_insights, "tables": _sec_tables,
 }
 

@@ -9,9 +9,9 @@ focused on onboarding to AVS.  Trend analysis for these lives on the
 
 Every chart opens the records behind it, with a CSV export.
 
-The **offering / Azure-target** and **operational status** cuts live on
-**Migration Analytics → AVS → Azure Native**, next to this motion's metrics and
-trends; this page keeps the delivery pipeline and the record list.
+The **offering / Azure-target** cut lives on **Migration Analytics → AVS →
+Azure Native**, next to this motion's metrics and trends; this page keeps the
+delivery pipeline and the record list.
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def render() -> None:
         ctx, "ans", "created_date", table=table, scope=SCOPE_FROM_AVS)
     filters, where = components.filter_sidebar(
         ctx, ["region_geo", "migration_path", "azure_target",
-              "migration_status_label", "eos_status"], table=table, scope=SCOPE_FROM_AVS, date_filter=date_filter)
+              "migration_status_label"], table=table, scope=SCOPE_FROM_AVS, date_filter=date_filter)
 
     con = ctx.con
     total = analytics.total_rows(con, where)
@@ -69,9 +69,9 @@ def render() -> None:
     records = analytics.select_all(con, where)
 
     components.banner_note(
-        "<b>By offering &amp; target</b> and <b>Operational status</b> now live on "
-        "<b>Migration Analytics → AVS → Azure Native</b>, alongside this motion's "
-        "metrics and trends — one place to read them rather than two.")
+        "<b>By offering &amp; target</b> now lives on <b>Migration Analytics → "
+        "AVS → Azure Native</b>, alongside this motion's metrics and trends — "
+        "one place to read it rather than two.")
 
     section("Migration status pipeline")
     st.caption("Click a bar to open the nominations at that stage.")
@@ -94,7 +94,7 @@ def render() -> None:
     section("Nomination records")
     st.caption("Every record in the current selection.")
     cols = ["task_id", "customer_name", "region_geo", "migration_path", "azure_target",
-            "migration_status_label", "eos_status", "total_acr", "created_date"]
+            "migration_status_label", "total_acr", "created_date"]
     cols = [c for c in cols if c in records.columns]
     frame = records[cols].sort_values("created_date", ascending=False)
     components.show_table(frame.head(500), height=420)

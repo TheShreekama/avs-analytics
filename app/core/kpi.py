@@ -34,7 +34,7 @@ DRILLDOWN_COLUMNS = [
     "migration_category", "generation", "source_platform",
     "target_platform", "phase", "avs_sku", "migration_status_label", "approval_date",
     "actual_start_date", "actual_end_date", "total_cores", "total_acr",
-    "current_state", "eos_status", "region_geo", "migration_path",
+    "current_state", "region_geo", "migration_path",
 ]
 
 COMPLETED_CODE = 7

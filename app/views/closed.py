@@ -31,7 +31,7 @@ def render() -> None:
     date_filter = components.page_date_filter(
         ctx, "cls", "actual_end_date", table=table, scope=SCOPE_PRIMARY)
     filters, where = components.filter_sidebar(
-        ctx, ["region_geo", "migration_path", "eos_status"], table=table,
+        ctx, ["region_geo", "migration_path"], table=table,
         scope=SCOPE_PRIMARY, date_filter=date_filter)
 
     con = ctx.con
@@ -122,7 +122,7 @@ def render() -> None:
     with c3:
         st.markdown("**⏳ Longest-open nominations**")
         cols = [c for c in ("customer_name", "migration_path", "region_geo",
-                            "eos_status", "aging_days") if c in open_fact.columns]
+                            "aging_days") if c in open_fact.columns]
         longest = open_fact[cols].sort_values("aging_days", ascending=False)
         components.show_table(longest.head(15), height=380)
         st.download_button("⬇️ Export open nominations",

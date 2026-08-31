@@ -137,25 +137,12 @@ BY_STAGE = (
     "the account count and ACR for each stage."
 )
 
-OPERATIONAL_STATUS = (
-    "Delivery health, derived from Current State, Milestone Status, the "
-    "Migration Status code and planned-end vs the reporting as-of date: "
-    "Completed, Cancelled, Blocked, At Risk, Delayed, On Track (first matching "
-    "rule wins).\n"
-    "Despite the internal column name 'eos_status' this has NOTHING to do with "
-    "EOS (End-of-Support) migrations — it applies to every nomination whatever "
-    "its category. The name is a leftover from when this dashboard only covered "
-    "EOS.\n"
-    "It is also a different thing from the On-Track / Completed pipeline "
-    "states, which read Migration Status and Current State directly. See the "
-    "Methodology page for both tables side by side."
-)
-
 REGIONAL_BREAKDOWN = (
     "Where the category sits geographically, by migration status. Counted at "
     "ACCOUNT grain — each TPID's latest wave — so an account with five waves is "
-    "one account here, matching the state chart above rather than the wave "
-    "counts on the Status Reports.\n"
+    "one account here, matching the state chart above it. The equivalent "
+    "'Regional breakdown' on Status Reports → Accounts by Migration Status "
+    "counts the same way, regardless of the sidebar's Counting mode toggle.\n"
     "A snapshot: the reporting period does not narrow it."
 )
 
