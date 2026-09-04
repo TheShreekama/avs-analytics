@@ -204,7 +204,9 @@ def eos_population(fact: pd.DataFrame) -> pd.Series:
         tagged = tpid_key(fact).map(generation_by_tpid(fact)).isin((GEN_1, GEN_2))
     keys = fact["tpid_key"] if "tpid_key" in fact.columns else tpid_key(fact)
     marker = fact["is_av36_eos"].astype(bool).groupby(keys).transform("any")
-    return tagged | marker
+    # A "(From AVS)" wave is leaving AVS, not refreshing ageing AVS hosts, so it
+    # is never EOS — whatever tag it happens to carry.  See ``population``.
+    return (tagged | marker) & ~fact["is_from_avs"].astype(bool)
 
 
 # --------------------------------------------------------------------------- #
@@ -213,31 +215,43 @@ def eos_population(fact: pd.DataFrame) -> pd.Series:
 def population(fact: pd.DataFrame, category: str) -> pd.DataFrame:
     """Rows belonging to a reporting category.
 
-    ``all_avs`` is every nomination whose **target** platform is AVS, whatever the
-    source; ``avs_native`` is the "(From AVS)" motion; the EOS categories are the
-    EOS population split by the TPID's generation.
+    **The AVS → Azure Native motion is reported on its own and nowhere else.**
+    It moves workloads *off* AVS onto Azure-native services, so counting it under
+    All AVS Migrations (which is onboarding *to* AVS) or under EOS Migration
+    (which is refreshing ageing AVS hosts) would double-count it into the wrong
+    story.  Every category below therefore excludes ``is_from_avs``, and
+    ``avs_native`` selects exactly those rows.
+
+    ``all_avs`` is every remaining nomination whose **target** platform is AVS,
+    whatever the source; the EOS categories are the EOS population split by the
+    TPID's generation.
     """
     if fact.empty:
         return fact
+    if category == CAT_AVS_NATIVE:
+        return fact[fact["is_from_avs"].astype(bool)]
+
+    # Everything else is the onboarding-to-AVS side of the house.
+    onboarding = fact[~fact["is_from_avs"].astype(bool)]
+    if onboarding.empty:
+        return onboarding
     if category == CAT_ALL_AVS:
         # Every EOS Migration account is an AVS migration too, even when its own
         # path does not read as AVS-targeting.
-        return fact[fact["is_avs_target"].astype(bool)
-                    | fact["is_eos_population"].astype(bool)]
-    if category == CAT_AVS_NATIVE:
-        return fact[fact["is_from_avs"].astype(bool)]
-    if category == CAT_EOS_ALL:
-        return fact[fact["is_eos_population"].astype(bool)]
+        return onboarding[onboarding["is_avs_target"].astype(bool)
+                          | onboarding["is_eos_population"].astype(bool)]
     if category == CAT_EOS_GEN1:
-        return fact[fact["generation"] == GEN_1]
+        return onboarding[(onboarding["generation"] == GEN_1)
+                          & onboarding["is_eos_population"].astype(bool)]
     if category == CAT_EOS_GEN2:
-        return fact[fact["generation"] == GEN_2]
+        return onboarding[(onboarding["generation"] == GEN_2)
+                          & onboarding["is_eos_population"].astype(bool)]
     if category == CAT_EOS_UNCLASSIFIED:
         # In scope through the offering fallback rather than a tag, so there is no
         # generation to report — kept visible, never folded into Gen-1 or Gen-2.
-        return fact[fact["is_eos_population"].astype(bool)
-                    & (fact["generation"] == GEN_UNCLASSIFIED)]
-    return fact[fact["is_eos_population"].astype(bool)]
+        return onboarding[onboarding["is_eos_population"].astype(bool)
+                          & (onboarding["generation"] == GEN_UNCLASSIFIED)]
+    return onboarding[onboarding["is_eos_population"].astype(bool)]
 
 
 def category_summary(fact: pd.DataFrame) -> pd.DataFrame:

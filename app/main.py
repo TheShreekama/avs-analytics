@@ -26,7 +26,7 @@ def run() -> None:
     from app.ui.theme import inject_css
     from app.views import (accounts_status, approved, approved_trends, avs_native_status,
                            avs_to_azure, category_dashboard, closed, column_mapping,
-                           data_inconsistency, data_upload, eos_status, insights_page,
+                           data_inconsistency, data_upload, insights_page,
                            methodology, nomination_trends, overview, reports)
 
     global _BOOT_LOGGED
@@ -67,8 +67,6 @@ def run() -> None:
                     url_path="approved"),
             st.Page(closed.render, title="Nominations Closed", icon=":material/check_circle:",
                     url_path="closed"),
-            st.Page(eos_status.render, title="EOS Migration Status",
-                    icon=":material/warning:", url_path="eos-status"),
             st.Page(avs_native_status.render, title="AVS → Azure Native Status",
                     icon=":material/cloud_sync:", url_path="avs-native-status"),
         ],

@@ -7,11 +7,12 @@ bucket to click) expose the cross-tab itself instead.
 """
 from __future__ import annotations
 
+import pandas as pd
 import streamlit as st
 
 from app import state
 from app.config import SCOPE_PRIMARY
-from app.core import analytics
+from app.core import analytics, kpi
 from app.core.metrics import fmt_int
 from app.ui import charts, components, drilldown
 from app.ui.theme import page_header, section
@@ -64,26 +65,36 @@ def render() -> None:
         max_rows=500)
 
     section("Regional breakdown")
-    pivot = analytics.crosstab(con, where, "migration_status_label", "region_geo")
-    c3, c4 = st.columns(2)
-    with c3:
-        if not pivot.empty:
+    st.caption("Accounts at their latest wave — deduplicated by TPID regardless of "
+               "the Counting mode toggle in the sidebar, so this always matches the "
+               "Migration Analytics dashboards rather than following whichever mode "
+               "happens to be selected.")
+    # Always the raw wave-level table, collapsed to one row per TPID's latest wave
+    # here — never the SQL "customer"/"fact" table the Counting mode toggle picks,
+    # so a reader who switches that toggle to wave-level never sees this section
+    # start counting nomination waves.
+    latest = kpi.latest_wave(analytics.select_all(con, where, table="fact"))
+    if latest.empty:
+        components.empty_state("No regional data to report.")
+    else:
+        pivot = pd.crosstab(latest["migration_status_label"], latest["region_geo"])
+        heat = pd.crosstab(latest["region_geo"], latest["migration_status_label"])
+        c3, c4 = st.columns(2)
+        with c3:
             mode = st.radio("View", ["Counts", "Share %"], horizontal=True, key="as_mode",
                             label_visibility="collapsed")
             st.plotly_chart(
                 charts.stacked_bar(pivot, title="Migration status by region",
                                    percent=(mode == "Share %")),
                 width="stretch")
-    with c4:
-        heat = analytics.crosstab(con, where, "region_geo", "migration_status_label")
-        if not heat.empty:
+        with c4:
             st.plotly_chart(charts.heatmap(heat, title="Region × status heatmap"),
                             width="stretch")
-    drilldown.data_expander(
-        pivot.reset_index().rename(columns={"row": "Migration Status"}), "acc_pivot",
-        label="Underlying data — status × region",
-        caption="Nomination counts per migration status and region: the numbers "
-                "both charts above are drawn from.")
+        drilldown.data_expander(
+            pivot.reset_index().rename(columns={"migration_status_label": "Migration Status"}),
+            "acc_pivot", label="Underlying data — status × region",
+            caption="Account counts (each TPID's latest wave) per migration status "
+                    "and region: the numbers both charts above are drawn from.")
 
     section("Grouped breakdown")
     dim = st.selectbox("Group accounts by",
@@ -105,7 +116,7 @@ def render() -> None:
     section("Nomination records")
     st.caption("Every record in the current selection.")
     cols = ["task_id", "customer_name", "region_geo", "migration_path",
-            "migration_status_label", "eos_status", "current_state", "total_acr",
+            "migration_status_label", "current_state", "total_acr",
             "created_date"]
     cols = [c for c in cols if c in records.columns]
     frame = records[cols]

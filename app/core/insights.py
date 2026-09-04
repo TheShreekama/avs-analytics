@@ -139,14 +139,14 @@ def generate_insights(fact: pd.DataFrame, region_dim: str = "region_geo") -> lis
             f"({fmt_int(int(ms.iloc[0]))} nominations, {ms.iloc[0]/n*100:.0f}%).",
             INFO, ms.index[0]))
 
-    # ---- EOS risk hotspots ------------------------------------------------ #
+    # ---- Risk hotspots ------------------------------------------------ #
     risk_states = {"At Risk", "Delayed", "Blocked"}
     fact_risk = fact[fact["eos_status"].isin(risk_states)]
     if not fact_risk.empty:
         hot = fact_risk[region_dim].value_counts()
         share = len(fact_risk) / n * 100
         out.append(Insight(
-            "EOS Risk", "EOS risk hotspot",
+            "Risk", "Risk hotspot",
             f"**{hot.index[0]}** has the most at-risk/blocked/delayed items "
             f"({fmt_int(int(hot.iloc[0]))}). {share:.0f}% of the portfolio is in a risk state.",
             CRITICAL if share >= 20 else WARNING, fmt_int(int(hot.iloc[0]))))

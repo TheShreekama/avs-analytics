@@ -9,6 +9,7 @@ Run with:  python -m pytest tests/test_app.py -v
 import os
 import sys
 
+import pandas as pd
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -19,7 +20,7 @@ _HARNESS = os.path.join(os.path.dirname(__file__), "_page_harness.py")
 _HOME = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Home.py")
 
 PAGES = [
-    "overview", "accounts_status", "approved", "closed", "eos_status",
+    "overview", "accounts_status", "approved", "closed",
     "nomination_trends", "approved_trends", "avs_to_azure", "avs_native_status",
     "insights_page", "methodology", "reports", "data_upload", "column_mapping",
     "data_inconsistency",
@@ -151,8 +152,7 @@ def test_every_report_offers_a_reporting_period(page):
 
 
 # Status Reports must let a reader get from any chart to the records behind it.
-_STATUS_REPORTS = ["accounts_status", "approved", "closed", "eos_status",
-                   "avs_native_status"]
+_STATUS_REPORTS = ["accounts_status", "approved", "closed", "avs_native_status"]
 
 
 @pytest.mark.parametrize("page", _STATUS_REPORTS)
@@ -243,3 +243,70 @@ def test_sections_state_the_period_they_are_measured_over():
     assert any("This month" in p for p in pills)
     # The pipeline is a snapshot and says so, rather than inheriting the period.
     assert any("not filtered by the reporting period" in p for p in pills), pills
+
+
+def _sections(at: AppTest) -> list[str]:
+    import re
+    return [re.sub(r"<[^>]+>", "", m.value).replace("ⓘ", "")
+            for m in at.markdown if 'class="avs-section"' in m.value]
+
+
+@pytest.mark.parametrize("page", ["category_dashboard.eos_all",
+                                  "category_dashboard.all_avs",
+                                  "category_dashboard.avs_native"])
+def test_broad_categories_carry_a_regional_breakdown(page):
+    at = _render(page, "Customer (deduplicated)")
+    assert not at.exception, f"{page} raised: {at.exception}"
+    assert "Regional breakdown" in _sections(at), _sections(at)
+
+
+def test_offering_and_target_lives_only_on_the_category_page():
+    """It moved off the status report; exactly one page owns it now."""
+    dashboard = _sections(_render("category_dashboard.avs_native",
+                                  "Customer (deduplicated)"))
+    assert "By offering & target" in dashboard, dashboard
+
+    report = _sections(_render("avs_native_status", "Customer (deduplicated)"))
+    assert "By offering & target" not in report, report
+
+
+def test_operational_status_is_gone_from_the_ui():
+    """It was a delivery-health taxonomy easily mistaken for being EOS-specific;
+    removed as its own report/column/filter. The engine still derives it
+    internally (Risk, closure detection), just never displays it as a page,
+    section, filter or table column any more."""
+    assert not hasattr(
+        __import__("app.views", fromlist=["eos_status"]), "eos_status")
+    for page in ("overview", "accounts_status", "closed", "avs_native_status",
+                "avs_to_azure", "insights_page", "reports",
+                "category_dashboard.avs_native"):
+        at = _render(page, "Customer (deduplicated)")
+        assert not at.exception, f"{page} raised: {at.exception}"
+        assert "Operational status" not in _sections(at), (page, _sections(at))
+        assert "Operational Status" not in [s.label for s in at.selectbox], page
+
+
+def test_the_generation_pages_do_not_repeat_the_regional_breakdown():
+    """Gen-1/Gen-2 are subsets of EOS Migration (All), which already carries it."""
+    at = _render("category_dashboard.eos_gen1", "Customer (deduplicated)")
+    assert not at.exception, f"raised: {at.exception}"
+    assert "Regional breakdown" not in _sections(at)
+
+
+def test_regional_breakdown_ignores_the_counting_mode_toggle():
+    """Accounts by Migration Status must never show wave counts here, whichever
+    Counting mode the sidebar toggle is set to — it should always agree with
+    the Migration Analytics dashboards' account-deduplicated regional cut."""
+    tables = {}
+    for mode in ("Customer (deduplicated)", "Nomination (wave-level)"):
+        at = _render("accounts_status", mode)
+        assert not at.exception, f"{mode} raised: {at.exception}"
+        target = next((e for e in at.expander if "status × region" in (e.label or "")),
+                      None)
+        assert target is not None, f"{mode}: no regional-breakdown panel found"
+        assert target.dataframe, f"{mode}: regional-breakdown panel has no table"
+        tables[mode] = target.dataframe[0].value
+    left, right = tables.values()
+    pd.testing.assert_frame_equal(
+        left.sort_values(list(left.columns)).reset_index(drop=True),
+        right.sort_values(list(right.columns)).reset_index(drop=True))

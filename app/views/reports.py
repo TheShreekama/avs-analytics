@@ -13,7 +13,7 @@ from app.ui.theme import page_header, section, subheading
 
 _PRESET_BUNDLES = {
     "Executive pack": ["categories", "overview", "insights"],
-    "Delivery review": ["overview", "approved", "closed", "eos", "tables"],
+    "Delivery review": ["overview", "approved", "closed", "tables"],
     "Data quality review": ["inconsistency", "tables"],
     "Everything": exporter.SECTION_KEYS,
 }
@@ -36,7 +36,7 @@ def render() -> None:
     # motion, so the sidebar exposes region/status only.
     date_filter = components.page_date_filter(ctx, "rep", "created_date", table=table)
     filters, where = components.filter_sidebar(
-        ctx, ["region_geo", "eos_status"], table=table, date_filter=date_filter)
+        ctx, ["region_geo"], table=table, date_filter=date_filter)
     scope_label = "Filtered view" if where else "All data"
     n = analytics.total_rows(ctx.con, where)
     window = ((date_filter["start"], date_filter["end"]) if date_filter else (None, None))

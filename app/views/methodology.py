@@ -9,8 +9,7 @@ from __future__ import annotations
 import streamlit as st
 
 from app import state
-from app.config import (DATE_PRESETS, DEFAULT_DATE_PRESET, EOS_STATUS_ORDER,
-                        FY_START_MONTH)
+from app.config import DATE_PRESETS, DEFAULT_DATE_PRESET, FY_START_MONTH
 from app.core.metrics import date_preset_range
 from app.ui.theme import page_header, section
 
@@ -66,35 +65,21 @@ def render() -> None:
         "(e.g. *“1800 Americas”*) is stripped and flagged as a data-quality issue.")
 
     # ------------------------------------------------------------------ #
-    section("Operational / EOS status")
-    st.markdown(
-        "`eos_status` is a single derived status, unified from several raw signals. "
-        "The **first matching rule wins** (top to bottom):")
-    st.table({
-        "Status": ["Completed", "Cancelled", "Blocked", "At Risk", "Delayed",
-                   "At Risk", "On Track"],
-        "Derived when…": [
-            "migration status code = 7, label/state says complete/done, milestone "
-            "“completed”, or an actual end date exists",
-            "code = 6, label says cancel/archive, or milestone “cancelled”",
-            "Current State contains “blocked”",
-            "deferred — code = 5 or label/state says “defer”",
-            "has a planned-end date, no actual-end date, and planned-end is before the "
-            "as-of date (schedule overdue)",
-            "a follow-up date is past due, or Current State starts with “waiting”",
-            "none of the above (default)",
-        ],
-    })
-    st.caption(f"Display order: {' → '.join(EOS_STATUS_ORDER)}.")
-
-    # ------------------------------------------------------------------ #
     section("Risk")
     st.markdown(
-        "“**Risk**” = any nomination whose `eos_status` is **At Risk, Delayed or "
-        "Blocked** (see the rules above). The *EOS risk hotspot* insight reports the "
-        "region with the most such items, plus the **share of the portfolio** in any "
-        "risk state. There is no scoring model — it is a direct count of those three "
-        "statuses.")
+        "Internally, every nomination carries a derived delivery-health status "
+        "(Completed, Cancelled, Blocked, At Risk, Delayed, On Track — first "
+        "matching rule wins, from Current State, Milestone Status, the Migration "
+        "Status code and planned-end vs the as-of date). It is not shown as its "
+        "own report or column — the dashboards surface it only through **Risk**: "
+        "any nomination in the At Risk, Delayed or Blocked state. The *Risk "
+        "hotspot* insight reports the region with the most such items, plus the "
+        "**share of the portfolio** in any risk state. There is no scoring model "
+        "— it is a direct count of those three statuses.\n\n"
+        "This is a different thing from the *Current pipeline* states "
+        "(On-Track / Completed) used on the Migration Analytics dashboards, which "
+        "read Migration Status and Current State directly — see 'Current state "
+        "& the pipeline chart' above.")
 
     # ------------------------------------------------------------------ #
     section("Approval, closure, aging & cycle time")
@@ -123,7 +108,13 @@ def render() -> None:
         "on-premises, VMG, AWS/VMC, AVS-to-AVS and EOS refreshes. Every **EOS "
         "Migration** account is included here too, whatever its own path reads.\n"
         "- **AVS → Azure Native** — the '(From AVS)' offerings, moving workloads off "
-        "AVS onto Azure-native services.\n"
+        "AVS onto Azure-native services. **Reported there and nowhere else**: a "
+        "(From AVS) nomination is leaving AVS, so counting it under All AVS "
+        "Migrations (onboarding *to* AVS) or under an EOS category (refreshing "
+        "ageing AVS hosts) would file it in the wrong story. Not even an 'AVS "
+        "Migration - Gen1/Gen2' tag pulls one in — every other category excludes "
+        "`is_from_avs`, and such a row is not counted into the EOS population at "
+        "all.\n"
         "- **EOS Migration** — every EOS account in one view. **Gen-1** and "
         "**Gen-2** are subsets of it, one page each.\n\n"
         "**EOS population.** An account is an **EOS Migration** account when ANY of "
@@ -197,10 +188,16 @@ def render() -> None:
         "match winning:\n\n"
         "1. **Completed** — that wave's Migration Status is `7 - Completed`.\n"
         "2. **Cancelled** — the wave resolved to a cancelled/archived status.\n"
-        "3. **On-Track** — Current State reads *On Track* / *On-Track*.\n"
-        "4. **Other** — whatever else Current State says: *Blocked - Customer*, "
-        "*Blocked - Account team*, *Waiting action on follow up date*. These are "
-        "unfinished but **not on track**, and are counted in neither.\n\n"
+        "3. **On-Track** — **both** conditions hold:\n"
+        "    - Migration Status is one of the four **in-flight** codes: "
+        "`1 - Validating Commitment & Initial Scope`, `2 - Executing "
+        "Pre-Requisites`, `3 - Finalize Scope`, `4 - Executing Migration`; and\n"
+        "    - Current State reads *On Track* / *On-Track*.\n"
+        "4. **Other** — everything else. A wave that is `5 - Deferred by "
+        "Customer` is not on track however its Current State reads; nor is one "
+        "whose Current State says *Blocked - Customer*, *Blocked - Account "
+        "team* or *Waiting action on follow up date* however its status "
+        "reads.\n\n"
         "**Nominations by state shows only On-Track and Completed.** Cancelled, "
         "blocked and waiting accounts are deliberately left out, so the slices will "
         "**not** add up to every account in the category — the chart answers \"how "
@@ -217,8 +214,30 @@ def render() -> None:
         "records are listed on **Data → Data Inconsistency** under *Current State "
         "contradicts Migration Status*, so the disagreeing column can be fixed at "
         "source.\n\n"
-        "Note that `eos_status` (the section below) is a *different*, derived "
-        "taxonomy used by the Status Reports; the two are not interchangeable.")
+        "Note that the internal delivery-health status described under 'Risk' "
+        "below is a *different*, derived taxonomy feeding the Risk insight; the "
+        "two are not interchangeable.")
+
+    # ------------------------------------------------------------------ #
+    section("Where each cut of the data lives")
+    st.markdown(
+        "One page owns each view, so the same numbers are not maintained in two "
+        "places:\n\n"
+        "- **Migration Analytics → AVS → Azure Native** owns that motion "
+        "entirely — its metrics, trends, pipeline and **By offering & target** "
+        "(full offering names and the Azure-native service each lands on). The "
+        "Status Report of the same name keeps the delivery pipeline and the "
+        "record list only.\n"
+        "- **Regional breakdown** — *Migration status by region* and the "
+        "*Region × status heatmap* — appears on **EOS Migration (All)**, **All "
+        "AVS Migrations** and **AVS → Azure Native**. The Gen-1 and Gen-2 pages "
+        "are subsets of EOS Migration (All) and do not repeat it. The equivalent "
+        "section on **Status Reports → Accounts by Migration Status** counts the "
+        "same way — **accounts** (each TPID's latest wave), regardless of the "
+        "sidebar's Counting mode toggle — so the two never disagree.\n\n"
+        "Every drill-down table names the **Solution Architect** and the "
+        "**Factory PM** for each record, so a number leads to the person who "
+        "owns it.")
 
     # ------------------------------------------------------------------ #
     section("How the reporting period changes a page")
@@ -334,7 +353,7 @@ def render() -> None:
         "rule guards against thin data so it degrades gracefully on small slices. "
         "Insights include: portfolio scope, largest region, highest/lowest approval-"
         "rate region, overall closure rate, fastest-closing region, approval velocity, "
-        "oldest open nomination, most common migration status, EOS risk hotspot, "
+        "oldest open nomination, most common migration status, risk hotspot, "
         "fastest-growing path, top Azure-native destination, ACR concentration, and "
         "data-quality issues.")
 

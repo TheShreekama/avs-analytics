@@ -21,7 +21,7 @@ def render() -> None:
     date_filter = components.page_date_filter(
         ctx, "ins", "created_date", table=table, scope=SCOPE_PRIMARY)
     filters, where = components.filter_sidebar(
-        ctx, ["region_geo", "migration_path", "eos_status"],
+        ctx, ["region_geo", "migration_path"],
         table=table, scope=SCOPE_PRIMARY, date_filter=date_filter)
 
     fact = analytics.select_all(ctx.con, where)

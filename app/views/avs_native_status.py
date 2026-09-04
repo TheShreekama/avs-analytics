@@ -7,21 +7,22 @@ status report** so the primary "AVS Migration Nominations" reporting stays
 focused on onboarding to AVS.  Trend analysis for these lives on the
 **AVS → Azure Native Migration Trends** page.
 
-Every chart opens the records behind it: click an offering, a target or a status
-and those nominations appear underneath, with a CSV export.
+Every chart opens the records behind it, with a CSV export.
+
+The **offering / Azure-target** cut lives on **Migration Analytics → AVS →
+Azure Native**, next to this motion's metrics and trends; this page keeps the
+delivery pipeline and the record list.
 """
 from __future__ import annotations
 
 import streamlit as st
 
 from app import state
-from app.config import EOS_STATUS_ORDER, SCOPE_FROM_AVS
+from app.config import SCOPE_FROM_AVS
 from app.core import analytics
 from app.core.metrics import fmt_currency, fmt_int
 from app.ui import charts, components, drilldown
 from app.ui.theme import banner, page_header, section
-
-_TRACK = "migration_path"   # full offering names, e.g. "SQL Server MI Migration (From AVS)"
 
 
 def render() -> None:
@@ -41,7 +42,7 @@ def render() -> None:
         ctx, "ans", "created_date", table=table, scope=SCOPE_FROM_AVS)
     filters, where = components.filter_sidebar(
         ctx, ["region_geo", "migration_path", "azure_target",
-              "migration_status_label", "eos_status"], table=table, scope=SCOPE_FROM_AVS, date_filter=date_filter)
+              "migration_status_label"], table=table, scope=SCOPE_FROM_AVS, date_filter=date_filter)
 
     con = ctx.con
     total = analytics.total_rows(con, where)
@@ -67,48 +68,10 @@ def render() -> None:
     # One fetch of the selected records; every drill-down below reads from it.
     records = analytics.select_all(con, where)
 
-    section("By offering & target")
-    st.caption("Click a bar or a slice to open the nominations behind it.")
-    trk = analytics.count_by(con, where, _TRACK)
-    tgt = analytics.count_by(con, where, "azure_target")
-    c1, c2 = st.columns(2)
-    with c1:
-        picked_path = drilldown.selectable_chart(
-            charts.bar(trk, "category", "count", horizontal=True,
-                       title="Nominations by migration path (offering)"), key="ans_path")
-    with c2:
-        picked_target = drilldown.selectable_chart(
-            charts.donut(tgt, "category", "count", title="Azure-native targets"),
-            key="ans_target")
-    drilldown.drilldown(records, _TRACK, picked_path, key="ans_path_rows",
-                        what="nominations by offering", max_rows=500)
-    drilldown.drilldown(records, "azure_target", picked_target, key="ans_target_rows",
-                        what="nominations by target", max_rows=500)
-
-    section("Operational status")
-    c3, c4 = st.columns(2)
-    pivot = analytics.crosstab(con, where, "eos_status", "region_geo")
-    heat = analytics.crosstab(con, where, _TRACK, "eos_status")
-    with c3:
-        if not pivot.empty:
-            order = [s for s in EOS_STATUS_ORDER if s in pivot.index]
-            st.plotly_chart(charts.stacked_bar(pivot.reindex(order),
-                                               title="Operational status by region"),
-                            width="stretch")
-    with c4:
-        if not heat.empty:
-            cols = [c for c in EOS_STATUS_ORDER if c in heat.columns]
-            st.plotly_chart(charts.heatmap(heat[cols] if cols else heat,
-                                           title="Migration path × status heatmap"),
-                            width="stretch")
-    if not pivot.empty:
-        drilldown.data_expander(
-            pivot.reset_index().rename(columns={"row": "Operational Status"}),
-            "ans_status_table", label="Underlying data — status × region")
-    if not heat.empty:
-        drilldown.data_expander(
-            heat.reset_index().rename(columns={"row": "Migration Path"}),
-            "ans_heat_table", label="Underlying data — migration path × status")
+    components.banner_note(
+        "<b>By offering &amp; target</b> now lives on <b>Migration Analytics → "
+        "AVS → Azure Native</b>, alongside this motion's metrics and trends — "
+        "one place to read it rather than two.")
 
     section("Migration status pipeline")
     st.caption("Click a bar to open the nominations at that stage.")
@@ -123,11 +86,15 @@ def render() -> None:
             summary=stages.rename(columns={"category": "Migration Status",
                                            "count": "Nominations"}),
             summary_bucket="Migration Status")
+        drilldown.data_expander(
+            pipe.reset_index().rename(columns={"row": "Migration Status"}),
+            "ans_pipe_grid", label="Underlying data — status × region",
+            caption="Nomination counts per migration status and region.")
 
     section("Nomination records")
     st.caption("Every record in the current selection.")
     cols = ["task_id", "customer_name", "region_geo", "migration_path", "azure_target",
-            "migration_status_label", "eos_status", "total_acr", "created_date"]
+            "migration_status_label", "total_acr", "created_date"]
     cols = [c for c in cols if c in records.columns]
     frame = records[cols].sort_values("created_date", ascending=False)
     components.show_table(frame.head(500), height=420)

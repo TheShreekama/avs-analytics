@@ -30,7 +30,7 @@ def render() -> None:
     date_filter = components.page_date_filter(
         ctx, "a2a", "created_date", table=table, scope=SCOPE_FROM_AVS)
     filters, where = components.filter_sidebar(
-        ctx, ["region_geo", "migration_path", "azure_target", "eos_status"], table=table, scope=SCOPE_FROM_AVS, date_filter=date_filter)
+        ctx, ["region_geo", "migration_path", "azure_target"], table=table, scope=SCOPE_FROM_AVS, date_filter=date_filter)
 
     con = ctx.con
     # The sidebar scope already constrains to AVS → Azure Native ("(From AVS)").
@@ -107,7 +107,7 @@ def render() -> None:
 
     section("Backlog — open AVS→Azure migrations")
     open_where = analytics._where_and(base, '"is_open" = TRUE')
-    cols = ["customer_name", "migration_path", "azure_target", "region_geo", "eos_status", "aging_days"]
+    cols = ["customer_name", "migration_path", "azure_target", "region_geo", "aging_days"]
     cols = [c for c in cols if c in ctx.fact.columns]
     components.show_table(analytics.fetch_rows(con, open_where, cols, "aging_days", True, 50),
                           height=360)
