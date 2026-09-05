@@ -358,6 +358,21 @@ def in_flight(df: pd.DataFrame) -> pd.Series:
     return code.isin(IN_FLIGHT_CODES).fillna(False)
 
 
+def reported_stages(df: pd.DataFrame) -> pd.Series:
+    """Rows sitting in one of the migration stages the reports break down by.
+
+    The six stages worth a regional cut are the four in-flight ones —
+    "1 - Validating Commitment & Initial Scope", "2 - Executing
+    Pre-Requisites", "3 - Finalize Scope", "4 - Executing Migration" — plus
+    "7 - Completed".  Deferred ("5") and Cancelled / Archived ("6") are not
+    stages a migration is progressing through, so they are left out rather than
+    padding every chart with work nobody is doing.
+    """
+    if df.empty:
+        return pd.Series(dtype=bool)
+    return (in_flight(df) | is_completed(df)).fillna(False)
+
+
 def state_of(df: pd.DataFrame) -> pd.Series:
     """Current state of one-row-per-TPID latest-wave records.
 
@@ -451,6 +466,41 @@ def on_track_by_stage(fact: pd.DataFrame,
 # --------------------------------------------------------------------------- #
 # Drill-down helper
 # --------------------------------------------------------------------------- #
+#: The wave number column, renamed for the account view so a reader knows the
+#: row shows the account's latest wave rather than an arbitrary one.
+LATEST_WAVE_COLUMN = "Most Recent / Latest Wave"
+
+
+def account_detail(fact: pd.DataFrame, firsts: pd.DataFrame | None = None,
+                   lasts: pd.DataFrame | None = None) -> pd.DataFrame:
+    """One row per TPID, showing the account's current state.
+
+    Each field comes from the wave that actually answers for it, which is not
+    the same wave throughout:
+
+    * **Wave-specific fields** (status, current state, region, cores, dates,
+      owners) — the account's **latest** wave, so the row reads as where the
+      account stands now.
+    * **Total ACR** — summed across **every** wave of the account.  An account
+      that claimed 10M, 15M and 20M over three waves has committed 45M; showing
+      the last wave's 20M would understate it.
+    * **Nomination approval date** — the **earliest** wave's, because that is
+      when the account was nominated, not when its latest wave was.
+    """
+    if fact.empty:
+        return fact
+    firsts = first_wave(fact) if firsts is None else firsts
+    lasts = latest_wave(fact) if lasts is None else lasts
+
+    out = lasts.copy()
+    acr = (pd.to_numeric(fact.get("total_acr"), errors="coerce")
+           .groupby(fact["tpid_key"]).sum())
+    out["total_acr"] = out["tpid_key"].map(acr)
+    approvals = firsts.set_index("tpid_key")["approval_date"]
+    out["approval_date"] = out["tpid_key"].map(approvals)
+    return out.reset_index(drop=True)
+
+
 def drilldown_frame(records: pd.DataFrame) -> pd.DataFrame:
     """Trim underlying records to the agreed drill-down columns."""
     if records is None or records.empty:

@@ -89,6 +89,16 @@ Every report has **Region / Status / path filters** and a **date‑range preset*
 **All time**, so every report opens on the whole dataset), plus an adjustable **"as‑of" date** that anchors the presets and all
 This‑Week/Month/Quarter/YTD windows.
 
+### Reporting floor (FY25 onwards)
+
+The dashboard reports from **FY25** (1 Jul 2024) onwards. Waves nominated earlier are
+dropped **as the file is read** — before the customer rollup and before the SQL tables
+are registered — so no chart, table, total, insight, CSV or PDF can include them, and
+**"All time" means FY25 onwards** everywhere. A wave belongs to the fiscal year of its
+nomination date (approval date, else creation date); a wave carrying neither cannot be
+shown to be out of scope, so it stays. Every page reports how much was excluded.
+Configurable via `AVS_REPORTING_FLOOR_FY`.
+
 ### Reporting scope (AVS‑centric)
 
 The dashboard's primary focus is **AVS Migration Nominations** (onboarding *to* AVS).

@@ -29,8 +29,6 @@ from app.core.metrics import fmt_currency, fmt_int
 from app.ui import charts, components, drilldown
 from app.ui.theme import banner, page_header, section
 
-ALL_TIME = "All time"
-
 #: Every category, in the order the reports list them.
 _ALL_CATEGORIES = (segments.CAT_ALL_AVS, segments.CAT_EOS_ALL, segments.CAT_EOS_GEN1,
                    segments.CAT_EOS_GEN2, segments.CAT_AVS_NATIVE)
@@ -118,14 +116,10 @@ def render(measure_key: str) -> None:
     page_header(measure.title, measure.blurb, help=glossary.TRENDS)
     components.data_quality_banner(ctx)
 
-    top = st.columns([2, 3])
-    with top[0]:
-        start, end, shown, preset = components.report_date_range(
-            ctx, f"ta_{measure.key}")
-    with top[1]:
-        names = " · ".join(segments.CATEGORY_LABELS[c] for c in measure.categories)
-        banner(f"One period, every category: <b>{names}</b>. Click a bar, a point "
-               f"or a table row to open the records behind that month.")
+    floor = (ctx.report.get("scope") or {}).get("floor_fy", "the reporting floor")
+    names = " · ".join(segments.CATEGORY_LABELS[c] for c in measure.categories)
+    banner(f"Reporting range: <b>All time ({floor} onwards)</b> — the whole "
+           f"dataset. Categories: <b>{names}</b>.")
 
     date_col = "approval_date"
     if measure.basis_toggle:
@@ -137,125 +131,121 @@ def render(measure_key: str) -> None:
         date_col = ("approval_date" if basis.startswith("Nomination approval")
                     else "created_date")
 
-    if preset == ALL_TIME:
-        st.caption("**All time** — each fiscal year is its own line over a shared "
-                   "Jul → Jun axis, so the years read against one another. There is "
-                   "no Cumulative column in that view: a running total across "
-                   "unrelated fiscal years would not mean anything.")
+    st.caption("Each fiscal year is its own line over a shared Jul → Jun axis, so "
+               "the years read against one another, and the table beside the chart "
+               "lays the same numbers out side by side. Click a point to narrow the "
+               "records below to that month.")
 
     for category in measure.categories:
-        _category_block(ctx, measure, category, start, end, shown, preset, date_col)
+        _category_block(ctx, measure, category, date_col)
 
 
-def _category_block(ctx, measure: Measure, category: str, start, end, shown: str,
-                    preset: str, date_col: str) -> None:
-    """One category's trend for this measure, with its drill-down."""
+def _category_block(ctx, measure: Measure, category: str, date_col: str) -> None:
+    """One category's trend for this measure, with the records behind it.
+
+    Always over the whole dataset: the reporting floor already limits that to
+    FY25 onwards, so a period selector here would only ever narrow it further —
+    which is not what these reports are for.
+    """
     label = segments.CATEGORY_LABELS[category]
     key = f"ta_{measure.key}_{category}"
-    section(label, help=glossary.CATEGORY_HELP.get(category), period=shown)
+    section(label, help=glossary.CATEGORY_HELP.get(category),
+            period="All time — every fiscal year in the dataset")
 
     fact = segments.population(ctx.fact, category)
     if fact.empty:
         components.empty_state(f"No nominations fall into **{label}**.")
         return
     waves = kpi.wave_index(fact)
-    table, rows = measure.series(fact, waves, start, end, date_col)
+    table, rows = measure.series(fact, waves, None, None, date_col)
     if table.empty:
-        components.empty_state(f"No {measure.what} in the selected period.")
+        components.empty_state(f"No {measure.what} in this category.")
+        return
+
+    split = kpi.split_by_fiscal_year(table, measure.value_col, FY_START_MONTH)
+    if split.empty:
+        components.empty_state(f"No {measure.what} to chart.")
         return
 
     tpids = fmt_int(segments.tpid_key(fact).nunique())
     st.caption(f"**{tpids}** accounts (TPIDs) · **{fmt_int(len(fact))}** nomination "
                f"waves in this category.")
 
-    if preset == ALL_TIME:
-        _fy_trend(table, rows, measure, key)
-    else:
-        fig = charts.trend_chart(table, "period", measure.value_col, "Cumulative",
-                                 currency=measure.currency, height=320)
-        drilldown.chart_with_drilldown(
-            fig, _with_period(rows, measure.row_date), "period", key=key,
-            what=measure.what, unit_col=measure.unit_col,
-            summary=_display_trend(table, measure.display_col, measure.currency),
-            summary_bucket="Month")
+    years = sorted(split["fy"].unique())
+    order = metrics.fiscal_month_order(FY_START_MONTH)
+    fig = charts.fy_lines(split, "fy_month", "fy", measure.value_col, order,
+                          currency=measure.currency, height=340)
+
+    left, right = st.columns([3, 2])
+    with left:
+        picked = drilldown.selectable_chart(fig, key=key, curve_labels=years)
+    with right:
+        st.caption("Fiscal years side by side")
+        components.show_table(_fy_grid(split, measure, order))
+
+    _records_by_fiscal_year(rows, measure, key, picked)
     st.write("")
 
 
-def _fy_trend(table: pd.DataFrame, rows: pd.DataFrame, measure: Measure,
-              key: str) -> None:
-    """One line per fiscal year, with the same click-through to the records.
+def _fy_grid(split: pd.DataFrame, measure: Measure, order: list[str]) -> pd.DataFrame:
+    """Month rows, fiscal-year columns, and a Total row summing each year.
 
-    A month label alone is ambiguous here — every year has a September — so the
-    chart, the summary table and the records are all keyed on "FY27 Sep", and the
-    line a point sits on is what tells the two Septembers apart.  The
-    year-over-year grid lives in the underlying-data panel, where it can be read
-    side by side without breaking that key.
+    The table beside the chart, rather than an expander below it: reading FY25
+    against FY26 for a given month is the question these reports exist to answer,
+    and a long-form (Period, FY, Month, value) list buries it.
     """
-    split = kpi.split_by_fiscal_year(table, measure.value_col, FY_START_MONTH)
-    if split.empty:
-        components.empty_state(f"No {measure.what} to chart.")
-        return
-    years = sorted(split["fy"].unique())
-    order = metrics.fiscal_month_order(FY_START_MONTH)
-
-    fig = charts.fy_lines(split, "fy_month", "fy", measure.value_col, order,
-                          currency=measure.currency, height=340)
-    summary = split.rename(columns={"bucket": "Period", "fy": "FY", "fy_month": "Month",
-                                    measure.value_col: measure.display_col})
-    summary = summary[["Period", "FY", "Month", measure.display_col]]
-    if measure.currency:
-        summary[measure.display_col] = summary[measure.display_col].map(fmt_currency)
-    drilldown.chart_with_drilldown(
-        fig, kpi.label_fiscal_year(rows, measure.row_date, FY_START_MONTH), "bucket",
-        key=f"{key}_fy", what=measure.what, unit_col=measure.unit_col,
-        summary=summary, summary_bucket="Period", curve_labels=years)
-
     grid = split.pivot_table(index="fy_month", columns="fy",
                              values=measure.value_col, aggfunc="sum")
     grid = grid.reindex([m for m in order if m in grid.index]).fillna(0)
-    totals = split.groupby("fy")[measure.value_col].sum()
-    st.caption("Totals per fiscal year: " + " · ".join(
-        f"**{fy}** {fmt_currency(v) if measure.currency else fmt_int(v)}"
-        for fy, v in totals.items()))
-    display = grid.copy()
-    if measure.currency:
-        for col in display.columns:
-            display[col] = display[col].map(fmt_currency)
-    drilldown.data_expander(
-        display.reset_index().rename(columns={"fy_month": "Month"}),
-        f"{key}_fy_grid", label="Underlying data — fiscal years side by side",
-        caption="The same numbers as the chart, one column per fiscal year.")
-
-
-def _with_period(rows: pd.DataFrame, date_col: str) -> pd.DataFrame:
-    """Attach the chart's period label to the underlying rows for drill-down."""
-    if rows is None or rows.empty:
-        return pd.DataFrame()
-    out = rows.copy()
-    if "month" in out.columns:
-        out["period"] = pd.to_datetime(out["month"].astype(str), errors="coerce") \
-            .dt.to_period("M").astype(str)
-    elif date_col in out.columns:
-        out["period"] = pd.to_datetime(out[date_col], errors="coerce") \
-            .dt.to_period("M").astype(str)
+    grid.loc["Total"] = grid.sum()
+    out = grid.reset_index().rename(columns={"fy_month": "Month"})
+    out.columns.name = None
+    money = measure.currency
+    for col in out.columns[1:]:
+        out[col] = out[col].map(fmt_currency if money else fmt_int)
     return out
 
 
-def _display_trend(table: pd.DataFrame, display_col: str | None = None,
-                   currency: bool = False) -> pd.DataFrame:
-    """Month, value and the Cumulative column — cumulative always last.
+def _records_by_fiscal_year(rows: pd.DataFrame, measure: Measure, key: str,
+                            picked: list[str]) -> None:
+    """The records behind the chart, one table per fiscal year.
 
-    Money is shown as $1.2M / $840.0K rather than a raw number.
+    Never one combined table: a row's fiscal year is the thing being compared
+    here, so mixing the years back together in the drill-down would undo the
+    split the chart just made.
     """
-    out = table.drop(columns=["month"]).rename(columns={"period": "Month"})
-    value_cols = [c for c in out.columns if c not in ("Month", "Cumulative")]
-    out = out[["Month", *value_cols, "Cumulative"]]
-    if currency:
-        for col in [*value_cols, "Cumulative"]:
-            out[col] = out[col].map(fmt_currency)
-    if display_col and value_cols and display_col != value_cols[0]:
-        out = out.rename(columns={value_cols[0]: display_col})
-    return out
+    labelled = kpi.label_fiscal_year(rows, measure.row_date, FY_START_MONTH)
+    if labelled is None or labelled.empty:
+        st.caption(f"No {measure.what} to list.")
+        return
+    if picked:
+        wanted = {drilldown.normalize_bucket(v) for v in picked}
+        labelled = labelled[labelled["bucket"].map(drilldown.normalize_bucket)
+                            .isin(wanted)]
+        st.caption(f"Showing **{', '.join(str(v) for v in picked)}** — "
+                   "click the point again to clear.")
+    else:
+        st.caption(f"Underlying {measure.what}, one table per fiscal year. Click a "
+                   "point on the chart to narrow them to a single month.")
+    if labelled.empty:
+        st.info("No records for this selection.")
+        return
+
+    for fy in sorted(y for y in labelled["fy"].unique() if y):
+        block = labelled[labelled["fy"] == fy]
+        frame = kpi.drilldown_frame(block)
+        with st.expander(f"🔎 Underlying {measure.what} — {fy} "
+                         f"({fmt_int(len(frame))} rows)", expanded=bool(picked)):
+            if measure.unit_col and measure.unit_col in block.columns:
+                total = pd.to_numeric(block[measure.unit_col], errors="coerce").sum()
+                st.caption(f"{fy} total: **"
+                           f"{fmt_currency(total) if measure.currency else fmt_int(total)}"
+                           f"**")
+            components.show_table(frame, height=320)
+            st.download_button(
+                "⬇️ Export to CSV", frame.to_csv(index=False).encode("utf-8"),
+                file_name=f"{key}-{fy}.csv", mime="text/csv",
+                key=f"{key}_{fy}_csv")
 
 
 # --------------------------------------------------------------------------- #

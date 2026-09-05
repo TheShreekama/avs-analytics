@@ -75,11 +75,31 @@ def data_quality_banner(ctx: DataContext) -> None:
     if ctx.is_sample:
         banner("📊 Showing the bundled <b>sample dataset</b>. Use "
                "<b>Data &amp; Upload</b> in the sidebar to load your own file.", "info")
+    reporting_floor_note(ctx)
     if dq_rows:
         parts = ", ".join(f"{k.replace('_',' ')}: {v}" for k, v in rep.get("dq", {}).items())
         banner(f"⚠️ <b>{dq_rows}</b> row(s) have data-quality issues "
                f"({parts}). See the <b>Insights</b> page for details.", "warn")
         _bad_date_samples(rep)
+
+
+def reporting_floor_note(ctx: DataContext) -> None:
+    """Say how much of the file the reporting floor excluded.
+
+    The floor drops rows as the file is read, so a page could otherwise report
+    fewer nominations than the file holds with nothing on screen explaining it.
+    """
+    scope = ctx.report.get("scope") or {}
+    excluded = scope.get("excluded_rows", 0)
+    if not excluded:
+        return
+    accounts = scope.get("excluded_accounts", 0)
+    also = (f" — {fmt_int(accounts)} account(s) fall entirely outside it"
+            if accounts else "")
+    banner(f"📅 Reporting from <b>{scope.get('floor_fy', 'the floor FY')}</b> "
+           f"onwards ({pd.Timestamp(scope['floor_start']):%d %b %Y}). "
+           f"<b>{fmt_int(excluded)}</b> earlier nomination wave(s) are excluded "
+           f"from every figure on every page{also}.", "info")
 
 
 def _bad_date_samples(rep: dict) -> None:
@@ -281,10 +301,22 @@ def format_money(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def column_label(col) -> str:
+    """Display name for a column.
+
+    Canonical keys get their schema label; snake_case keys are prettified; a
+    column already carrying deliberate casing is left exactly as written —
+    otherwise title-casing turns "FY25" into "Fy25".
+    """
+    if col in _NICE:
+        return _NICE[col]
+    text = str(col)
+    return text.replace("_", " ").title() if text.islower() or "_" in text else text
+
+
 def show_table(df: pd.DataFrame, height: int | None = None, hide_index: bool = True) -> None:
     disp = format_money(df)
-    disp = disp.rename(columns={c: _NICE.get(c, c.replace("_", " ").title())
-                                for c in disp.columns})
+    disp = disp.rename(columns={c: column_label(c) for c in disp.columns})
     kwargs = {"width": "stretch", "hide_index": hide_index}
     if height is not None:
         kwargs["height"] = height

@@ -146,7 +146,7 @@ def test_titles_carry_an_explanation(page):
 
 
 @pytest.mark.parametrize("page", ["overview", "closed", "insights_page", "reports",
-                                  "data_inconsistency", "trend_analysis.acr"])
+                                  "data_inconsistency"])
 def test_every_report_offers_a_reporting_period(page):
     """The date range is chosen on the page, not hidden in the sidebar."""
     at = _render_default(page, "Customer (deduplicated)")
@@ -233,14 +233,15 @@ def test_other_periods_add_a_this_fy_row_above(preset):
 
 
 def test_all_time_trends_split_by_fiscal_year():
-    """All time draws a line per FY, with the years side by side underneath."""
-    at = _with_period("trend_analysis.nominations", "All time")
+    """The chart draws a line per FY and the table beside it lays them side by
+    side, with a Total row — always, since the range is fixed at all time."""
+    at = _render("trend_analysis.nominations", "Customer (deduplicated)")
     assert not at.exception, f"raised: {at.exception}"
-    grids = [e.label for e in at.expander if "fiscal years side by side" in (e.label or "")]
-    assert grids, [e.label for e in at.expander]
-    # ...and a bounded period does not.
-    month = _with_period("trend_analysis.nominations", "This month")
-    assert not [e for e in month.expander if "fiscal years side by side" in (e.label or "")]
+    grid = at.dataframe[0].value
+    assert list(grid.columns)[0] == "Month"
+    years = [c for c in grid.columns if str(c).startswith("FY")]
+    assert years, list(grid.columns)
+    assert grid["Month"].iloc[-1] == "Total"
 
 
 def test_sections_state_the_period_they_are_measured_over():
@@ -420,9 +421,26 @@ def test_the_old_trend_pages_are_gone():
             importlib.import_module(f"app.views.{name}")
 
 
-def test_trend_pages_explain_the_all_time_shape_once_for_the_page():
-    """The FY-split note belongs to the page, not repeated under every category."""
-    at = _with_period("trend_analysis.nominations", "All time")
-    assert not at.exception, f"raised: {at.exception}"
-    notes = [c.value for c in at.caption if "each fiscal year is its own line" in c.value]
-    assert len(notes) == 1, notes
+@pytest.mark.parametrize("page", TREND_PAGES)
+def test_trend_pages_are_fixed_at_all_time(page):
+    """The range is the whole (FY-floored) dataset, so there is no period picker
+    to narrow it — that is the point of these reports."""
+    at = _render(page, "Customer (deduplicated)")
+    assert not at.exception, f"{page} raised: {at.exception}"
+    assert not [s for s in at.selectbox
+                if "reporting period" in (s.label or "").lower()], page
+    banners = " ".join(m.value for m in at.markdown)
+    assert "All time (FY25 onwards)" in banners, page
+
+
+@pytest.mark.parametrize("page", TREND_PAGES)
+def test_trend_records_are_split_one_table_per_fiscal_year(page):
+    """Never one combined table: the fiscal year is the thing being compared."""
+    at = _render(page, "Customer (deduplicated)")
+    assert not at.exception, f"{page} raised: {at.exception}"
+    panels = [e.label for e in at.expander if "Underlying" in (e.label or "")]
+    assert panels, page
+    # Every panel names exactly one fiscal year.
+    import re
+    for label in panels:
+        assert len(re.findall(r"FY\d{2}", label)) == 1, label

@@ -94,6 +94,12 @@ SCOPE_FROM_AVS = "from_avs"    # is_from_avs = TRUE   (AVS → Azure Native)
 # Microsoft fiscal year starts in July.
 FY_START_MONTH = int(os.environ.get("AVS_FY_START_MONTH", "7"))
 
+#: Earliest fiscal year the dashboard reports on, named the way the business
+#: names it — FY25 is 1 Jul 2024 → 30 Jun 2025.  Waves nominated before it are
+#: dropped as the file is read, so no chart, table, total or export can include
+#: them: "All time" means FY25 onwards everywhere.
+REPORTING_FLOOR_FY = int(os.environ.get("AVS_REPORTING_FLOOR_FY", "25"))
+
 DATE_PRESETS = [
     "This week", "Last week", "This month", "Last month", "This quarter",
     "Last 3 months", "Last 6 months", "This FY", "Last FY", "All time", "Custom",

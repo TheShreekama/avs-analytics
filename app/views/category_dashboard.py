@@ -263,11 +263,18 @@ def _regional_breakdown(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> N
     """
     section("Regional breakdown", help=glossary.REGIONAL_BREAKDOWN,
             period="Current state — not filtered by the reporting period")
-    st.caption("Accounts at their latest wave, by region and migration status. "
-               "Click a bar to open the accounts behind it.")
+    st.caption("Accounts at their latest wave, by region and migration status — "
+               "the four in-flight stages and Completed only. Click a bar to open "
+               "the accounts behind it.")
     rows = waves.last
     if rows.empty or "region_geo" not in rows.columns:
         components.empty_state("No regional data to report.")
+        return
+    rows = rows[kpi.reported_stages(rows)]
+    if rows.empty:
+        components.empty_state(
+            "No accounts are in a reported migration stage — every account here "
+            "is deferred or cancelled.")
         return
     rows = rows.assign(
         _status=rows["migration_status_label"].astype("string")
@@ -349,26 +356,25 @@ def _count_by(fact: pd.DataFrame, column: str) -> pd.DataFrame:
 def _detailed_data(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str,
                    shown: str) -> None:
     section("Detailed data", help=glossary.DETAILED_DATA, period=shown)
-    st.caption("Every record in this category, inheriting the filters and reporting "
-               "period above. Group it, read the subtotals, then export.")
-    c1, c2 = st.columns([2, 2])
-    grain = c1.radio("Grain", ["Accounts (unique TPID)", "Nomination waves"],
-                     horizontal=True, key=f"{key}_grain",
-                     help="Unique-TPID metrics never show a TPID twice; switch to "
-                          "wave level to see the underlying source records.")
-    limit = c2.checkbox("Limit to the reporting period", value=start is not None,
+    st.caption("**One row per account (TPID)** — never one row per wave. Each row "
+               "reads as where that account stands now: wave-specific fields and "
+               "Current State from its latest wave, **Total ACR summed across every "
+               "wave**, and the nomination approval date from its earliest wave.")
+    limit = st.checkbox("Limit to the reporting period", value=start is not None,
                         key=f"{key}_limit", disabled=start is None,
-                        help="Keeps only records approved inside the selected window.")
-    rows = waves.last if grain.startswith("Accounts") else fact
+                        help="Keeps only accounts whose nomination approval date "
+                             "(earliest wave) falls inside the selected window.")
+    rows = kpi.account_detail(fact, firsts=waves.first, lasts=waves.last)
     if limit and start is not None:
         rows = rows[kpi.in_window(rows["approval_date"], start, end)]
         if rows.empty:
             components.empty_state(
-                "No records were approved inside the reporting period. Widen the "
+                "No accounts were nominated inside the reporting period. Widen the "
                 "period above, or untick **Limit to the reporting period**.")
             return
     drilldown.pivot_explorer(rows, key=f"{key}_pivot")
-    frame = kpi.drilldown_frame(rows)
+    frame = kpi.drilldown_frame(rows).rename(
+        columns={"phase": kpi.LATEST_WAVE_COLUMN})
     components.show_table(frame, height=420)
     st.download_button("⬇️ Export to CSV", frame.to_csv(index=False).encode("utf-8"),
                        file_name=f"{key}-detail.csv", mime="text/csv",

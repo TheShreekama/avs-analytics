@@ -152,6 +152,12 @@ REGIONAL_BREAKDOWN = (
     "one account here, matching the state chart above it. The equivalent "
     "'Regional breakdown' on Status Reports → Accounts by Migration Status "
     "counts the same way, regardless of the sidebar's Counting mode toggle.\n"
+    "Only the stages a migration progresses through are shown: '1 - Validating "
+    "Commitment & Initial Scope', '2 - Executing Pre-Requisites', '3 - Finalize "
+    "Scope', '4 - Executing Migration' and '7 - Completed'. Deferred ('5') and "
+    "Cancelled / Archived ('6') are left out, so the chart is not padded with "
+    "work nobody is doing — the counts here will therefore be lower than the "
+    "category's total account count.\n"
     "A snapshot: the reporting period does not narrow it."
 )
 
@@ -163,9 +169,17 @@ OFFERING_AND_TARGET = (
 )
 
 DETAILED_DATA = (
-    "Every record behind this dashboard. 'Accounts' shows one row per TPID (its "
-    "latest wave); 'Nomination waves' shows the underlying source rows. Group it "
-    "to read subtotals, then export to CSV."
+    "One row per ACCOUNT (TPID) — an account with five waves is one row, never "
+    "five. Each field comes from the wave that answers for it:\n"
+    "• Most Recent / Latest Wave, and every wave-specific field (migration "
+    "status, Current State, region, cores, actual dates, owners) — from the "
+    "account's LATEST wave, so the row reads as where it stands now.\n"
+    "• Total ACR — summed across EVERY wave of the account. Waves of 10M, 15M "
+    "and 20M show as 45M; the latest wave's 20M alone would understate it.\n"
+    "• Nom. Approval Date — from the EARLIEST wave (lowest wave number), the "
+    "same Wave-1 rule the New Engagements tile counts on, because that is when "
+    "the account was nominated.\n"
+    "Group it to read subtotals, then export to CSV."
 )
 
 REPORTING_PERIOD = (

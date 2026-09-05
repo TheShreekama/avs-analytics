@@ -168,8 +168,15 @@ def _trend_table(table: pd.DataFrame, value_col: str, currency: bool) -> pd.Data
 
 
 def _region_status(lasts: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Status × region and region × status, at account grain (latest wave)."""
+    """Status × region and region × status, at account grain (latest wave).
+
+    Restricted to the stages the dashboards break down by — the four in-flight
+    ones plus Completed — so the PDF and the screen cannot disagree.
+    """
     if lasts.empty or "region_geo" not in lasts.columns:
+        return pd.DataFrame(), pd.DataFrame()
+    lasts = lasts[kpi.reported_stages(lasts)]
+    if lasts.empty:
         return pd.DataFrame(), pd.DataFrame()
     rows = lasts.assign(_status=_clean(lasts["migration_status_label"]),
                         _region=_clean(lasts["region_geo"]))
@@ -449,12 +456,18 @@ def _report_section(fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
 # --------------------------------------------------------------------------- #
 def _account_rows(pop: pd.DataFrame, waves: kpi.WaveIndex,
                   include_generation: bool) -> tuple[pd.DataFrame, list, int]:
-    """One printable row per account, plus the column layout and the total."""
-    lasts = waves.last
-    if lasts.empty:
+    """One printable row per account, plus the column layout and the total.
+
+    Built through :func:`kpi.account_detail`, the same mixed-grain rules the
+    dashboard's Detailed Data uses — latest wave for state, ACR summed across
+    every wave — so the PDF and the screen cannot report different ACR for the
+    same account.
+    """
+    detail = kpi.account_detail(pop, firsts=waves.first, lasts=waves.last)
+    if detail.empty:
         return pd.DataFrame(), [], 0
     wave_counts = pop.groupby("tpid_key").size()
-    rows = lasts.assign(_waves=lasts["tpid_key"].map(wave_counts).fillna(1))
+    rows = detail.assign(_waves=detail["tpid_key"].map(wave_counts).fillna(1))
     rows["_acr_sort"] = pd.to_numeric(rows.get("total_acr"), errors="coerce").fillna(0)
     rows["_region_sort"] = _clean(rows["region_geo"]) if "region_geo" in rows else "Unknown"
     rows = rows.sort_values(["_region_sort", "_acr_sort"], ascending=[True, False])
