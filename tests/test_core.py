@@ -435,33 +435,156 @@ def _ctx_for_export():
     return state.build_context(SAMPLE_DATA.name, SAMPLE_DATA.read_bytes(), is_sample=True)
 
 
-def test_report_builds_with_every_section():
+def _anchors(story) -> list[str]:
+    from app.core import pdf_kit as kit
+    return [f.key for f in story if isinstance(f, kit.Anchor)]
+
+
+def _walk(node, seen=None):
+    """Every Paragraph in a story, including those nested in tables/KeepTogether."""
+    from reportlab.platypus import KeepTogether, Paragraph, Table
+    out = []
+    if isinstance(node, (list, tuple)):
+        for item in node:
+            out += _walk(item)
+    elif isinstance(node, Paragraph):
+        out.append(node)
+    elif isinstance(node, KeepTogether):
+        out += _walk(node._content)
+    elif isinstance(node, Table):
+        out += _walk(node._cellvalues)
+    return out
+
+
+def _hrefs(story) -> set[str]:
+    """Destinations every internal link in the story points at."""
+    import re
+    return {m for p in _walk(story)
+            for m in re.findall(r'href="#([^"]+)"', p.text)}
+
+
+def _text(story) -> str:
+    return " ".join(p.getPlainText() for p in _walk(story))
+
+
+def test_report_builds_a_readable_pdf():
     from app.core import exporter
     ctx = _ctx_for_export()
-    pdf = exporter.build_report(ctx, "", "All data", exporter.SECTION_KEYS,
-                                table="fact", unit_label="Nominations",
+    pdf = exporter.build_report(ctx, "", "All data",
                                 title="Quarterly Review", subtitle="EOS programme",
                                 period_label="01 Jul 2026 → 30 Jun 2027")
     assert pdf[:4] == b"%PDF"
     assert len(pdf) > 5000
+    # Real navigation, not styled text: link annotations and a bookmark outline.
+    assert b"/Link" in pdf and b"/Outlines" in pdf
 
 
-def test_category_section_reports_each_selected_category():
-    from reportlab.platypus import Paragraph
-    from app.core import exporter, segments
-    ctx = _ctx_for_export()
-    story = exporter._sec_categories(ctx, exporter._styles(),
-                                     [segments.CAT_ALL_AVS, segments.CAT_AVS_NATIVE])
-    text = [f.getPlainText() for f in story if isinstance(f, Paragraph)]
-    assert segments.CATEGORY_LABELS[segments.CAT_ALL_AVS] in text
-    assert segments.CATEGORY_LABELS[segments.CAT_AVS_NATIVE] in text
-
-
-def test_inconsistency_section_names_each_check():
-    from reportlab.platypus import Paragraph
+def test_report_carries_the_three_primary_reports():
     from app.core import exporter
     ctx = _ctx_for_export()
-    text = " ".join(f.getPlainText() for f in exporter._sec_inconsistency(ctx, exporter._styles())
-                    if isinstance(f, Paragraph))
-    assert "Data Inconsistency Review" in text
+    story = exporter.build_story(ctx)
+    text = _text(story)
+    for spec in exporter.REPORTS:
+        assert f"rpt_{spec.key}" in _anchors(story), spec.key
+        assert spec.title in text, spec.title
+    assert "AVS Migrations" in text
+    assert "EOS Migrations" in text
+    assert "AVS to Azure Native" in text
+
+
+def test_eos_report_consolidates_both_generations():
+    """EOS Migrations must carry EOS (All) plus Gen-1 and Gen-2, not just the total."""
+    from app.core import exporter, segments
+    ctx = _ctx_for_export()
+    text = _text(exporter.build_story(ctx, reports=["eos"]))
+    assert "Generation breakdown" in text
+    for category in (segments.CAT_EOS_GEN1, segments.CAT_EOS_GEN2):
+        assert segments.CATEGORY_LABELS[category] in text, category
+
+
+def test_every_report_links_to_its_drilldown_and_back():
+    from app.core import exporter
+    ctx = _ctx_for_export()
+    story = exporter.build_story(ctx)
+    anchors, links = set(_anchors(story)), _hrefs(story)
+    for spec in exporter.REPORTS:
+        assert f"rpt_{spec.key}" in anchors and f"dd_{spec.key}" in anchors
+        assert f"dd_{spec.key}" in links, f"no drill-down link for {spec.key}"
+        assert f"rpt_{spec.key}" in links, f"no back link for {spec.key}"
+    assert "toc" in anchors and "toc" in links
+    # Nothing may point at a destination the document does not define.
+    assert links <= anchors, links - anchors
+
+
+def test_dropping_the_drilldown_drops_its_links_too():
+    from app.core import exporter
+    ctx = _ctx_for_export()
+    story = exporter.build_story(ctx, drilldown=False)
+    anchors, links = set(_anchors(story)), _hrefs(story)
+    assert not any(a.startswith("dd_") for a in anchors)
+    assert links <= anchors, links - anchors
+
+
+def test_selecting_one_report_excludes_the_others():
+    from app.core import exporter
+    ctx = _ctx_for_export()
+    story = exporter.build_story(ctx, reports=["native"])
+    anchors = _anchors(story)
+    assert "rpt_native" in anchors
+    assert "rpt_avs" not in anchors and "rpt_eos" not in anchors
+
+
+def test_appendix_section_names_each_consistency_check():
+    from app.core import exporter
+    ctx = _ctx_for_export()
+    text = _text(exporter.build_story(ctx, reports=[], appendices=["inconsistency"]))
+    assert "Data inconsistency review" in text
     assert "no EOS migration path" in text and "no generation tag" in text
+
+
+def test_report_figures_match_the_dashboard_calculation_layer():
+    """The PDF must not recompute: its tiles are kpi.py's numbers, verbatim."""
+    from app.core import exporter, kpi, segments
+    ctx = _ctx_for_export()
+    text = _text(exporter.build_story(ctx, reports=["avs"], drilldown=False))
+    pop = segments.population(ctx.fact, segments.CAT_ALL_AVS)
+    waves = kpi.wave_index(pop)
+    expected = kpi.new_engagements(pop, None, None, firsts=waves.first).value
+    on_track = kpi.on_track_accounts(pop, lasts=waves.last).value
+    upper = text.upper()
+    assert "NEW ENGAGEMENTS" in upper and "ON-TRACK ACCOUNTS" in upper
+    assert f"{int(expected):,}" in text
+    assert f"{int(on_track):,}" in text
+
+
+def test_report_ignores_the_counting_mode_toggle():
+    """The dashboards deduplicate through kpi.py whatever the sidebar toggle says,
+    so the PDF must too — otherwise the same metric reads differently in the two
+    places purely because of a radio button."""
+    from app.core import analytics, exporter
+    ctx = _ctx_for_export()
+    rendered = {}
+    for mode in ("customer", "fact"):
+        analytics.use_table(mode)
+        rendered[mode] = _text(exporter.build_story(ctx, reports=["avs"],
+                                                    drilldown=False))
+    analytics.use_table("fact")
+    assert rendered["customer"] == rendered["fact"]
+
+
+def test_report_survives_a_filter_that_selects_nothing():
+    from app.core import exporter
+    ctx = _ctx_for_export()
+    where = "WHERE \"region_geo\" = 'Nowhere'"
+    story = exporter.build_story(ctx, where)
+    assert "No nominations fall into this report" in _text(story)
+    pdf = exporter.build_report(ctx, where)
+    assert pdf[:4] == b"%PDF"
+
+
+def test_drilldown_truncates_large_account_sets_with_a_note():
+    from app.core import exporter
+    ctx = _ctx_for_export()
+    text = _text(exporter.build_story(ctx, reports=["native"], max_drilldown_rows=1))
+    assert "Showing the 1 largest" in text
+    assert "CSV" in text
