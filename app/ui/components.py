@@ -9,7 +9,7 @@ import streamlit as st
 
 from ..config import (DATE_PRESETS, DEFAULT_DATE_PRESET, FY_START_MONTH,
                       GLOBAL_DATE_PRESETS)
-from ..core import analytics, metrics, schema
+from ..core import analytics, metrics, schema, segments
 from ..core.metrics import fmt_currency, fmt_int
 from ..state import DataContext
 from .theme import banner, info_mark as banner_info
@@ -69,6 +69,25 @@ def insight_cards(insights, columns: int = 2) -> None:
 # --------------------------------------------------------------------------- #
 # Data-quality banner
 # --------------------------------------------------------------------------- #
+def population_note(category: str, fact: pd.DataFrame) -> None:
+    """A one-line banner describing the population a category page is reporting.
+
+    Shown wherever a page is scoped to one migration category — the category
+    dashboards and the Trend Analysis pages — so a reader can see how many
+    accounts are behind the numbers and, for EOS, how they got into scope.
+    """
+    tpids = fmt_int(segments.tpid_key(fact).nunique()) if not fact.empty else "0"
+    bits = [f"<b>{tpids}</b> TPIDs · <b>{fmt_int(len(fact))}</b> nomination waves"]
+    if category in (segments.CAT_EOS_ALL, segments.CAT_EOS_GEN1, segments.CAT_EOS_GEN2):
+        bits.append("scope from the <b>AVS Migration - Gen1/Gen2</b> tag on any wave, "
+                    "or the <b>AV36/AV36P/AV52 - EOS</b> path when untagged")
+    if category == segments.CAT_EOS_ALL and not fact.empty:
+        split = (fact.drop_duplicates("tpid_key")["generation"]
+                 .value_counts().rename({segments.GEN_UNCLASSIFIED: "no generation tag"}))
+        bits.append(" · ".join(f"<b>{fmt_int(v)}</b> {k}" for k, v in split.items()))
+    banner(" · ".join(bits))
+
+
 def data_quality_banner(ctx: DataContext) -> None:
     rep = ctx.report
     dq_rows = rep.get("dq_rows", 0)

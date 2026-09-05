@@ -42,20 +42,26 @@ under Streamlit's AppTest in both counting modes.
   `insights` (deterministic rules), `exporter` (ReportLab PDF).
 - `app/ui/` — `theme`, `charts` (Plotly, interactive/browser), `pdf_charts` (matplotlib,
   PDF static images — no bundled browser), `components` (filter sidebar, date-range
-  controls, KPI rows, tables), `drilldown` (selectable charts → underlying records).
+  controls, KPI rows, tables, category population banner), `drilldown` (selectable charts
+  → underlying records), `trends` (the month-over-month trend component: one spec per
+  trend, `compute` for the numbers, `render_trend` for the chart + table + drill-down).
 - `app/views/` — report pages (`data_inconsistency` reviews everything the file
   contradicts itself on; `reports` assembles the PDF from chosen modules, period,
   categories and cover text), plus `category_dashboard` which renders the standard
   six-category dashboard (EOS combined + Gen-1/Gen-2/no-tag, All AVS, AVS → Azure Native) — one entry
-  point per category, wired into `st.navigation`.
+  point per category, wired into `st.navigation`, and `trend_analysis`, which generates
+  the whole Trend Analysis section from a trend × category matrix (`nav_pages()` hands
+  `main.py` its `st.navigation` sections).
 
 ## Key domain rules (read before editing reports)
 
 - **Reporting scope.** `is_from_avs = FALSE` → *primary* (AVS Migration Nominations,
   onboarding to AVS). `is_from_avs = TRUE` → *AVS → Azure Native* (offerings whose migration
-  path contains "(From AVS)"). From-AVS data appears **only** on `avs_native_status` and
-  `avs_to_azure` pages. Scope is enforced centrally in `components.filter_sidebar(scope=...)`
-  (which also scopes filter options and counts) and per-section in `exporter.build_report`.
+  path contains "(From AVS)"). From-AVS data appears **only** on `avs_native_status`, the
+  `category_dashboard` AVS → Azure Native page and its `trend_analysis` pages. Scope is
+  enforced centrally in `components.filter_sidebar(scope=...)` (which also scopes filter
+  options and counts), per-section in `exporter.build_report`, and by
+  `segments.population(fact, CAT_AVS_NATIVE)` on the category-scoped pages.
 - **Region.** Use `region_geo` (geography only: Americas / EMEA / ASIA) for all region
   groupings/filters/insights. `ww_region` keeps the full "Geo - Segment" value; the segment
   is in `customer_segment`.
@@ -106,7 +112,15 @@ under Streamlit's AppTest in both counting modes.
   Cumulative is the final column and runs over the displayed months only.
 - **Terminology.** "AV36 EOS" is called **EOS Migration** everywhere in the UI. The
   AVS → Azure Native page labels the Total Cores metric **Cores Migrated**; the AVS
-  categories call it **Hosts Migrated** (same column, different noun).
+  categories call it **Hosts Migrated** on the dashboards and **Nodes Deployed** under
+  Trend Analysis (one column, three nouns — never a different calculation).
+- **Trend Analysis** is a matrix, not a set of hand-written pages: `trend_analysis.GROUPS`
+  pairs one trend (Nomination Trends / ACR Trend / Nodes Deployed / Cores Migrated /
+  Migrations Completed) with the migration categories it applies to, and generates a page
+  per pair. `st.navigation` is only two levels deep, so the third level of the hierarchy
+  rides in the section label ("Trend Analysis · ACR Trend"). Both this section and the
+  dashboards' "Trends — month over month" call `app/ui/trends.py`, so a trend is computed
+  in exactly one place; a page only chooses the heading.
 - **Tag/path consistency** (`segments.eos_consistency`, shown in the sidebar and on Data &
   Upload): accounts tagged Gen-1/Gen-2 with no EOS path on any wave, and waves on the EOS
   path whose account carries no generation tag. Both are legitimate ways into EOS scope —
