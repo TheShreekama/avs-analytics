@@ -375,12 +375,39 @@ def render() -> None:
         "detail; other pages only ever say whether there is anything to look at.")
 
     # ------------------------------------------------------------------ #
+    section("The exported report")
+    st.markdown(
+        "**Reports & Export** builds one PDF in two parts.\n\n"
+        "*Part 1 — Executive reports.* One page-set per migration motion, each "
+        "mirroring its Migration Analytics dashboard:\n\n"
+        "| Report | Source |\n| --- | --- |\n"
+        "| AVS Migrations | All AVS Migrations |\n"
+        "| EOS Migrations | EOS Migrations (All), with Gen-1 and Gen-2 folded in "
+        "as a generation breakdown |\n"
+        "| AVS to Azure Native | AVS → Azure Native |\n\n"
+        "*Part 2 — Supporting detail.* One drill-down per report, on landscape "
+        "pages: the monthly numbers behind each trend, the status × region matrix "
+        "behind the regional charts, the pipeline tables, and the account records "
+        "grouped by region, largest ACR first. Long account lists are truncated "
+        "with a note naming the total — the CSV export carries the rest.\n\n"
+        "Every report links to its drill-down and every drill-down links back, as "
+        "real PDF destinations rather than styled text, alongside a clickable "
+        "contents page and a bookmark outline.\n\n"
+        "The PDF calls the same `app/core/kpi.py` functions the dashboards call, "
+        "on the same populations, so a figure cannot read one way on screen and "
+        "another on the page. Like those dashboards it always counts accounts at "
+        "their latest wave — the sidebar's **counting mode** does not change it. "
+        "Sidebar filters and the reporting period do apply.")
+
+    # ------------------------------------------------------------------ #
     section("Charts")
     st.markdown(
         "- Value axes are **integer-only** (counts have no decimals).\n"
-        "- Operational-status bars put **status on the x-axis, stacked by region**.\n"
+        "- Regional breakdowns put **migration status on the x-axis, stacked by "
+        "region**, counted per account at its latest wave.\n"
         "- Heatmaps use a red→green scale for risk concentration.\n"
-        "- All charts render locally; the PDF export rasterises them offline.")
+        "- All charts render locally; the PDF export rasterises them offline with "
+        "matplotlib, so nothing ships a bundled browser.")
 
     st.divider()
     st.caption("All logic lives in app/core (schema, cleaning, rollup, analytics, "

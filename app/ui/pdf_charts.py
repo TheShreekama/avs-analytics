@@ -63,6 +63,19 @@ def _title(ax, title: str | None) -> None:
         ax.set_title(title, fontsize=11, color=PALETTE["ink"], loc="left", pad=8)
 
 
+#: At most this many x tick labels: a three-year monthly series printed at 8pt
+#: overlaps into an unreadable band long before then.
+_MAX_TICKS = 14
+
+
+def _category_ticks(ax, labels: list[str]) -> None:
+    """Label every nth category so a long monthly axis stays readable."""
+    step = -(-len(labels) // _MAX_TICKS) if labels else 1
+    ticks = list(range(0, len(labels), max(step, 1)))
+    ax.set_xticks(ticks, [labels[i] for i in ticks], rotation=25, ha="right",
+                  fontsize=8)
+
+
 # --------------------------------------------------------------------------- #
 # Chart builders (mirror app/ui/charts.py signatures, return PNG bytes)
 # --------------------------------------------------------------------------- #
@@ -110,23 +123,47 @@ def bar_png(df: pd.DataFrame, x: str, y: str, title: str | None = None,
 
 
 def line_png(df: pd.DataFrame, x: str, y: str, title: str | None = None,
-             area: bool = False, color: str | None = None,
+             area: bool = False, color: str | None = None, currency: bool = False,
              height_px: int = 330, width_px: int = 950) -> bytes:
+    """A monthly trend line.
+
+    The x column carries period labels ("2026-05"), plotted as evenly spaced
+    categories rather than dates: a series with one month in it should show one
+    point, not a lone marker adrift on a four-year date axis.
+    """
     color = color or PALETTE["primary"]
-    xs = pd.to_datetime(df[x]) if not pd.api.types.is_numeric_dtype(df[x]) else df[x]
-    ys = df[y].astype(float)
+    labels = [str(v) for v in df[x].tolist()]
+    ys = df[y].astype(float).tolist()
+    xs = list(range(len(labels)))
     fig, ax = _new(width_px, height_px)
     ax.plot(xs, ys, color=color, linewidth=2.2, marker="o", markersize=4)
-    if area:
+    if area and len(xs) > 1:
         ax.fill_between(xs, ys, color=color, alpha=0.12)
-    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+    ax.set_xlim(-0.5, max(len(labels) - 0.5, 0.5))
+    # Read counts and money from zero. Left to autoscale, a single-month series
+    # gets a y-axis of 3.80…4.20 around its one value, which says nothing.
+    if ys and min(ys) >= 0:
+        ax.set_ylim(0, max(max(ys), 1) * 1.15)
+    _category_ticks(ax, labels)
+    if currency:
+        ax.yaxis.set_major_formatter(lambda v, _pos: _money(v))
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+    else:
+        ax.yaxis.set_major_locator(MaxNLocator(integer=True, nbins=6))
     ax.grid(axis="y", color="#EEF1F5", linewidth=0.8)
     ax.set_axisbelow(True)
     _despine(ax)
-    if not pd.api.types.is_numeric_dtype(df[x]):
-        fig.autofmt_xdate(rotation=25)
     _title(ax, title)
     return _finish(fig)
+
+
+def _money(value: float) -> str:
+    """Axis-scale currency: $1.2M / $840K / $310."""
+    v = float(value)
+    for limit, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if abs(v) >= limit:
+            return f"${v / limit:,.1f}{suffix}"
+    return f"${v:,.0f}"
 
 
 def heatmap_png(pivot: pd.DataFrame, title: str | None = None, cmap: str = "Blues",
@@ -148,6 +185,35 @@ def heatmap_png(pivot: pd.DataFrame, title: str | None = None, cmap: str = "Blue
     return _finish(fig)
 
 
+def stacked_bar_png(pivot: pd.DataFrame, title: str | None = None, percent: bool = False,
+                    height_px: int = 330, width_px: int = 950) -> bytes:
+    """Stacked bar from a pivot (index = bar, columns = stacked series)."""
+    data = pivot.copy().astype(float)
+    if percent:
+        data = data.div(data.sum(axis=1).replace(0, 1), axis=0) * 100
+    cats = [str(i) for i in data.index]
+    fig, ax = _new(width_px, height_px)
+    bottom = [0.0] * len(cats)
+    for i, col in enumerate(data.columns):
+        vals = data[col].tolist()
+        ax.bar(cats, vals, bottom=bottom,
+               color=STATUS_COLORS.get(str(col),
+                                       CATEGORICAL_SEQUENCE[i % len(CATEGORICAL_SEQUENCE)]),
+               label=str(col))
+        bottom = [b + v for b, v in zip(bottom, vals)]
+    if percent:
+        ax.set_ylim(0, 100)
+    else:
+        ax.yaxis.set_major_locator(MaxNLocator(integer=True, nbins=6))
+    ax.grid(axis="y", color="#EEF1F5", linewidth=0.8)
+    ax.set_axisbelow(True)
+    _category_ticks(ax, cats)
+    ax.legend(frameon=False, fontsize=7.5, loc="center left", bbox_to_anchor=(1.0, 0.5))
+    _despine(ax)
+    _title(ax, title)
+    return _finish(fig)
+
+
 def grouped_bar_png(df: pd.DataFrame, x: str, series: list[str], title: str | None = None,
                     height_px: int = 330, width_px: int = 950) -> bytes:
     cats = [str(v) for v in df[x].tolist()]
@@ -156,15 +222,18 @@ def grouped_bar_png(df: pd.DataFrame, x: str, series: list[str], title: str | No
     fig, ax = _new(width_px, height_px)
     for i, s in enumerate(series):
         offs = [j + (i - (m - 1) / 2) * width for j in range(n)]
-        ax.bar(offs, df[s].astype(float).tolist(), width=width,
-               label=s.replace("_", " ").title(),
-               color=STATUS_COLORS.get(s.title(), CATEGORICAL_SEQUENCE[i % len(CATEGORICAL_SEQUENCE)]))
-    ax.set_xticks(range(n), cats, rotation=20, ha="right", fontsize=8)
-    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+        # The series name is the label as the caller wrote it — title-casing it
+        # here turns "EOS Migration — Gen-1" into "Eos Migration — Gen-1".
+        ax.bar(offs, df[s].astype(float).tolist(), width=width, label=str(s),
+               color=STATUS_COLORS.get(str(s),
+                                       CATEGORICAL_SEQUENCE[i % len(CATEGORICAL_SEQUENCE)]))
+    _category_ticks(ax, cats)
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True, nbins=6))
     ax.grid(axis="y", color="#EEF1F5", linewidth=0.8)
     ax.set_axisbelow(True)
-    ax.legend(frameon=False, fontsize=8, ncol=m, loc="upper center",
-              bbox_to_anchor=(0.5, -0.12))
+    # Above the plot: below it the legend lands on top of rotated month labels.
+    ax.legend(frameon=False, fontsize=8, ncol=m, loc="lower center",
+              bbox_to_anchor=(0.5, 1.0))
     _despine(ax)
     _title(ax, title)
     return _finish(fig)

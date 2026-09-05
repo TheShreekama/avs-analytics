@@ -310,3 +310,21 @@ def test_regional_breakdown_ignores_the_counting_mode_toggle():
     pd.testing.assert_frame_equal(
         left.sort_values(list(left.columns)).reset_index(drop=True),
         right.sort_values(list(right.columns)).reset_index(drop=True))
+
+
+def test_reports_page_offers_each_report_and_generates_a_pdf():
+    """End to end through the page: tick the reports, press Generate, get a PDF."""
+    from app.core import exporter
+    at = _render("reports", "Customer (deduplicated)")
+    assert not at.exception, f"raised: {at.exception}"
+    labels = [c.label for c in at.checkbox]
+    for spec in exporter.REPORTS:
+        assert spec.title in labels, spec.title
+    assert "Include drill-down sections" in labels
+
+    generate = next((b for b in at.button if "Generate PDF" in (b.label or "")), None)
+    assert generate is not None, "no Generate button on the Reports page"
+    at = generate.click().run(timeout=300)
+    assert not at.exception, f"generating raised: {at.exception}"
+    pdf = at.session_state["_rep_pdf"]
+    assert pdf[:4] == b"%PDF"
