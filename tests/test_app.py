@@ -20,8 +20,7 @@ _HARNESS = os.path.join(os.path.dirname(__file__), "_page_harness.py")
 _HOME = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Home.py")
 
 PAGES = [
-    "overview", "accounts_status", "approved", "closed",
-    "nomination_trends", "approved_trends", "avs_to_azure", "avs_native_status",
+    "overview", "accounts_status", "approved", "closed", "avs_native_status",
     "insights_page", "methodology", "reports", "data_upload", "column_mapping",
     "data_inconsistency",
     # Category dashboards (one module, one entry point per migration category).
@@ -29,7 +28,13 @@ PAGES = [
     "category_dashboard.eos_gen1", "category_dashboard.eos_gen2",
     "category_dashboard.all_avs",
     "category_dashboard.avs_native",
+    # Trend Analysis (one module, one entry point per measure).
+    "trend_analysis.nominations", "trend_analysis.acr", "trend_analysis.nodes",
+    "trend_analysis.cores", "trend_analysis.completed",
 ]
+
+#: Every Trend Analysis page, as the harness names it.
+TREND_PAGES = [p for p in PAGES if p.startswith("trend_analysis")]
 
 
 def _render(page: str, mode: str) -> AppTest:
@@ -89,10 +94,13 @@ def test_page_renders_without_error(page, mode):
 
 # Regression: the default date preset used to be a one-week window, which left
 # almost every page showing "No records match the current filters" on first open.
+# Category dashboards and Trend Analysis pick their population by migration
+# category rather than through the sidebar filters, so they render no "in view"
+# summary for this test to read.
 _REPORT_PAGES = [p for p in PAGES
                  if p not in ("methodology", "data_upload", "column_mapping",
                               "data_inconsistency")
-                 and not p.startswith("category_dashboard")]
+                 and not p.startswith(("category_dashboard", "trend_analysis"))]
 
 
 @pytest.mark.parametrize("page", _REPORT_PAGES)
@@ -138,7 +146,7 @@ def test_titles_carry_an_explanation(page):
 
 
 @pytest.mark.parametrize("page", ["overview", "closed", "insights_page", "reports",
-                                  "data_inconsistency", "approved_trends"])
+                                  "data_inconsistency", "trend_analysis.acr"])
 def test_every_report_offers_a_reporting_period(page):
     """The date range is chosen on the page, not hidden in the sidebar."""
     at = _render_default(page, "Customer (deduplicated)")
@@ -226,12 +234,12 @@ def test_other_periods_add_a_this_fy_row_above(preset):
 
 def test_all_time_trends_split_by_fiscal_year():
     """All time draws a line per FY, with the years side by side underneath."""
-    at = _with_period("category_dashboard.all_avs", "All time")
+    at = _with_period("trend_analysis.nominations", "All time")
     assert not at.exception, f"raised: {at.exception}"
     grids = [e.label for e in at.expander if "fiscal years side by side" in (e.label or "")]
     assert grids, [e.label for e in at.expander]
     # ...and a bounded period does not.
-    month = _with_period("category_dashboard.all_avs", "This month")
+    month = _with_period("trend_analysis.nominations", "This month")
     assert not [e for e in month.expander if "fiscal years side by side" in (e.label or "")]
 
 
@@ -278,8 +286,7 @@ def test_operational_status_is_gone_from_the_ui():
     assert not hasattr(
         __import__("app.views", fromlist=["eos_status"]), "eos_status")
     for page in ("overview", "accounts_status", "closed", "avs_native_status",
-                "avs_to_azure", "insights_page", "reports",
-                "category_dashboard.avs_native"):
+                "insights_page", "reports", "category_dashboard.avs_native"):
         at = _render(page, "Customer (deduplicated)")
         assert not at.exception, f"{page} raised: {at.exception}"
         assert "Operational status" not in _sections(at), (page, _sections(at))
@@ -328,3 +335,94 @@ def test_reports_page_offers_each_report_and_generates_a_pdf():
     assert not at.exception, f"generating raised: {at.exception}"
     pdf = at.session_state["_rep_pdf"]
     assert pdf[:4] == b"%PDF"
+
+
+# --------------------------------------------------------------------------- #
+# Trend Analysis: one page per measure, every category on it
+# --------------------------------------------------------------------------- #
+_EXPECTED_TREND_CATEGORIES = {
+    "trend_analysis.nominations": ["All AVS Migrations", "EOS Migration",
+                                   "EOS Migration — Gen-1", "EOS Migration — Gen-2",
+                                   "AVS → Azure Native"],
+    "trend_analysis.acr": ["All AVS Migrations", "EOS Migration",
+                           "EOS Migration — Gen-1", "EOS Migration — Gen-2",
+                           "AVS → Azure Native"],
+    "trend_analysis.nodes": ["All AVS Migrations", "EOS Migration",
+                             "EOS Migration — Gen-1", "EOS Migration — Gen-2"],
+    "trend_analysis.cores": ["AVS → Azure Native"],
+    "trend_analysis.completed": ["All AVS Migrations", "EOS Migration",
+                                 "EOS Migration — Gen-1", "EOS Migration — Gen-2",
+                                 "AVS → Azure Native"],
+}
+
+
+@pytest.mark.parametrize("page", TREND_PAGES)
+def test_each_trend_page_covers_exactly_its_categories(page):
+    """Nodes Deployed stops at the AVS motions; Cores Migrated is the (From AVS)
+    one under the noun that fits it. Every other measure covers all five."""
+    at = _render(page, "Customer (deduplicated)")
+    assert not at.exception, f"{page} raised: {at.exception}"
+    assert _sections(at) == _EXPECTED_TREND_CATEGORIES[page]
+
+
+def test_nodes_and_cores_split_the_same_measure_by_motion():
+    """Both read Total Cores; only the noun and the population differ."""
+    from app.views import trend_analysis as ta
+    nodes = next(m for m in ta.MEASURES if m.key == "nodes")
+    cores = next(m for m in ta.MEASURES if m.key == "cores")
+    assert nodes.display_col == "Nodes" and cores.display_col == "Cores"
+    assert nodes.unit_col == cores.unit_col == "total_cores"
+    from app.core import segments
+    assert segments.CAT_AVS_NATIVE not in nodes.categories
+    assert cores.categories == (segments.CAT_AVS_NATIVE,)
+
+
+def test_trend_pages_reuse_the_dashboard_calculation_layer():
+    """Moving the reports must not have changed a single number: each measure is
+    the kpi.py call the category dashboards made, on the same population."""
+    from app.core import kpi, segments
+    from app.views import trend_analysis as ta
+    from app.config import SAMPLE_DATA
+    from app import state
+    ctx = state.build_context(SAMPLE_DATA.name, SAMPLE_DATA.read_bytes(), is_sample=True)
+    pop = segments.population(ctx.fact, segments.CAT_ALL_AVS)
+    waves = kpi.wave_index(pop)
+    expected = {
+        "nominations": kpi.monthly_unique_tpids(pop, "approval_date", None, None,
+                                                firsts=waves.first)[0],
+        "acr": kpi.monthly_acr_claimed(pop, None, None)[0],
+        "nodes": kpi.monthly_hosts(pop, None, None)[0],
+        "completed": kpi.monthly_migrations_completed(pop, None, None,
+                                                      lasts=waves.last)[0],
+    }
+    for key, want in expected.items():
+        measure = next(m for m in ta.MEASURES if m.key == key)
+        got, _ = measure.series(pop, waves, None, None, "approval_date")
+        pd.testing.assert_frame_equal(got, want)
+
+
+def test_trends_are_gone_from_the_migration_analytics_dashboards():
+    """The reports moved to Trend Analysis; they must not remain in both places."""
+    for page in ("category_dashboard.all_avs", "category_dashboard.eos_all",
+                 "category_dashboard.avs_native"):
+        at = _render(page, "Customer (deduplicated)")
+        assert not at.exception, f"{page} raised: {at.exception}"
+        sections = _sections(at)
+        assert not any("Trends" in s for s in sections), (page, sections)
+        assert "Trend basis" not in [r.label for r in at.radio], page
+
+
+def test_the_old_trend_pages_are_gone():
+    """Deleted outright, not renamed or hidden behind the navigation."""
+    import importlib
+    for name in ("nomination_trends", "approved_trends", "avs_to_azure"):
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(f"app.views.{name}")
+
+
+def test_trend_pages_explain_the_all_time_shape_once_for_the_page():
+    """The FY-split note belongs to the page, not repeated under every category."""
+    at = _with_period("trend_analysis.nominations", "All time")
+    assert not at.exception, f"raised: {at.exception}"
+    notes = [c.value for c in at.caption if "each fiscal year is its own line" in c.value]
+    assert len(notes) == 1, notes

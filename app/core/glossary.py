@@ -75,9 +75,13 @@ EXECUTIVE_SUMMARY = (
 )
 
 TRENDS = (
-    "Month-by-month movement for this category. Each table's final column is "
-    "Cumulative — the running total of the months shown, never a different "
-    "population. Click a bar or a table row to open that month's records.\n"
+    "Month-by-month movement for ONE measure, in every migration category — so "
+    "the measure can be read across the portfolio rather than a category at a "
+    "time. Each category is its own section, over the single reporting period "
+    "selected at the top of the page.\n"
+    "Each table's final column is Cumulative — the running total of the months "
+    "shown, never a different population. Click a bar or a table row to open "
+    "that month's records.\n"
     "Over 'All time' the shape changes: each fiscal year becomes its own line "
     "on a shared Jul → Jun axis, so the years read against one another instead "
     "of stretching into one ever-longer series. There is no Cumulative column "
@@ -100,9 +104,14 @@ TREND_ACR = (
 )
 
 TREND_HOSTS = (
-    "Total Cores completed per month, by Actual End Date, over wave records whose "
-    "Migration Status is '7 - Completed'. Record-level, not a customer count."
+    "Nodes deployed per month — the Total Cores column, by Actual End Date, over "
+    "wave records whose Migration Status is '7 - Completed'. Record-level, not a "
+    "customer count: an account with three completed waves contributes all three."
 )
+
+#: The same column and the same rule, under the noun the AVS → Azure Native
+#: motion uses: it moves cores to Azure-native services rather than nodes to AVS.
+TREND_CORES = TREND_HOSTS.replace("Nodes deployed", "Cores migrated")
 
 TREND_COMPLETED = (
     "Completed migrations per month: unique TPIDs whose latest wave is "

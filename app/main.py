@@ -24,10 +24,10 @@ def run() -> None:
     from app.config import APP_NAME, APP_TAGLINE
     from app.version import build_stamp, version_line
     from app.ui.theme import inject_css
-    from app.views import (accounts_status, approved, approved_trends, avs_native_status,
-                           avs_to_azure, category_dashboard, closed, column_mapping,
+    from app.views import (accounts_status, approved, avs_native_status,
+                           category_dashboard, closed, column_mapping,
                            data_inconsistency, data_upload, insights_page,
-                           methodology, nomination_trends, overview, reports)
+                           methodology, overview, reports, trend_analysis)
 
     global _BOOT_LOGGED
     if not _BOOT_LOGGED:                    # once per server start, into the console
@@ -70,13 +70,19 @@ def run() -> None:
             st.Page(avs_native_status.render, title="AVS → Azure Native Status",
                     icon=":material/cloud_sync:", url_path="avs-native-status"),
         ],
+        # One page per measure, every migration category on it — the inverse of
+        # the category dashboards, which no longer carry a trends section.
         "Trend Analysis": [
-            st.Page(nomination_trends.render, title="Nomination Trends",
+            st.Page(trend_analysis.nominations, title="Nomination Trends",
                     icon=":material/timeline:", url_path="nomination-trends"),
-            st.Page(approved_trends.render, title="Approved Trend Analysis",
-                    icon=":material/trending_up:", url_path="approved-trends"),
-            st.Page(avs_to_azure.render, title="AVS → Azure Native Trends",
-                    icon=":material/swap_horiz:", url_path="avs-to-azure"),
+            st.Page(trend_analysis.acr, title="ACR Trend",
+                    icon=":material/payments:", url_path="acr-trend"),
+            st.Page(trend_analysis.nodes, title="Nodes Deployed",
+                    icon=":material/dns:", url_path="nodes-deployed"),
+            st.Page(trend_analysis.cores, title="Cores Migrated",
+                    icon=":material/memory:", url_path="cores-migrated"),
+            st.Page(trend_analysis.completed, title="Migrations Completed",
+                    icon=":material/task_alt:", url_path="migrations-completed"),
         ],
         "Data": [
             st.Page(data_inconsistency.render, title="Data Inconsistency",
