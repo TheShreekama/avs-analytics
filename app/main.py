@@ -24,10 +24,10 @@ def run() -> None:
     from app.config import APP_NAME, APP_TAGLINE
     from app.version import build_stamp, version_line
     from app.ui.theme import inject_css
-    from app.views import (accounts_status, approved, avs_native_status,
-                           category_dashboard, closed, column_mapping,
+    from app.views import (accounts_status, approved, approved_trends, avs_native_status,
+                           avs_to_azure, category_dashboard, closed, column_mapping,
                            data_inconsistency, data_upload, insights_page,
-                           methodology, overview, reports, trend_analysis)
+                           methodology, nomination_trends, overview, reports)
 
     global _BOOT_LOGGED
     if not _BOOT_LOGGED:                    # once per server start, into the console
@@ -39,10 +39,7 @@ def run() -> None:
     _sidebar_brand(ctx, state, APP_NAME, APP_TAGLINE)
 
     # url_path must be explicit & unique because every view's callable is `render`.
-    # Trend Analysis is assembled by the view itself: it is one report per trend
-    # across five migration categories, so the pages are generated from that
-    # matrix rather than listed twice (see app/views/trend_analysis.py).
-    sections = {
+    nav = st.navigation({
         "Executive": [
             st.Page(overview.render, title="Overview", icon=":material/dashboard:",
                     url_path="overview", default=True),
@@ -73,7 +70,14 @@ def run() -> None:
             st.Page(avs_native_status.render, title="AVS → Azure Native Status",
                     icon=":material/cloud_sync:", url_path="avs-native-status"),
         ],
-        **trend_analysis.nav_pages(),
+        "Trend Analysis": [
+            st.Page(nomination_trends.render, title="Nomination Trends",
+                    icon=":material/timeline:", url_path="nomination-trends"),
+            st.Page(approved_trends.render, title="Approved Trend Analysis",
+                    icon=":material/trending_up:", url_path="approved-trends"),
+            st.Page(avs_to_azure.render, title="AVS → Azure Native Trends",
+                    icon=":material/swap_horiz:", url_path="avs-to-azure"),
+        ],
         "Data": [
             st.Page(data_inconsistency.render, title="Data Inconsistency",
                     icon=":material/rule:", url_path="data-inconsistency"),
@@ -86,10 +90,7 @@ def run() -> None:
             st.Page(methodology.render, title="Methodology & Logic",
                     icon=":material/menu_book:", url_path="methodology"),
         ],
-    }
-    # expanded=True: Trend Analysis alone is 20 pages, and the default collapse
-    # (ten, then "View 26 more") hides most of the navigation behind a button.
-    nav = st.navigation(sections, expanded=True)
+    })
 
     nav.run()
     st.sidebar.divider()

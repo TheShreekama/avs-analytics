@@ -24,8 +24,8 @@ from app import state
 from app.config import FY_START_MONTH
 from app.core import glossary, kpi, metrics, segments
 from app.core.metrics import fmt_currency, fmt_int
-from app.ui import charts, components, drilldown, trends
-from app.ui.theme import page_header, section, subheading
+from app.ui import charts, components, drilldown
+from app.ui.theme import banner, page_header, section, subheading
 
 THIS_FY = "This FY"
 ALL_TIME = "All time"
@@ -77,7 +77,7 @@ def render(category: str) -> None:
     with top[0]:
         start, end, shown, preset = components.report_date_range(ctx, key)
     with top[1]:
-        components.population_note(category, fact)
+        _population_note(ctx, category, fact)
 
     if fact.empty:
         components.empty_state(f"No nominations fall into **{label}**.")
@@ -99,6 +99,19 @@ def render(category: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
+def _population_note(ctx, category: str, fact: pd.DataFrame) -> None:
+    tpids = fmt_int(segments.tpid_key(fact).nunique()) if not fact.empty else "0"
+    bits = [f"<b>{tpids}</b> TPIDs · <b>{fmt_int(len(fact))}</b> nomination waves"]
+    if category in (segments.CAT_EOS_ALL, segments.CAT_EOS_GEN1, segments.CAT_EOS_GEN2):
+        bits.append("scope from the <b>AVS Migration - Gen1/Gen2</b> tag on any wave, "
+                    "or the <b>AV36/AV36P/AV52 - EOS</b> path when untagged")
+    if category == segments.CAT_EOS_ALL and not fact.empty:
+        split = (fact.drop_duplicates("tpid_key")["generation"]
+                 .value_counts().rename({segments.GEN_UNCLASSIFIED: "no generation tag"}))
+        bits.append(" · ".join(f"<b>{fmt_int(v)}</b> {k}" for k, v in split.items()))
+    banner(" · ".join(bits))
+
+
 def _why_empty(ctx, category: str) -> None:
     """Show what the file actually contains when a category selects nothing."""
     st.markdown("**Why is this empty?**")
@@ -204,25 +217,106 @@ def _fy_label(ctx) -> str:
 
 def _trends(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str,
             unit_label: str, unit_short: str, shown: str, preset: str) -> None:
-    """All four month-over-month trends for this category.
-
-    The Trend Analysis pages draw the same four one at a time, one category per
-    page, from the same :mod:`app.ui.trends` component — so a number shown in
-    both places is computed once.  Only the Total Cores heading differs: "Cores
-    Migrated" on the Azure-native page, "Hosts Migrated" on the AVS ones.
-    """
     by_fy = preset == ALL_TIME
     section("Trends — month over month", help=glossary.TRENDS, period=shown)
-    trends.guidance(by_fy)
-    date_col = trends.basis_selector(key)
+    if by_fy:
+        st.caption("**All time** — each fiscal year is its own line over a shared "
+                   "Jul → Jun axis, so the years can be read against each other. "
+                   "Click a point **or a table row** to open that month's records.")
+    else:
+        st.caption("Click a bar **or a row of the table** to open the records behind "
+                   "that month.")
+    basis = st.radio(
+        "Trend basis (nomination count only)",
+        ["Nomination approval date", "Nomination created date"],
+        horizontal=True, key=f"{key}_basis",
+        help="Which Wave-1 date places a TPID in a month. The other three trends "
+             "are dated by Actual End Date, which is what they measure.")
+    date_col = "approval_date" if basis.startswith("Nomination approval") else "created_date"
 
-    titles = {trends.HOSTS: f"{unit_label} (Total Cores)"}
-    columns = {trends.HOSTS: unit_short}
-    for name in trends.ALL_TRENDS:
-        result = trends.compute(name, fact, waves, start, end, date_col=date_col)
-        trends.render_trend(result, key=key, title=titles.get(name),
-                            display_col=columns.get(name), shown=shown, by_fy=by_fy)
+    noms, nom_rows = kpi.monthly_unique_tpids(fact, date_col, start, end, firsts=waves.first)
+    acr, acr_rows = kpi.monthly_acr_claimed(fact, start, end)
+    hosts, host_rows = kpi.monthly_hosts(fact, start, end)
+    done, done_rows = kpi.monthly_migrations_completed(fact, start, end, lasts=waves.last)
+
+    trends = [
+        ("Nomination count (unique TPIDs)", noms, nom_rows, "Nominations", date_col,
+         None, False, "nominations", glossary.TREND_NOMINATIONS),
+        ("ACR claimed", acr, acr_rows, "ACR Claimed", "actual_end_date",
+         "total_acr", True, "claiming waves", glossary.TREND_ACR),
+        (f"{unit_label} (Total Cores)", hosts, host_rows, "Hosts", "actual_end_date",
+         "total_cores", False, "wave records", glossary.TREND_HOSTS),
+        ("Migrations completed (unique TPIDs)", done, done_rows, "Migrations Completed",
+         "actual_end_date", None, False, "completed migrations", glossary.TREND_COMPLETED),
+    ]
+    for title, table, rows, value_col, row_date, unit_col, currency, what, help_text in trends:
+        display_col = unit_short if value_col == "Hosts" else value_col
+        subheading(title, help=help_text, period=shown)
+        if table.empty:
+            components.empty_state(f"No {what} in the selected period.")
+            continue
+        if by_fy:
+            _fy_trend(table, rows, value_col, display_col, row_date, unit_col, currency,
+                      what, key)
+        else:
+            fig = charts.trend_chart(table, "period", value_col, "Cumulative",
+                                     currency=currency, height=320)
+            drilldown.chart_with_drilldown(
+                fig, _with_period(rows, row_date), "period",
+                key=f"{key}_{value_col}".replace(" ", "_"), what=what, unit_col=unit_col,
+                summary=_display_trend(table, display_col, currency),
+                summary_bucket="Month")
         st.write("")
+
+
+def _fy_trend(table: pd.DataFrame, rows: pd.DataFrame, value_col: str, display_col: str,
+              row_date: str, unit_col: str | None, currency: bool, what: str,
+              key: str) -> None:
+    """One line per fiscal year, with the same click-through to the records.
+
+    A month label alone is ambiguous here — every year has a September — so the
+    chart, the summary table and the records are all keyed on "FY27 Sep", and
+    the line a point sits on is what tells the two Septembers apart.  The
+    year-over-year grid lives in the underlying-data panel, where it can be read
+    side by side without breaking that key.
+    """
+    split = kpi.split_by_fiscal_year(table, value_col, FY_START_MONTH)
+    if split.empty:
+        components.empty_state(f"No {what} to chart.")
+        return
+    years = sorted(split["fy"].unique())
+    order = metrics.fiscal_month_order(FY_START_MONTH)
+
+    fig = charts.fy_lines(split, "fy_month", "fy", value_col, order,
+                          currency=currency, height=340)
+    summary = split.rename(columns={"bucket": "Period", "fy": "FY", "fy_month": "Month",
+                                    value_col: display_col})
+    summary = summary[["Period", "FY", "Month", display_col]]
+    if currency:
+        summary[display_col] = summary[display_col].map(fmt_currency)
+    drilldown.chart_with_drilldown(
+        fig, kpi.label_fiscal_year(rows, row_date, FY_START_MONTH), "bucket",
+        key=f"{key}_{value_col}_fy".replace(" ", "_"), what=what, unit_col=unit_col,
+        summary=summary, summary_bucket="Period", curve_labels=years)
+
+    grid = split.pivot_table(index="fy_month", columns="fy", values=value_col,
+                             aggfunc="sum")
+    grid = grid.reindex([m for m in order if m in grid.index]).fillna(0)
+    totals = split.groupby("fy")[value_col].sum()
+    st.caption("Totals per fiscal year: " + " · ".join(
+        f"**{fy}** {fmt_currency(v) if currency else fmt_int(v)}"
+        for fy, v in totals.items()) +
+        " — no cumulative column here, because a running total across unrelated "
+        "fiscal years would not mean anything.")
+    display = grid.copy()
+    if currency:
+        for col in display.columns:
+            display[col] = display[col].map(fmt_currency)
+    drilldown.data_expander(
+        display.reset_index().rename(columns={"fy_month": "Month"}),
+        f"{key}_{value_col}_fy_grid".replace(" ", "_"),
+        label="Underlying data — fiscal years side by side",
+        caption="The same numbers as the chart, one column per fiscal year.")
 
 
 def _pipeline(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
@@ -382,6 +476,38 @@ def _detailed_data(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: st
     st.download_button("⬇️ Export to CSV", frame.to_csv(index=False).encode("utf-8"),
                        file_name=f"{key}-detail.csv", mime="text/csv",
                        key=f"{key}_detail_csv")
+
+
+# --------------------------------------------------------------------------- #
+def _with_period(rows: pd.DataFrame, date_col: str) -> pd.DataFrame:
+    """Attach the chart's period label to the underlying rows for drill-down."""
+    if rows is None or rows.empty:
+        return pd.DataFrame()
+    out = rows.copy()
+    if "month" in out.columns:
+        out["period"] = pd.to_datetime(out["month"].astype(str), errors="coerce") \
+            .dt.to_period("M").astype(str)
+    elif date_col in out.columns:
+        out["period"] = pd.to_datetime(out[date_col], errors="coerce") \
+            .dt.to_period("M").astype(str)
+    return out
+
+
+def _display_trend(table: pd.DataFrame, display_col: str | None = None,
+                   currency: bool = False) -> pd.DataFrame:
+    """Month, value and the Cumulative column — cumulative always last.
+
+    Money is shown as $1.2M / $840.0K rather than a raw number.
+    """
+    out = table.drop(columns=["month"]).rename(columns={"period": "Month"})
+    value_cols = [c for c in out.columns if c not in ("Month", "Cumulative")]
+    out = out[["Month", *value_cols, "Cumulative"]]
+    if currency:
+        for col in [*value_cols, "Cumulative"]:
+            out[col] = out[col].map(fmt_currency)
+    if display_col and value_cols and display_col != value_cols[0]:
+        out = out.rename(columns={value_cols[0]: display_col})
+    return out
 
 
 # --------------------------------------------------------------------------- #

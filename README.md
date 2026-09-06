@@ -75,10 +75,9 @@ troubleshooting: **[`docs/INSTALL.md`](docs/INSTALL.md)**.
 | 3 | **Nominations Closed** | Closure velocity, closure rate by region, aging, longest‑open & range‑filtered closed lists |
 | 4 | **AV36 EOS Status** | Scoped to **AV36/EOS** nominations (any wave with an AV36/EOS path); derived status taxonomy (On Track / Completed / At Risk / Delayed / Blocked / Cancelled), Region × Status heatmap, aging, risk hotspots |
 | 5 | **AVS → Azure Native — Status** | Dedicated home for the **"(From AVS)"** offerings (SQL / OSS DB / Windows / Linux migrations). Status, targets, operational health, records — **shown here only**, never mixed into the primary reports |
-| 6 | **Trend Analysis → Nomination Trends** | Nominations month over month (unique TPIDs, Wave‑1 date) — one page per migration category |
-| 7 | **Trend Analysis → ACR Trend** | ACR claimed month over month, by each wave's Actual End Date — one page per migration category |
-| 8 | **Trend Analysis → Nodes Deployed** | Total Cores over completed waves, month over month — All AVS and the three EOS categories (shown as **Cores Migrated** for AVS → Azure Native) |
-| 9 | **Trend Analysis → Migrations Completed** | Completed migrations month over month (unique TPIDs whose latest wave is completed) — one page per migration category |
+| 6 | **Nomination Trends** | Monthly / quarterly / yearly volume, cumulative, peaks/troughs, seasonality |
+| 7 | **Approved Trend Analysis** | 1/2/3‑year windows, YoY & MoM, cumulative, growth rates (actuals only — no forecasting) |
+| 8 | **AVS → Azure Native — Trends** | Sankey flow, path & target distribution, Started/In‑Progress/Completed, completion & backlog, adoption insights |
 | 💡 | **Insights** | Full deterministic insights engine, grouped by category |
 | 📄 | **Reports & Export** | Build a comprehensive or module‑specific executive **PDF**; CSV exports |
 | 📖 | **Methodology & Logic** | Plain‑language reference for every metric, status, scope and insight rule |
@@ -92,10 +91,9 @@ This‑Week/Month/Quarter/YTD windows.
 
 The dashboard's primary focus is **AVS Migration Nominations** (onboarding *to* AVS).
 Offerings whose migration path is **"(From AVS)"** — i.e. migrating *away* from AVS to an
-Azure‑native service — are a different motion and are **quarantined to their own pages**
-(*Migration Analytics → AVS → Azure Native*, *Status Reports → AVS → Azure Native Status*
-and the *AVS to Azure Native* page of each Trend Analysis report). They never appear in any
-other status or trend report, so the primary numbers stay clean. **Region** is shown as geography only
+Azure‑native service — are a different motion and are **quarantined to their own two pages**
+(*AVS → Azure Native — Status* and *— Trends*). They never appear in any other status or
+trend report, so the primary numbers stay clean. **Region** is shown as geography only
 (Americas / EMEA / ASIA); the segment lives in **Customer Segment**.
 
 ---

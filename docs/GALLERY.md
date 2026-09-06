@@ -23,14 +23,17 @@ Scoped to AV36/EOS nominations (deduplicated by customer). Derived status taxono
 Region × EOS heatmap, trend & aging. Note the **counting‑mode toggle** in the sidebar.
 ![AV36 EOS Status](screenshots/05_eos_status.png)
 
-## 5 · Trend Analysis
-One trend per page, across the migration categories: **Nomination Trends**, **ACR Trend**,
-**Nodes Deployed** (**Cores Migrated** for AVS → Azure Native) and **Migrations Completed**.
-Each page is monthly bars plus a cumulative line — one line per fiscal year over *All time* —
-with the records behind any month one click away. The same component draws the
-"Trends — month over month" section of each Migration Analytics dashboard, so the two agree
-by construction.
-![Trend Analysis](screenshots/06_trend_analysis.png)
+## 5 · Nomination Trends
+Monthly/quarterly/yearly volume with peak/trough annotations, cumulative, seasonality.
+![Nomination Trends](screenshots/06_nomination_trends.png)
+
+## 6 · Approved Trend Analysis
+1/2/3‑year windows, YoY & MoM, cumulative and growth rates (actuals only).
+![Approved Trend Analysis](screenshots/07_approved_trends.png)
+
+## 7 · AVS → Azure Native
+Sankey flow, track & target distribution, Started/In‑Progress/Completed, adoption trend.
+![AVS to Azure Native](screenshots/08_avs_to_azure.png)
 
 ## Insights
 Full deterministic insights engine, grouped by category.
