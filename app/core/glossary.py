@@ -75,9 +75,13 @@ EXECUTIVE_SUMMARY = (
 )
 
 TRENDS = (
-    "Month-by-month movement for this category. Each table's final column is "
-    "Cumulative — the running total of the months shown, never a different "
-    "population. Click a bar or a table row to open that month's records.\n"
+    "Month-by-month movement for ONE measure, in every migration category — so "
+    "the measure can be read across the portfolio rather than a category at a "
+    "time. Each category is its own section, over the single reporting period "
+    "selected at the top of the page.\n"
+    "Each table's final column is Cumulative — the running total of the months "
+    "shown, never a different population. Click a bar or a table row to open "
+    "that month's records.\n"
     "Over 'All time' the shape changes: each fiscal year becomes its own line "
     "on a shared Jul → Jun axis, so the years read against one another instead "
     "of stretching into one ever-longer series. There is no Cumulative column "
@@ -100,9 +104,14 @@ TREND_ACR = (
 )
 
 TREND_HOSTS = (
-    "Total Cores completed per month, by Actual End Date, over wave records whose "
-    "Migration Status is '7 - Completed'. Record-level, not a customer count."
+    "Nodes deployed per month — the Total Cores column, by Actual End Date, over "
+    "wave records whose Migration Status is '7 - Completed'. Record-level, not a "
+    "customer count: an account with three completed waves contributes all three."
 )
+
+#: The same column and the same rule, under the noun the AVS → Azure Native
+#: motion uses: it moves cores to Azure-native services rather than nodes to AVS.
+TREND_CORES = TREND_HOSTS.replace("Nodes deployed", "Cores migrated")
 
 TREND_COMPLETED = (
     "Completed migrations per month: unique TPIDs whose latest wave is "
@@ -143,6 +152,12 @@ REGIONAL_BREAKDOWN = (
     "one account here, matching the state chart above it. The equivalent "
     "'Regional breakdown' on Status Reports → Accounts by Migration Status "
     "counts the same way, regardless of the sidebar's Counting mode toggle.\n"
+    "Only the stages a migration progresses through are shown: '1 - Validating "
+    "Commitment & Initial Scope', '2 - Executing Pre-Requisites', '3 - Finalize "
+    "Scope', '4 - Executing Migration' and '7 - Completed'. Deferred ('5') and "
+    "Cancelled / Archived ('6') are left out, so the chart is not padded with "
+    "work nobody is doing — the counts here will therefore be lower than the "
+    "category's total account count.\n"
     "A snapshot: the reporting period does not narrow it."
 )
 
@@ -154,9 +169,17 @@ OFFERING_AND_TARGET = (
 )
 
 DETAILED_DATA = (
-    "Every record behind this dashboard. 'Accounts' shows one row per TPID (its "
-    "latest wave); 'Nomination waves' shows the underlying source rows. Group it "
-    "to read subtotals, then export to CSV."
+    "One row per ACCOUNT (TPID) — an account with five waves is one row, never "
+    "five. Each field comes from the wave that answers for it:\n"
+    "• Most Recent / Latest Wave, and every wave-specific field (migration "
+    "status, Current State, region, cores, actual dates, owners) — from the "
+    "account's LATEST wave, so the row reads as where it stands now.\n"
+    "• Total ACR — summed across EVERY wave of the account. Waves of 10M, 15M "
+    "and 20M show as 45M; the latest wave's 20M alone would understate it.\n"
+    "• Nom. Approval Date — from the EARLIEST wave (lowest wave number), the "
+    "same Wave-1 rule the New Engagements tile counts on, because that is when "
+    "the account was nominated.\n"
+    "Group it to read subtotals, then export to CSV."
 )
 
 REPORTING_PERIOD = (

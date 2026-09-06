@@ -16,7 +16,7 @@ import re
 import numpy as np
 import pandas as pd
 
-from . import schema, segments
+from . import metrics, schema, segments
 from ..config import DIR_FROM_AVS, DIR_OTHER, DIR_TO_AVS
 
 # Accepted date formats.  The export nominally uses MM-DD-YYYY, but real files
@@ -515,6 +515,46 @@ def build_fact_frame(
         report["duplicate_task_ids"] = int(dup.sum())
 
     return fact, report
+
+
+def nomination_date(fact: pd.DataFrame) -> pd.Series:
+    """The date a wave is nominated on — its approval date, else its creation date.
+
+    One definition, used both to place a wave in a fiscal year and to decide
+    whether it is inside the reporting floor.
+    """
+    approved = pd.to_datetime(fact.get("approval_date"), errors="coerce")
+    created = pd.to_datetime(fact.get("created_date"), errors="coerce")
+    return approved.fillna(created)
+
+
+def apply_reporting_floor(fact: pd.DataFrame, floor_fy: int,
+                          fy_start_month: int = 7) -> tuple[pd.DataFrame, dict]:
+    """Drop waves nominated before the reporting floor fiscal year.
+
+    Applied as the file is read, so the floor is a property of the *data* rather
+    than of any one page: every chart, table, total, rollup and export downstream
+    inherits it, and "All time" means the floor onwards everywhere.
+
+    A wave belongs to the fiscal year of its nomination date.  A wave carrying
+    neither an approval nor a creation date cannot be shown to be out of scope,
+    so it stays — the floor excludes what it can prove is old, never what it
+    merely cannot date.
+    """
+    start = metrics.named_fiscal_year_start(floor_fy, fy_start_month)
+    dated = nomination_date(fact)
+    before = dated.notna() & (dated < start)
+    summary = {
+        "floor_fy": f"FY{int(floor_fy) % 100:02d}",
+        "floor_start": start,
+        "excluded_rows": int(before.sum()),
+        "excluded_accounts": 0,
+    }
+    if summary["excluded_rows"] and "tpid_key" in fact.columns:
+        dropped = fact.loc[before, "tpid_key"]
+        kept = fact.loc[~before, "tpid_key"]
+        summary["excluded_accounts"] = int(dropped[~dropped.isin(set(kept))].nunique())
+    return fact.loc[~before].reset_index(drop=True), summary
 
 
 def _effective_today(fact: pd.DataFrame) -> pd.Timestamp:

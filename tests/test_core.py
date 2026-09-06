@@ -588,3 +588,144 @@ def test_drilldown_truncates_large_account_sets_with_a_note():
     text = _text(exporter.build_story(ctx, reports=["native"], max_drilldown_rows=1))
     assert "Showing the 1 largest" in text
     assert "CSV" in text
+
+
+# --------------------------------------------------------------------------- #
+# Reporting floor: FY25 onwards, applied to the data rather than the UI
+# --------------------------------------------------------------------------- #
+def _floored_context(n: int = 1500):
+    """A context over synthetic data that straddles the floor (2023 → 2026)."""
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from stress_test import synthesize
+    from app import state
+    raw = synthesize(n)
+    return state.build_context("floor.csv", raw.to_csv(index=False).encode("utf-8"))
+
+
+def test_named_fiscal_year_start_inverts_the_label():
+    assert metrics.named_fiscal_year_start(25, 7) == pd.Timestamp("2024-07-01")
+    assert metrics.fiscal_year_label(pd.Timestamp("2024-07-01"), 7) == "FY25"
+    assert metrics.fiscal_year_label(pd.Timestamp("2025-06-30"), 7) == "FY25"
+
+
+def test_reporting_floor_excludes_earlier_fiscal_years_from_the_data():
+    """Not hidden in the UI — dropped as the file is read, so nothing downstream
+    can count them."""
+    from app.config import FY_START_MONTH, REPORTING_FLOOR_FY
+    from app.core import cleaning
+    ctx = _floored_context()
+    floor = metrics.named_fiscal_year_start(REPORTING_FLOOR_FY, FY_START_MONTH)
+
+    dated = cleaning.nomination_date(ctx.fact).dropna()
+    assert not dated.empty
+    assert dated.min() >= floor, f"pre-floor row survived: {dated.min()}"
+    years = {metrics.fiscal_year_label(d, FY_START_MONTH) for d in dated}
+    assert "FY24" not in years and "FY23" not in years, sorted(years)
+    # The exclusion is reported, not silent.
+    assert ctx.report["scope"]["excluded_rows"] > 0
+    assert ctx.report["scope"]["floor_fy"] == "FY25"
+
+
+def test_reporting_floor_reaches_the_rollup_and_the_sql_tables():
+    """The floor is applied before the customer rollup and DuckDB registration,
+    so every query inherits it rather than re-filtering."""
+    from app.config import FY_START_MONTH, REPORTING_FLOOR_FY
+    from app.core import analytics
+    ctx = _floored_context()
+    floor = metrics.named_fiscal_year_start(REPORTING_FLOOR_FY, FY_START_MONTH)
+    for table in ("fact", "customer"):
+        rows = analytics.select_all(ctx.con, "", table=table)
+        appr = pd.to_datetime(rows["approval_date"], errors="coerce").dropna()
+        assert appr.empty or appr.min() >= floor, f"{table} kept a pre-floor row"
+    assert len(ctx.customer) == ctx.fact["tpid_key"].nunique()
+
+
+def test_reporting_floor_keeps_waves_it_cannot_date():
+    """The floor excludes what it can prove is old, never what it cannot date."""
+    from app.core import cleaning
+    frame = pd.DataFrame({
+        "approval_date": pd.to_datetime(["2020-01-01", "2025-01-01", None]),
+        "created_date": pd.to_datetime([None, None, None]),
+        "tpid_key": ["a", "b", "c"],
+    })
+    kept, summary = cleaning.apply_reporting_floor(frame, 25, 7)
+    assert list(kept["tpid_key"]) == ["b", "c"]
+    assert summary["excluded_rows"] == 1
+
+
+def test_fiscal_year_totals_reconcile_with_the_underlying_records():
+    """Each FY column of a trend must equal the records filed under that FY."""
+    from app.config import FY_START_MONTH
+    from app.core import kpi, segments
+    ctx = _floored_context()
+    pop = segments.population(ctx.fact, segments.CAT_ALL_AVS)
+    waves = kpi.wave_index(pop)
+    table, rows = kpi.monthly_unique_tpids(pop, "approval_date", None, None,
+                                           firsts=waves.first)
+    split = kpi.split_by_fiscal_year(table, "Nominations", FY_START_MONTH)
+    labelled = kpi.label_fiscal_year(rows, "approval_date", FY_START_MONTH)
+    charted = split.groupby("fy")["Nominations"].sum()
+    listed = labelled.groupby("fy")["tpid_key"].nunique()
+    for fy, total in charted.items():
+        assert int(total) == int(listed[fy]), f"{fy}: chart {total} vs records {listed[fy]}"
+
+
+# --------------------------------------------------------------------------- #
+# Detailed data: one row per TPID, each field from the wave that answers for it
+# --------------------------------------------------------------------------- #
+def _multi_wave_fact():
+    return pd.DataFrame({
+        "tpid": ["1", "1", "1", "2"],
+        "tpid_key": ["1", "1", "1", "2"],
+        "wave_num": [1.0, 2.0, 3.0, 1.0],
+        "phase": ["Wave 1", "Wave 2", "Wave 3", "Wave 1"],
+        "created_date": pd.to_datetime(["2025-01-01"] * 4),
+        "approval_date": pd.to_datetime(["2025-01-05", "2025-06-05", "2025-09-05",
+                                         "2025-02-02"]),
+        "total_acr": [10_000_000.0, 15_000_000.0, 20_000_000.0, 500.0],
+        "current_state": ["On Track", "Blocked - Customer", "Done", "On Track"],
+        "migration_status_label": ["Executing Migration"] * 3 + ["Finalize Scope"],
+    })
+
+
+def test_account_detail_is_one_row_per_tpid():
+    from app.core import kpi
+    fact = _multi_wave_fact()
+    detail = kpi.account_detail(fact)
+    assert len(detail) == fact["tpid_key"].nunique() == 2
+    assert detail["tpid_key"].is_unique
+
+
+def test_account_detail_takes_wave_fields_from_the_latest_wave():
+    from app.core import kpi
+    row = kpi.account_detail(_multi_wave_fact()).set_index("tpid_key").loc["1"]
+    assert row["wave_num"] == 3.0 and row["phase"] == "Wave 3"
+    assert row["current_state"] == "Done"
+
+
+def test_account_detail_sums_acr_across_every_wave():
+    """10M + 15M + 20M is 45M; the latest wave's 20M alone understates it."""
+    from app.core import kpi
+    row = kpi.account_detail(_multi_wave_fact()).set_index("tpid_key").loc["1"]
+    assert row["total_acr"] == 45_000_000.0
+
+
+def test_account_detail_dates_the_account_by_its_earliest_wave():
+    from app.core import kpi
+    row = kpi.account_detail(_multi_wave_fact()).set_index("tpid_key").loc["1"]
+    assert row["approval_date"] == pd.Timestamp("2025-01-05")
+
+
+def test_reported_stages_exclude_deferred_and_cancelled():
+    """The regional breakdown shows stages a migration progresses through."""
+    from app.core import kpi
+    frame = pd.DataFrame({
+        "migration_status_code": [1, 2, 3, 4, 5, 6, 7],
+        "migration_status_label": ["Validating Commitment & Initial Scope",
+                                   "Executing Pre-Requisites", "Finalize Scope",
+                                   "Executing Migration", "Deferred by Customer",
+                                   "Cancelled / Archived", "Completed"],
+    })
+    kept = frame[kpi.reported_stages(frame)]["migration_status_code"].tolist()
+    assert kept == [1, 2, 3, 4, 7]

@@ -75,11 +75,13 @@ troubleshooting: **[`docs/INSTALL.md`](docs/INSTALL.md)**.
 | 3 | **Nominations Closed** | Closure velocity, closure rate by region, aging, longest‑open & range‑filtered closed lists |
 | 4 | **AV36 EOS Status** | Scoped to **AV36/EOS** nominations (any wave with an AV36/EOS path); derived status taxonomy (On Track / Completed / At Risk / Delayed / Blocked / Cancelled), Region × Status heatmap, aging, risk hotspots |
 | 5 | **AVS → Azure Native — Status** | Dedicated home for the **"(From AVS)"** offerings (SQL / OSS DB / Windows / Linux migrations). Status, targets, operational health, records — **shown here only**, never mixed into the primary reports |
-| 6 | **Nomination Trends** | Monthly / quarterly / yearly volume, cumulative, peaks/troughs, seasonality |
-| 7 | **Approved Trend Analysis** | 1/2/3‑year windows, YoY & MoM, cumulative, growth rates (actuals only — no forecasting) |
-| 8 | **AVS → Azure Native — Trends** | Sankey flow, path & target distribution, Started/In‑Progress/Completed, completion & backlog, adoption insights |
+| 6 | **Trend Analysis → Nomination Trends** | Unique TPIDs nominated per month, in every migration category |
+| 7 | **Trend Analysis → ACR Trend** | ACR claimed per month, by each wave's Actual End Date, in every category |
+| 8 | **Trend Analysis → Nodes Deployed** | Total Cores completed per month, across the AVS motions |
+| 9 | **Trend Analysis → Cores Migrated** | The same measure for AVS → Azure Native, under the noun that motion uses |
+| 10 | **Trend Analysis → Migrations Completed** | Unique TPIDs whose latest wave completed, per month, in every category |
 | 💡 | **Insights** | Full deterministic insights engine, grouped by category |
-| 📄 | **Reports & Export** | Build a comprehensive or module‑specific executive **PDF**; CSV exports |
+| 📄 | **Reports & Export** | A two‑part management **PDF** — three executive reports plus their drill‑downs, with contents, bookmarks and cross‑links; CSV exports |
 | 📖 | **Methodology & Logic** | Plain‑language reference for every metric, status, scope and insight rule |
 
 Every report has **Region / Status / path filters** and a **date‑range preset**
@@ -87,13 +89,24 @@ Every report has **Region / Status / path filters** and a **date‑range preset*
 **All time**, so every report opens on the whole dataset), plus an adjustable **"as‑of" date** that anchors the presets and all
 This‑Week/Month/Quarter/YTD windows.
 
+### Reporting floor (FY25 onwards)
+
+The dashboard reports from **FY25** (1 Jul 2024) onwards. Waves nominated earlier are
+dropped **as the file is read** — before the customer rollup and before the SQL tables
+are registered — so no chart, table, total, insight, CSV or PDF can include them, and
+**"All time" means FY25 onwards** everywhere. A wave belongs to the fiscal year of its
+nomination date (approval date, else creation date); a wave carrying neither cannot be
+shown to be out of scope, so it stays. Every page reports how much was excluded.
+Configurable via `AVS_REPORTING_FLOOR_FY`.
+
 ### Reporting scope (AVS‑centric)
 
 The dashboard's primary focus is **AVS Migration Nominations** (onboarding *to* AVS).
 Offerings whose migration path is **"(From AVS)"** — i.e. migrating *away* from AVS to an
-Azure‑native service — are a different motion and are **quarantined to their own two pages**
-(*AVS → Azure Native — Status* and *— Trends*). They never appear in any other status or
-trend report, so the primary numbers stay clean. **Region** is shown as geography only
+Azure‑native service — are a different motion and are **reported on their own**
+(*Migration Analytics → AVS → Azure Native*, its Status report, and its own section of
+each Trend Analysis page). They never get mixed into another category's numbers, so the
+primary figures stay clean. **Region** is shown as geography only
 (Americas / EMEA / ASIA); the segment lives in **Customer Segment**.
 
 ---

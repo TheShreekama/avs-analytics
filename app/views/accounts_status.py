@@ -65,15 +65,17 @@ def render() -> None:
         max_rows=500)
 
     section("Regional breakdown")
-    st.caption("Accounts at their latest wave — deduplicated by TPID regardless of "
-               "the Counting mode toggle in the sidebar, so this always matches the "
-               "Migration Analytics dashboards rather than following whichever mode "
-               "happens to be selected.")
+    st.caption("Accounts at their latest wave, in the four in-flight stages or "
+               "Completed — deduplicated by TPID regardless of the Counting mode "
+               "toggle in the sidebar, so this always matches the Migration "
+               "Analytics dashboards rather than following whichever mode happens "
+               "to be selected.")
     # Always the raw wave-level table, collapsed to one row per TPID's latest wave
     # here — never the SQL "customer"/"fact" table the Counting mode toggle picks,
     # so a reader who switches that toggle to wave-level never sees this section
     # start counting nomination waves.
     latest = kpi.latest_wave(analytics.select_all(con, where, table="fact"))
+    latest = latest[kpi.reported_stages(latest)] if not latest.empty else latest
     if latest.empty:
         components.empty_state("No regional data to report.")
     else:

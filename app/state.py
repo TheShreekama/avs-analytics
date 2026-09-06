@@ -13,7 +13,7 @@ import duckdb
 import pandas as pd
 import streamlit as st
 
-from .config import SAMPLE_DATA
+from .config import FY_START_MONTH, REPORTING_FLOOR_FY, SAMPLE_DATA
 from .core import cleaning, loader, mapping as mapmod, rollup as rollupmod, segments
 
 CTX_KEY = "avs_ctx"
@@ -50,6 +50,12 @@ def _build_fact(signature: str, mapping_json: str, as_of_str: str,
     mp = json.loads(mapping_json)
     as_of = pd.Timestamp(as_of_str) if as_of_str else None
     fact, report = cleaning.build_fact_frame(_raw, mp, as_of)
+    # The reporting floor is applied here, before the rollup and before the
+    # frames are registered with DuckDB, so every downstream page, query,
+    # export and total sees an FY25-onwards dataset rather than filtering for
+    # itself (and forgetting to, somewhere).
+    fact, report["scope"] = cleaning.apply_reporting_floor(
+        fact, REPORTING_FLOOR_FY, FY_START_MONTH)
     customer = rollupmod.build_customer_rollup(fact, report["as_of"])
     report["rollup"] = rollupmod.rollup_summary(customer)
     return fact, report, customer

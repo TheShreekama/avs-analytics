@@ -6,6 +6,7 @@ section.  Nothing here is AI-generated at runtime; every rule is implemented in
 """
 from __future__ import annotations
 
+import pandas as pd
 import streamlit as st
 
 from app import state
@@ -19,6 +20,10 @@ def render() -> None:
     page_header("Methodology & Logic",
                 "Exactly how each metric, status and insight on this dashboard is computed — "
                 "deterministic rules, no AI, no external calls.")
+    scope = ctx.report.get("scope") or {}
+    floor_label = scope.get("floor_fy", "FY25")
+    floor_start = (f"{pd.Timestamp(scope['floor_start']):%d %b %Y}"
+                   if scope.get("floor_start") is not None else "1 Jul 2024")
 
     # ------------------------------------------------------------------ #
     section("Reporting scope (what counts as an 'AVS nomination')")
@@ -28,13 +33,36 @@ def render() -> None:
         "**'(From AVS)'** (i.e. migrating *away* from AVS to an Azure-native service) "
         "are a different motion and are **quarantined to their own pages**:\n\n"
         "- **Primary reports** (Overview, Accounts by Status, Approved, Closed, "
-        "EOS Migration, Nomination Trends, Approved Trends, Insights) show **only** "
-        "`is_from_avs = FALSE`.\n"
-        "- **AVS → Azure Native** (Status + Trends pages) show **only** "
-        "`is_from_avs = TRUE`.\n\n"
+        "EOS Migration, Insights) show **only** `is_from_avs = FALSE`.\n"
+        "- **AVS → Azure Native** (its dashboard and its status report) shows "
+        "**only** `is_from_avs = TRUE`.\n"
+        "- **Trend Analysis** reports each measure per migration category, so the "
+        "two motions sit in separate sections of the same page rather than being "
+        "mixed — and *Nodes Deployed* covers the AVS motions while *Cores "
+        "Migrated* covers `(From AVS)`, the same Total Cores column under the "
+        "noun that fits each.\n\n"
         "`is_from_avs` is derived from the migration path: a path containing "
         "*“from avs”* → **AVS → Azure Native**; a path with *to avs / EGS / AV36 / "
         "ODAA* → **Onboard to AVS**.")
+
+    # ------------------------------------------------------------------ #
+    section("Reporting floor — FY25 onwards")
+    st.markdown(
+        f"The dashboard reports from **{floor_label}** onwards "
+        f"({floor_start}). Waves nominated before it are **dropped as the file "
+        "is read** — before the customer rollup, before the SQL tables are "
+        "registered, before any page runs. They are not hidden by a filter that "
+        "a report could forget to apply: they are not in the data at all, so no "
+        "chart, table, total, insight, CSV or PDF can include them, and "
+        "**\"All time\" means "
+        f"{floor_label} onwards** everywhere.\n\n"
+        "A wave belongs to the fiscal year of its **nomination date** — its "
+        "approval date, or its creation date when it was never approved. A wave "
+        "carrying neither cannot be shown to be out of scope, so it stays: the "
+        "floor excludes what it can prove is old, never what it merely cannot "
+        "date.\n\n"
+        "Every page says how much was excluded, so a file that looks smaller "
+        "than it is always carries the reason.")
 
     # ------------------------------------------------------------------ #
     section("Counting modes & wave deduplication")
@@ -223,18 +251,37 @@ def render() -> None:
     st.markdown(
         "One page owns each view, so the same numbers are not maintained in two "
         "places:\n\n"
-        "- **Migration Analytics → AVS → Azure Native** owns that motion "
-        "entirely — its metrics, trends, pipeline and **By offering & target** "
-        "(full offering names and the Azure-native service each lands on). The "
-        "Status Report of the same name keeps the delivery pipeline and the "
-        "record list only.\n"
+        "- **Trend Analysis** owns every month-over-month trend, one page per "
+        "measure with each migration category as a section on it: *Nomination "
+        "Trends*, *ACR Trend*, *Nodes Deployed* (the AVS motions), *Cores "
+        "Migrated* (AVS → Azure Native) and *Migrations Completed*. The "
+        "Migration Analytics dashboards deliberately carry **no** trends "
+        "section — a measure is read across the portfolio in one place rather "
+        "than a category at a time. Same `kpi.py` calls, same populations; only "
+        "the page they sit on changed.\n"
+        "- **Migration Analytics → AVS → Azure Native** owns that motion's "
+        "metrics, pipeline and **By offering & target** (full offering names and "
+        "the Azure-native service each lands on). The Status Report of the same "
+        "name keeps the delivery pipeline and the record list only.\n"
         "- **Regional breakdown** — *Migration status by region* and the "
         "*Region × status heatmap* — appears on **EOS Migration (All)**, **All "
         "AVS Migrations** and **AVS → Azure Native**. The Gen-1 and Gen-2 pages "
         "are subsets of EOS Migration (All) and do not repeat it. The equivalent "
         "section on **Status Reports → Accounts by Migration Status** counts the "
         "same way — **accounts** (each TPID's latest wave), regardless of the "
-        "sidebar's Counting mode toggle — so the two never disagree.\n\n"
+        "sidebar's Counting mode toggle — so the two never disagree. Both show "
+        "only the stages a migration progresses through — the four in-flight "
+        "ones plus Completed; **Deferred** and **Cancelled / Archived** are left "
+        "out, so these counts are lower than the category's total accounts.\n\n"
+        "- **Detailed data** on every Migration Analytics dashboard is **one row "
+        "per account (TPID)** — never one row per wave. Each field comes from "
+        "the wave that answers for it: *Most Recent / Latest Wave* and every "
+        "wave-specific field (migration status, Current State, region, cores, "
+        "actual dates, owners) from the account's **latest** wave; **Total ACR "
+        "summed across every wave** (10M + 15M + 20M reads as 45M, not the last "
+        "wave's 20M); and *Nom. Approval Date* from the **earliest** wave, the "
+        "same Wave-1 rule New Engagements counts on. The PDF's account records "
+        "are built by the same function, so the two cannot disagree.\n\n"
         "Every drill-down table names the **Solution Architect** and the "
         "**Factory PM** for each record, so a number leads to the person who "
         "owns it.")

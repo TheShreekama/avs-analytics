@@ -61,6 +61,18 @@ def fiscal_year_label(value, fy_start_month: int = 7) -> str:
     return f"FY{end_year % 100:02d}"
 
 
+def named_fiscal_year_start(fy: int, fy_start_month: int = 7) -> pd.Timestamp:
+    """The first day of the fiscal year with this business-facing number.
+
+    ``named_fiscal_year_start(25)`` is 1 Jul 2024, because a July FY is named
+    after the calendar year it *ends* in — the inverse of
+    :func:`fiscal_year_label`.  Distinct from :func:`fiscal_year_start`, which
+    answers "which fiscal year is this *date* in".
+    """
+    end_year = 2000 + int(fy) % 100
+    return pd.Timestamp(year=end_year - 1, month=fy_start_month, day=1)
+
+
 def fiscal_month_order(fy_start_month: int = 7) -> list[str]:
     """Month abbreviations in fiscal order — Jul, Aug … Jun for a July FY."""
     return [pd.Timestamp(2000, ((fy_start_month - 1 + i) % 12) + 1, 1).strftime("%b")
