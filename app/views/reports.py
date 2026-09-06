@@ -38,7 +38,7 @@ def render() -> None:
 
     # ---------------------------------------------------------------- reports
     section("1 · Reports to include",
-            help="Each report mirrors its Migration Analytics dashboard — the same "
+            help="Each report mirrors its Status Report page — the same "
                  "population, the same metrics, computed by the same code.")
     cols = st.columns(3)
     selected: list[str] = []
@@ -84,7 +84,7 @@ def render() -> None:
                f"{len(selected)} report(s)"
                f"{' + drill-down' if drilldown and selected else ''}.")
     st.caption("Every figure is counted per account at its latest wave, exactly as "
-               "the Migration Analytics dashboards count it — the sidebar's "
+               "the Status Report pages count it — the sidebar's "
                "counting mode does not change the report.")
     g1, g2 = st.columns([1, 2])
     with g1:

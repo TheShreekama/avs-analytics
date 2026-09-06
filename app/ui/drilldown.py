@@ -39,13 +39,18 @@ def normalize_bucket(value) -> str:
 
 
 def selectable_chart(fig: go.Figure, key: str,
-                     curve_labels: list[str] | None = None) -> list[str]:
+                     curve_labels: list[str] | None = None,
+                     curve_join: str = " ") -> list[str]:
     """Render a chart and return the x-values / labels the user selected.
 
     ``curve_labels`` names each trace, for a chart whose x-axis alone is
     ambiguous: on an FY-split trend every year has a "Sep", so a click there
     only identifies a month once the line it belongs to is named too.  The
     selection then reads "FY27 Sep", matching the bucket on the records.
+
+    ``curve_join`` sets what separates the two halves.  A stacked bar needs a
+    visible separator — a segment is a *pair* ("Americas · Executing
+    Migration"), not a qualified single value the way "FY27 Sep" is.
     """
     event = st.plotly_chart(fig, width="stretch", key=key, on_select="rerun",
                             selection_mode=("points", "box", "lasso"))
@@ -65,7 +70,7 @@ def selectable_chart(fig: go.Figure, key: str,
         if value and curve_labels:
             curve = pt.get("curve_number")
             if isinstance(curve, int) and 0 <= curve < len(curve_labels):
-                value = f"{curve_labels[curve]} {value}"
+                value = f"{curve_labels[curve]}{curve_join}{value}"
         if value and value not in picked:
             picked.append(value)
     return picked

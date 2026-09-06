@@ -15,7 +15,7 @@ PDF destinations rather than styled text, alongside a clickable contents page
 and a bookmark outline.
 
 The numbers come from :mod:`app.core.kpi` and :mod:`app.core.segments` — the
-same calculation layer the Migration Analytics dashboards render, called the
+same calculation layer the Status Report pages render, called the
 same way — so a figure in the PDF and the same figure on screen cannot drift
 apart.  Charts are rasterised with matplotlib (:mod:`app.ui.pdf_charts`), never
 a bundled browser.
@@ -52,19 +52,19 @@ class ReportSpec:
 REPORTS: tuple[ReportSpec, ...] = (
     ReportSpec(
         "avs", "AVS Migrations", segments.CAT_ALL_AVS,
-        "Migration Analytics → All AVS Migrations",
+        "Status Report → All AVS Migrations",
         blurb="Every migration whose target platform is AVS — on-premises, VMG, "
               "AWS/VMC, AVS-to-AVS and EOS refreshes alike."),
     ReportSpec(
         "eos", "EOS Migrations", segments.CAT_EOS_ALL,
-        "Migration Analytics → EOS Migrations (All), EOS Gen-1, EOS Gen-2",
+        "Status Report → EOS Migrations (All), EOS Gen-1, EOS Gen-2",
         breakdown=(segments.CAT_EOS_GEN1, segments.CAT_EOS_GEN2),
         blurb="Accounts refreshing ageing AVS hosts — in scope through an "
               "\"AVS Migration - Gen1/Gen2\" tag on any wave, or an "
               "\"AV36/AV36P/AV52 - EOS\" migration path when untagged."),
     ReportSpec(
         "native", "AVS to Azure Native", segments.CAT_AVS_NATIVE,
-        "Migration Analytics → AVS → Azure Native",
+        "Status Report → AVS → Azure Native",
         unit_label="Cores Migrated",
         blurb="Migrations away from AVS to Azure-native services — the "
               "\"(From AVS)\" offerings. Reported here and nowhere else."),
@@ -808,7 +808,7 @@ def build_report(ctx, where: str = "", scope_label: str = "All data",
     honours the same filters as the app.
 
     The reports always read wave-level rows and deduplicate through
-    :mod:`app.core.kpi`, exactly as the Migration Analytics dashboards do — the
+    :mod:`app.core.kpi`, exactly as the Status Report pages do — the
     sidebar's counting-mode toggle changes neither, which is what keeps the two
     reporting the same numbers.
     """

@@ -6,24 +6,14 @@ Live captures of every report (rendered from the bundled sample dataset).
 Portfolio KPIs, status & regional distribution, delivery‑health charts, and top insights.
 ![Overview](screenshots/01_overview.png)
 
-## 1 · Accounts by Migration Status
-Donut + stacked bar + Region × Status heatmap + drill‑down grid.
-![Accounts by Migration Status](screenshots/02_accounts_status.png)
+## 1 · Status Report
+One page per migration category — **All AVS Migrations**, **EOS Migrations (All / Gen‑1 /
+Gen‑2)** and **AVS → Azure Native** — each with headline metrics, the current pipeline, a
+regional breakdown whose stacked‑bar segments drill into that region *and* stage, and
+detailed data at **one row per account (TPID)**.
+![Status Report](screenshots/02_accounts_status.png)
 
-## 2 · Nominations Approved
-This‑Week/Month/Quarter/YTD KPIs, approval trend & cumulative, regional/track comparison.
-![Nominations Approved](screenshots/03_approved.png)
-
-## 3 · Nominations Closed
-Closure velocity, closure‑rate gauge, aging, longest‑open & recently‑closed lists.
-![Nominations Closed](screenshots/04_closed.png)
-
-## 4 · AV36 EOS Status
-Scoped to AV36/EOS nominations (deduplicated by customer). Derived status taxonomy,
-Region × EOS heatmap, trend & aging. Note the **counting‑mode toggle** in the sidebar.
-![AV36 EOS Status](screenshots/05_eos_status.png)
-
-## 5 · Trend Analysis
+## 2 · Trend Analysis
 One page per measure, every migration category as a section on it — *Nomination
 Trends*, *ACR Trend*, *Nodes Deployed*, *Cores Migrated* and *Migrations Completed* —
 so a measure reads across the portfolio rather than a category at a time. Monthly bars

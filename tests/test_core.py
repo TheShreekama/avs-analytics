@@ -729,3 +729,42 @@ def test_reported_stages_exclude_deferred_and_cancelled():
     })
     kept = frame[kpi.reported_stages(frame)]["migration_status_code"].tolist()
     assert kept == [1, 2, 3, 4, 7]
+
+
+def test_trends_never_chart_a_fiscal_year_before_the_floor():
+    """The ingest floor drops waves by NOMINATION date, so a wave approved inside
+    FY25 can still carry an earlier created date. Trends must window on their own
+    date column too, or the created-date basis puts an FY24 column on the chart."""
+    from app.config import FY_START_MONTH
+    from app.core import kpi, segments
+    from app.views import trend_analysis as ta
+    ctx = _floored_context(3000)
+    floor = ta.reporting_floor(ctx)
+    pop = segments.population(ctx.fact, segments.CAT_ALL_AVS)
+    waves = kpi.wave_index(pop)
+    for measure in ta.MEASURES:
+        bases = (("approval_date", "created_date") if measure.basis_toggle
+                 else ("approval_date",))
+        for basis in bases:
+            table, _ = measure.series(pop, waves, floor, None, basis)
+            if table.empty:
+                continue
+            months = pd.to_datetime(table["month"])
+            assert months.min() >= floor, (measure.key, basis, months.min())
+            years = {metrics.fiscal_year_label(m, FY_START_MONTH) for m in months}
+            assert not [y for y in years if y < "FY25"], (measure.key, basis, years)
+
+
+def test_unfloored_trend_would_have_charted_fy24():
+    """Guards the guard: without the floor the created-date basis does reach FY24
+    on this data, so the assertion above is testing something real."""
+    from app.config import FY_START_MONTH
+    from app.core import kpi, segments
+    ctx = _floored_context(3000)
+    pop = segments.population(ctx.fact, segments.CAT_ALL_AVS)
+    waves = kpi.wave_index(pop)
+    table, _ = kpi.monthly_unique_tpids(pop, "created_date", None, None,
+                                        firsts=waves.first)
+    years = {metrics.fiscal_year_label(m, FY_START_MONTH)
+             for m in pd.to_datetime(table["month"])}
+    assert "FY24" in years, years

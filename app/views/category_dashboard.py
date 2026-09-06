@@ -32,6 +32,11 @@ from app.ui.theme import banner, page_header, section, subheading
 
 THIS_FY = "This FY"
 
+#: Separates the two halves of a stacked-bar selection ("Americas · Completed").
+#: A clicked segment names a region *and* a stage, and the records carry the same
+#: composite so a click filters to exactly that pair.
+_REGION_STAGE_JOIN = " · "
+
 #: Categories broad enough for a region cut to say something. The two generation
 #: pages are subsets of EOS Migration (All), which already carries it.
 _REGIONAL_BREAKDOWN = (segments.CAT_EOS_ALL, segments.CAT_ALL_AVS,
@@ -264,8 +269,9 @@ def _regional_breakdown(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> N
     section("Regional breakdown", help=glossary.REGIONAL_BREAKDOWN,
             period="Current state — not filtered by the reporting period")
     st.caption("Accounts at their latest wave, by region and migration status — "
-               "the four in-flight stages and Completed only. Click a bar to open "
-               "the accounts behind it.")
+               "the four in-flight stages and Completed only. Click a segment of "
+               "the stacked bar to open exactly the accounts in that region *and* "
+               "that stage.")
     rows = waves.last
     if rows.empty or "region_geo" not in rows.columns:
         components.empty_state("No regional data to report.")
@@ -288,24 +294,23 @@ def _regional_breakdown(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> N
     with c1:
         mode = st.radio("View", ["Counts", "Share %"], horizontal=True,
                         key=f"{key}_region_mode", label_visibility="collapsed")
-        st.plotly_chart(charts.stacked_bar(pivot, title="Migration status by region",
-                                           percent=(mode == "Share %")),
-                        width="stretch")
+        # Each trace is a region and each x position a stage, so a clicked
+        # segment identifies both — hence the region-qualified bucket below.
+        picked = drilldown.selectable_chart(
+            charts.stacked_bar(pivot, title="Migration status by region",
+                               percent=(mode == "Share %")),
+            key=f"{key}_region_bar",
+            curve_labels=[str(c) for c in pivot.columns],
+            curve_join=_REGION_STAGE_JOIN)
     with c2:
         st.plotly_chart(charts.heatmap(heat, title="Region × status heatmap"),
                         width="stretch")
 
-    counts = (rows.groupby("_region", as_index=False)
-                  .agg(count=("tpid_key", "nunique"))
-                  .rename(columns={"_region": "category"})
-                  .sort_values("count", ascending=False))
-    fig = charts.bar(counts, "category", "count", horizontal=True, height=300,
-                     title="Accounts by region")
-    drilldown.chart_with_drilldown(
-        fig, rows.assign(bucket=rows["_region"]), "bucket",
-        key=f"{key}_region", what="accounts",
-        summary=counts.rename(columns={"category": "Region", "count": "Accounts"}),
-        summary_bucket="Region")
+    records = rows.assign(
+        bucket=rows["_region"].astype(str) + _REGION_STAGE_JOIN
+        + rows["_status"].astype(str))
+    drilldown.drilldown(records, "bucket", picked, key=f"{key}_region",
+                        what="accounts")
     drilldown.data_expander(
         pivot.reset_index().rename(columns={"_status": "Migration Status"}),
         f"{key}_region_grid", label="Underlying data — status × region",
