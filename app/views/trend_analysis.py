@@ -1,6 +1,6 @@
 """Trend Analysis — one measure at a time, across every migration category.
 
-The Migration Analytics dashboards used to carry a four-measure "Trends — month
+The Status Report pages used to carry a four-measure "Trends — month
 over month" section each, which meant reading one measure across categories
 required opening five pages and comparing by memory.  These reports invert that:
 one page per measure, every category on it, so nomination volume (or ACR, or
@@ -23,7 +23,7 @@ import pandas as pd
 import streamlit as st
 
 from app import state
-from app.config import FY_START_MONTH
+from app.config import FY_START_MONTH, REPORTING_FLOOR_FY
 from app.core import glossary, kpi, metrics, segments
 from app.core.metrics import fmt_currency, fmt_int
 from app.ui import charts, components, drilldown
@@ -137,15 +137,26 @@ def render(measure_key: str) -> None:
                "records below to that month.")
 
     for category in measure.categories:
-        _category_block(ctx, measure, category, date_col)
+        _category_block(ctx, measure, category, date_col, reporting_floor(ctx))
 
 
-def _category_block(ctx, measure: Measure, category: str, date_col: str) -> None:
+def reporting_floor(ctx) -> pd.Timestamp:
+    """The first day of the earliest fiscal year any trend may chart."""
+    scope = ctx.report.get("scope") or {}
+    start = scope.get("floor_start")
+    return (pd.Timestamp(start) if start is not None
+            else metrics.named_fiscal_year_start(REPORTING_FLOOR_FY, FY_START_MONTH))
+
+
+def _category_block(ctx, measure: Measure, category: str, date_col: str,
+                    floor_start: pd.Timestamp) -> None:
     """One category's trend for this measure, with the records behind it.
 
-    Always over the whole dataset: the reporting floor already limits that to
-    FY25 onwards, so a period selector here would only ever narrow it further —
-    which is not what these reports are for.
+    Windowed from the reporting floor to the end of the data — "all time" means
+    FY25 onwards, and every measure is bounded by *its own* date column.  The
+    ingest floor alone is not enough here: it drops waves by nomination date,
+    but a wave approved inside FY25 can still carry an earlier *created* date,
+    which would put an FY24 column on the nomination trend.
     """
     label = segments.CATEGORY_LABELS[category]
     key = f"ta_{measure.key}_{category}"
@@ -157,7 +168,7 @@ def _category_block(ctx, measure: Measure, category: str, date_col: str) -> None
         components.empty_state(f"No nominations fall into **{label}**.")
         return
     waves = kpi.wave_index(fact)
-    table, rows = measure.series(fact, waves, None, None, date_col)
+    table, rows = measure.series(fact, waves, floor_start, None, date_col)
     if table.empty:
         components.empty_state(f"No {measure.what} in this category.")
         return

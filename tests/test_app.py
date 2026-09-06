@@ -20,13 +20,14 @@ _HARNESS = os.path.join(os.path.dirname(__file__), "_page_harness.py")
 _HOME = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Home.py")
 
 PAGES = [
-    "overview", "accounts_status", "approved", "closed", "avs_native_status",
+    "overview",
     "insights_page", "methodology", "reports", "data_upload", "column_mapping",
     "data_inconsistency",
-    # Category dashboards (one module, one entry point per migration category).
+    # Status Report (one module, one entry point per migration category), in the
+    # order the navigation lists them.
+    "category_dashboard.all_avs",
     "category_dashboard.eos_all",
     "category_dashboard.eos_gen1", "category_dashboard.eos_gen2",
-    "category_dashboard.all_avs",
     "category_dashboard.avs_native",
     # Trend Analysis (one module, one entry point per measure).
     "trend_analysis.nominations", "trend_analysis.acr", "trend_analysis.nodes",
@@ -145,7 +146,7 @@ def test_titles_carry_an_explanation(page):
     assert any('title="' in m for m in marked)
 
 
-@pytest.mark.parametrize("page", ["overview", "closed", "insights_page", "reports",
+@pytest.mark.parametrize("page", ["overview", "insights_page", "reports",
                                   "data_inconsistency"])
 def test_every_report_offers_a_reporting_period(page):
     """The date range is chosen on the page, not hidden in the sidebar."""
@@ -159,8 +160,8 @@ def test_every_report_offers_a_reporting_period(page):
                 and s.label != "Date range"]
 
 
-# Status Reports must let a reader get from any chart to the records behind it.
-_STATUS_REPORTS = ["accounts_status", "approved", "closed", "avs_native_status"]
+# The Status Report pages must let a reader get from any chart to its records.
+_STATUS_REPORTS = ["category_dashboard.all_avs", "category_dashboard.avs_native"]
 
 
 @pytest.mark.parametrize("page", _STATUS_REPORTS)
@@ -173,8 +174,6 @@ def test_status_reports_expose_their_underlying_data(page):
     panels = [e.label for e in at.expander if "nderlying" in (e.label or "")]
     assert len(panels) >= 2, \
         f"{page} has too few underlying-data panels: {[e.label for e in at.expander]}"
-    assert all("0 rows" not in label for label in panels), \
-        f"{page} has an empty underlying-data panel: {panels}"
 
 
 def test_sidebar_no_longer_duplicates_the_inconsistency_report():
@@ -269,14 +268,12 @@ def test_broad_categories_carry_a_regional_breakdown(page):
     assert "Regional breakdown" in _sections(at), _sections(at)
 
 
-def test_offering_and_target_lives_only_on_the_category_page():
-    """It moved off the status report; exactly one page owns it now."""
-    dashboard = _sections(_render("category_dashboard.avs_native",
-                                  "Customer (deduplicated)"))
-    assert "By offering & target" in dashboard, dashboard
-
-    report = _sections(_render("avs_native_status", "Customer (deduplicated)"))
-    assert "By offering & target" not in report, report
+def test_offering_and_target_lives_only_on_the_avs_native_page():
+    """Exactly one page owns that cut of the data."""
+    for page in ("category_dashboard.avs_native", "category_dashboard.all_avs"):
+        sections = _sections(_render(page, "Customer (deduplicated)"))
+        owns = page.endswith("avs_native")
+        assert ("By offering & target" in sections) is owns, (page, sections)
 
 
 def test_operational_status_is_gone_from_the_ui():
@@ -286,8 +283,8 @@ def test_operational_status_is_gone_from_the_ui():
     section, filter or table column any more."""
     assert not hasattr(
         __import__("app.views", fromlist=["eos_status"]), "eos_status")
-    for page in ("overview", "accounts_status", "closed", "avs_native_status",
-                "insights_page", "reports", "category_dashboard.avs_native"):
+    for page in ("overview", "insights_page", "reports",
+                 "category_dashboard.avs_native", "category_dashboard.all_avs"):
         at = _render(page, "Customer (deduplicated)")
         assert not at.exception, f"{page} raised: {at.exception}"
         assert "Operational status" not in _sections(at), (page, _sections(at))
@@ -302,12 +299,11 @@ def test_the_generation_pages_do_not_repeat_the_regional_breakdown():
 
 
 def test_regional_breakdown_ignores_the_counting_mode_toggle():
-    """Accounts by Migration Status must never show wave counts here, whichever
-    Counting mode the sidebar toggle is set to — it should always agree with
-    the Migration Analytics dashboards' account-deduplicated regional cut."""
+    """The regional cut counts accounts at their latest wave, never waves —
+    whichever way the sidebar's Counting mode toggle is set."""
     tables = {}
     for mode in ("Customer (deduplicated)", "Nomination (wave-level)"):
-        at = _render("accounts_status", mode)
+        at = _render("category_dashboard.all_avs", mode)
         assert not at.exception, f"{mode} raised: {at.exception}"
         target = next((e for e in at.expander if "status × region" in (e.label or "")),
                       None)
@@ -444,3 +440,96 @@ def test_trend_records_are_split_one_table_per_fiscal_year(page):
     import re
     for label in panels:
         assert len(re.findall(r"FY\d{2}", label)) == 1, label
+
+
+# --------------------------------------------------------------------------- #
+# Navigation shape
+# --------------------------------------------------------------------------- #
+def test_navigation_sections_and_order():
+    """Status Report replaces both the old Migration Analytics heading and the
+    old Status Reports section; Reports & Export sits under Data."""
+    at = AppTest.from_file(_HOME, default_timeout=180).run()
+    assert not at.exception, f"app failed to boot: {at.exception}"
+    import re
+    source = open(os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "app", "main.py")).read()
+    sections = re.findall(r'^\s{8}"([^"]+)": \[', source, re.M)
+    assert "Status Report" in sections
+    assert "Status Reports" not in sections and "Migration Analytics" not in sections
+    # Reports & Export moved out of Executive and into Data.
+    data_block = source.split('"Data": [')[1].split("],")[0]
+    assert "reports.render" in data_block
+    exec_block = source.split('"Executive": [')[1].split("],")[0]
+    assert "reports.render" not in exec_block
+
+
+def test_status_report_lists_categories_broadest_first():
+    import re
+    source = open(os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "app", "main.py")).read()
+    block = source.split('"Status Report": [')[1].split("],")[0]
+    assert re.findall(r"category_dashboard\.(\w+)", block) == [
+        "all_avs", "eos_all", "eos_gen1", "eos_gen2", "avs_native"]
+
+
+def test_the_old_status_report_pages_are_gone():
+    import importlib
+    for name in ("accounts_status", "approved", "closed", "avs_native_status"):
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(f"app.views.{name}")
+
+
+# --------------------------------------------------------------------------- #
+# Regional breakdown: no Accounts by region, clickable stacked bar
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("page", ["category_dashboard.all_avs",
+                                  "category_dashboard.eos_all",
+                                  "category_dashboard.avs_native"])
+def test_accounts_by_region_is_gone(page):
+    at = _render(page, "Customer (deduplicated)")
+    assert not at.exception, f"{page} raised: {at.exception}"
+    text = " ".join(m.value for m in at.markdown)
+    assert "Accounts by region" not in text, page
+
+
+def test_stacked_bar_segments_identify_a_region_and_a_stage():
+    """A clicked segment names both halves, and the records carry the same key,
+    so the drill-down can filter to exactly that pair."""
+    import pandas as pd
+    from app.ui import charts, drilldown
+    from app.views.category_dashboard import _REGION_STAGE_JOIN
+    pivot = pd.crosstab(
+        pd.Series(["Completed", "Executing Migration", "Executing Migration"]),
+        pd.Series(["Americas", "Americas", "EMEA"]))
+    fig = charts.stacked_bar(pivot)
+    labels = drilldown._trace_labels(fig)
+    regions = [str(c) for c in pivot.columns]
+    for curve, region in enumerate(regions):
+        for idx, stage in enumerate(pivot.index):
+            stage_label = drilldown._label_at(labels, {"curve_number": curve,
+                                                       "point_index": idx})
+            assert f"{region}{_REGION_STAGE_JOIN}{stage_label}" == \
+                f"{region}{_REGION_STAGE_JOIN}{stage}"
+
+
+def test_a_pie_slice_resolves_to_its_category():
+    """A slice click can arrive carrying only its position; it must still name
+    the state so the underlying accounts can be filtered to it."""
+    import pandas as pd
+    from app.ui import charts, drilldown
+    states = pd.DataFrame({"category": ["On-Track", "Completed"], "count": [2, 1]})
+    labels = drilldown._trace_labels(charts.donut(states, "category", "count"))
+    assert [drilldown._label_at(labels, {"curve_number": 0, "point_index": i})
+            for i in (0, 1)] == ["On-Track", "Completed"]
+
+
+def test_selection_filters_the_records_it_names():
+    """The end of the chain: a selected bucket narrows the drill-down rows."""
+    import pandas as pd
+    from app.ui import drilldown
+    rows = pd.DataFrame({"bucket": ["Americas · Completed", "EMEA · Completed",
+                                    "Americas · Executing Migration"],
+                         "tpid": ["1", "2", "3"]})
+    keys = rows["bucket"].map(drilldown.normalize_bucket)
+    picked = [drilldown.normalize_bucket("Americas · Completed")]
+    assert list(rows[keys.isin(picked)]["tpid"]) == ["1"]

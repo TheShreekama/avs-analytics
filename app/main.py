@@ -24,10 +24,9 @@ def run() -> None:
     from app.config import APP_NAME, APP_TAGLINE
     from app.version import build_stamp, version_line
     from app.ui.theme import inject_css
-    from app.views import (accounts_status, approved, avs_native_status,
-                           category_dashboard, closed, column_mapping,
-                           data_inconsistency, data_upload, insights_page,
-                           methodology, overview, reports, trend_analysis)
+    from app.views import (category_dashboard, column_mapping, data_inconsistency,
+                           data_upload, insights_page, methodology, overview,
+                           reports, trend_analysis)
 
     global _BOOT_LOGGED
     if not _BOOT_LOGGED:                    # once per server start, into the console
@@ -45,30 +44,20 @@ def run() -> None:
                     url_path="overview", default=True),
             st.Page(insights_page.render, title="Insights",
                     icon=":material/lightbulb:", url_path="insights"),
-            st.Page(reports.render, title="Reports & Export",
-                    icon=":material/picture_as_pdf:", url_path="reports"),
         ],
-        "Migration Analytics": [
-            st.Page(category_dashboard.eos_all, title="EOS Migration (All)",
+        # One page per migration category, listed broadest first: All AVS, then
+        # the EOS family, then the motion leaving AVS.
+        "Status Report": [
+            st.Page(category_dashboard.all_avs, title="All AVS Migrations",
+                    icon=":material/cloud:", url_path="all-avs"),
+            st.Page(category_dashboard.eos_all, title="EOS Migrations (All)",
                     icon=":material/dns:", url_path="eos-all"),
             st.Page(category_dashboard.eos_gen1, title="EOS Migration — Gen-1",
                     icon=":material/memory:", url_path="eos-gen1"),
             st.Page(category_dashboard.eos_gen2, title="EOS Migration — Gen-2",
                     icon=":material/developer_board:", url_path="eos-gen2"),
-            st.Page(category_dashboard.all_avs, title="All AVS Migrations",
-                    icon=":material/cloud:", url_path="all-avs"),
             st.Page(category_dashboard.avs_native, title="AVS → Azure Native",
                     icon=":material/cloud_sync:", url_path="avs-native"),
-        ],
-        "Status Reports": [
-            st.Page(accounts_status.render, title="Accounts by Migration Status",
-                    icon=":material/donut_large:", url_path="accounts-by-status"),
-            st.Page(approved.render, title="Nominations Approved", icon=":material/task_alt:",
-                    url_path="approved"),
-            st.Page(closed.render, title="Nominations Closed", icon=":material/check_circle:",
-                    url_path="closed"),
-            st.Page(avs_native_status.render, title="AVS → Azure Native Status",
-                    icon=":material/cloud_sync:", url_path="avs-native-status"),
         ],
         # One page per measure, every migration category on it — the inverse of
         # the category dashboards, which no longer carry a trends section.
@@ -85,6 +74,8 @@ def run() -> None:
                     icon=":material/task_alt:", url_path="migrations-completed"),
         ],
         "Data": [
+            st.Page(reports.render, title="Reports & Export",
+                    icon=":material/picture_as_pdf:", url_path="reports"),
             st.Page(data_inconsistency.render, title="Data Inconsistency",
                     icon=":material/rule:", url_path="data-inconsistency"),
             st.Page(data_upload.render, title="Data & Upload", icon=":material/upload_file:",
