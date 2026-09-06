@@ -7,6 +7,7 @@ populated code paths actually execute.
 Run with:  python -m pytest tests/test_app.py -v
 """
 import os
+import pathlib
 import sys
 
 import pandas as pd
@@ -16,12 +17,19 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
+from app.views import trend_analysis  # noqa: E402
+
 _HARNESS = os.path.join(os.path.dirname(__file__), "_page_harness.py")
 _HOME = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Home.py")
 
+# Trend Analysis is a matrix (one report per trend x one page per migration
+# category), so the pages under test are read from the view rather than retyped
+# — a page added there is a page rendered here.
+TREND_PAGES = [f"trend_analysis.{page.entry.__name__}"
+               for page in trend_analysis.all_pages()]
+
 PAGES = [
-    "overview", "accounts_status", "approved", "closed",
-    "nomination_trends", "approved_trends", "avs_to_azure", "avs_native_status",
+    "overview", "accounts_status", "approved", "closed", "avs_native_status",
     "insights_page", "methodology", "reports", "data_upload", "column_mapping",
     "data_inconsistency",
     # Category dashboards (one module, one entry point per migration category).
@@ -29,6 +37,7 @@ PAGES = [
     "category_dashboard.eos_gen1", "category_dashboard.eos_gen2",
     "category_dashboard.all_avs",
     "category_dashboard.avs_native",
+    *TREND_PAGES,
 ]
 
 
@@ -92,7 +101,7 @@ def test_page_renders_without_error(page, mode):
 _REPORT_PAGES = [p for p in PAGES
                  if p not in ("methodology", "data_upload", "column_mapping",
                               "data_inconsistency")
-                 and not p.startswith("category_dashboard")]
+                 and not p.startswith(("category_dashboard", "trend_analysis"))]
 
 
 @pytest.mark.parametrize("page", _REPORT_PAGES)
@@ -138,7 +147,8 @@ def test_titles_carry_an_explanation(page):
 
 
 @pytest.mark.parametrize("page", ["overview", "closed", "insights_page", "reports",
-                                  "data_inconsistency", "approved_trends"])
+                                  "data_inconsistency",
+                                  "trend_analysis.acr_all_avs"])
 def test_every_report_offers_a_reporting_period(page):
     """The date range is chosen on the page, not hidden in the sidebar."""
     at = _render_default(page, "Customer (deduplicated)")
@@ -278,7 +288,7 @@ def test_operational_status_is_gone_from_the_ui():
     assert not hasattr(
         __import__("app.views", fromlist=["eos_status"]), "eos_status")
     for page in ("overview", "accounts_status", "closed", "avs_native_status",
-                "avs_to_azure", "insights_page", "reports",
+                "trend_analysis.nomination_avs_native", "insights_page", "reports",
                 "category_dashboard.avs_native"):
         at = _render(page, "Customer (deduplicated)")
         assert not at.exception, f"{page} raised: {at.exception}"
@@ -328,3 +338,124 @@ def test_reports_page_offers_each_report_and_generates_a_pdf():
     assert not at.exception, f"generating raised: {at.exception}"
     pdf = at.session_state["_rep_pdf"]
     assert pdf[:4] == b"%PDF"
+
+
+# --------------------------------------------------------------------------- #
+# Trend Analysis: one report per trend, one page per migration category
+# --------------------------------------------------------------------------- #
+_FIVE_CATEGORIES = ["All AVS Migrations", "EOS Migrations (All)",
+                    "EOS Migrations (Gen 1)", "EOS Migrations (Gen 2)",
+                    "AVS to Azure Native"]
+
+#: The hierarchy the section is required to offer, report -> page titles.
+_TREND_HIERARCHY = {
+    "Nomination Trends": _FIVE_CATEGORIES,
+    "ACR Trend": _FIVE_CATEGORIES,
+    "Nodes Deployed": _FIVE_CATEGORIES[:-1],
+    # The Azure-native motion moves cores, so it is reported under its own name
+    # rather than as a node count.
+    "Cores Migrated": ["AVS to Azure Native"],
+    "Migrations Completed": _FIVE_CATEGORIES,
+}
+
+
+def test_trend_analysis_offers_the_required_hierarchy():
+    """Every trend, for every category it applies to, at its own URL."""
+    built = {group.title: [page.title for page in group.pages]
+             for group in trend_analysis.GROUPS.values()}
+    assert built == _TREND_HIERARCHY, built
+    # ...and each report is a section of Trend Analysis in the navigation.
+    for label, group in zip(trend_analysis.nav_pages(),
+                            trend_analysis.GROUPS.values()):
+        assert "Trend Analysis" in label and group.title in label, label
+    paths = [page.url_path for page in trend_analysis.all_pages()]
+    assert len(paths) == len(set(paths)) == 20, paths
+
+
+def test_the_old_trend_reports_are_gone():
+    """Nomination Trends, Approved Trend Analysis and AVS → Azure Native Trends
+    were replaced, not renamed — no module, no import, no navigation entry."""
+    import importlib.util
+    for module in ("nomination_trends", "approved_trends", "avs_to_azure"):
+        assert importlib.util.find_spec(f"app.views.{module}") is None, module
+    main = (pathlib.Path(__file__).resolve().parents[1] / "app" / "main.py").read_text()
+    for gone in ("nomination_trends", "approved_trends", "avs_to_azure",
+                 "nomination-trends", "approved-trends", "avs-to-azure"):
+        assert gone not in main, f"app/main.py still references {gone}"
+
+
+def _trend_pages_for(*categories) -> list[str]:
+    return [f"trend_analysis.{page.entry.__name__}"
+            for page in trend_analysis.all_pages() if page.category in categories]
+
+
+# The bundled sample populates All AVS Migrations and AVS → Azure Native; the two
+# generation categories are empty in it, which is data rather than a defect.
+_POPULATED_TREND_PAGES = _trend_pages_for("all_avs", "avs_native")
+_EMPTY_TREND_PAGES = _trend_pages_for("eos_gen1", "eos_gen2")
+
+
+@pytest.mark.parametrize("page", _POPULATED_TREND_PAGES)
+def test_every_trend_page_charts_its_records(page):
+    """A trend page is a chart, a summary table and the records behind them."""
+    at = _render(page, "Customer (deduplicated)")
+    assert not at.exception, f"{page} raised: {at.exception}"
+    assert any("reporting period" in (sb.label or "").lower() for sb in at.selectbox), \
+        f"{page} has no in-page reporting period"
+    assert [e for e in at.expander if "nderlying" in (e.label or "")], \
+        f"{page} offers no underlying records: {[e.label for e in at.expander]}"
+    marked = [m.value for m in at.markdown if "avs-info" in m.value]
+    assert marked and any('title="' in m for m in marked), \
+        f"{page} explains none of its titles"
+
+
+@pytest.mark.parametrize("page", _EMPTY_TREND_PAGES)
+def test_a_trend_page_with_no_population_says_so(page):
+    """An empty category is reported as empty, never as an error or a blank page."""
+    at = _render(page, "Customer (deduplicated)")
+    assert not at.exception, f"{page} raised: {at.exception}"
+    assert [m for m in at.info if "No nominations fall into" in m.value], \
+        f"{page} renders nothing to explain itself"
+
+
+def test_trend_pages_reuse_the_dashboard_calculations():
+    """The Trend Analysis numbers are the category dashboard's numbers.
+
+    Both go through ``app.ui.trends.compute``; this pins that to the ``kpi``
+    functions the dashboards have always used, so reorganising the reports
+    cannot quietly change what they report.
+    """
+    from app import state
+    from app.core import kpi, segments
+    from app.ui import trends
+
+    fact = state.load_sample().fact
+    for category in (segments.CAT_ALL_AVS, segments.CAT_EOS_ALL,
+                     segments.CAT_EOS_GEN1, segments.CAT_EOS_GEN2,
+                     segments.CAT_AVS_NATIVE):
+        pop = segments.population(fact, category)
+        waves = kpi.wave_index(pop)
+        expected = {
+            trends.NOMINATIONS: kpi.monthly_unique_tpids(
+                pop, "approval_date", None, None, firsts=waves.first)[0],
+            trends.ACR: kpi.monthly_acr_claimed(pop)[0],
+            trends.HOSTS: kpi.monthly_hosts(pop)[0],
+            trends.COMPLETED: kpi.monthly_migrations_completed(
+                pop, lasts=waves.last)[0],
+        }
+        for name, table in expected.items():
+            got = trends.compute(name, pop, waves).table
+            pd.testing.assert_frame_equal(got, table, obj=f"{category}/{name}")
+
+
+def test_nodes_and_cores_are_the_same_measurement_under_two_nouns():
+    """Nodes Deployed / Cores Migrated both sum Total Cores; only the noun differs."""
+    from app.core import segments
+    from app.ui import trends
+    nodes, cores = trend_analysis.GROUPS["nodes"], trend_analysis.GROUPS["cores"]
+    assert nodes.trend == cores.trend == trends.HOSTS
+    assert (nodes.column, cores.column) == ("Nodes", "Cores")
+    # Cores Migrated is offered for the Azure-native motion only, and Nodes
+    # Deployed never is.
+    assert cores.categories == (segments.CAT_AVS_NATIVE,)
+    assert segments.CAT_AVS_NATIVE not in nodes.categories
