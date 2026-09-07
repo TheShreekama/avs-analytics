@@ -284,6 +284,106 @@ def monthly_migrations_completed(fact: pd.DataFrame, start=None, end=None,
     return _finish_trend(summary, "Migrations Completed"), rows
 
 
+# --------------------------------------------------------------------------- #
+# Monthly matrix (the EOS programme's month-by-month grid)
+# --------------------------------------------------------------------------- #
+#: The rows of the matrix, in the order the programme reports them.
+MATRIX_ROWS: tuple[str, ...] = (
+    "Total number of new engagement",
+    "Total number of migration start",
+    "Total number of migration end",
+    "Total number of engagement end",
+    "Number of hosts migrated",
+)
+
+#: Rows the source export cannot answer, kept in place and left blank rather
+#: than filled with a number that would be a guess.  A nomination records when
+#: an account was approved and when a wave *ended*; nothing in the file marks
+#: the day migration work began, nor the day an engagement was closed out as
+#: distinct from its last wave completing.
+MATRIX_ROWS_UNAVAILABLE: frozenset[str] = frozenset({
+    "Total number of migration start",
+    "Total number of engagement end",
+})
+
+#: How a month is labelled across the top ("Jul-25").
+MATRIX_MONTH_FORMAT = "%b-%y"
+
+
+def month_span(start, end) -> list[pd.Period]:
+    """Every calendar month from *start* to *end* inclusive, gaps included.
+
+    The matrix shows a column for a month with nothing in it — an empty month is
+    the finding, and a grid that silently skips one cannot be read across.
+    """
+    first = pd.Period(pd.Timestamp(start), freq="M")
+    last = pd.Period(pd.Timestamp(end), freq="M")
+    if last < first:
+        last = first
+    return list(pd.period_range(first, last, freq="M"))
+
+
+def matrix_month_span(fact: pd.DataFrame, start, as_of=None) -> list[pd.Period]:
+    """The months a matrix over *fact* should cover: *start* → the last of use.
+
+    Runs to whichever is later, the as-of month or the latest month any of the
+    matrix's own dates reaches, so the grid never stops before today and never
+    hides a completion dated ahead of it.
+    """
+    end = pd.Period(pd.Timestamp(as_of if as_of is not None else pd.Timestamp.today()),
+                    freq="M")
+    for col in ("approval_date", "actual_end_date"):
+        if col in fact.columns:
+            months = _month(fact[col]).dropna()
+            if not months.empty and months.max() > end:
+                end = months.max()
+    return month_span(start, end.to_timestamp())
+
+
+def monthly_matrix(fact: pd.DataFrame, months: list[pd.Period],
+                   firsts: pd.DataFrame | None = None,
+                   lasts: pd.DataFrame | None = None) -> pd.DataFrame:
+    """The five programme measures as rows, one column per month.
+
+    Every number comes from the same functions the dashboards and trends use —
+    new engagements from Wave-1 approval dates, migration ends from an account's
+    latest wave completing, hosts from Total Cores over completed records — so
+    the grid reconciles with the rest of the report by construction.
+    """
+    if firsts is None or lasts is None:
+        waves = wave_index(fact)
+        firsts = waves.first if firsts is None else firsts
+        lasts = waves.last if lasts is None else lasts
+
+    engagements, _ = monthly_unique_tpids(fact, "approval_date", firsts=firsts)
+    ends, _ = monthly_migrations_completed(fact, lasts=lasts)
+    hosts, _ = monthly_hosts(fact)
+    by_row = {
+        "Total number of new engagement": _by_period(engagements, "Nominations"),
+        "Total number of migration end": _by_period(ends, "Migrations Completed"),
+        "Number of hosts migrated": _by_period(hosts, "Hosts"),
+    }
+
+    columns = [m.strftime(MATRIX_MONTH_FORMAT) for m in months]
+    data = []
+    for label in MATRIX_ROWS:
+        if label in MATRIX_ROWS_UNAVAILABLE:
+            data.append([""] * len(months))
+            continue
+        counts = by_row.get(label, {})
+        data.append([f"{int(counts.get(str(m), 0)):,}" for m in months])
+    out = pd.DataFrame(data, columns=columns)
+    out.insert(0, "Measure", list(MATRIX_ROWS))
+    return out
+
+
+def _by_period(table: pd.DataFrame, value_col: str) -> dict[str, float]:
+    """A monthly trend table as {"2025-07": value}."""
+    if table.empty or value_col not in table.columns:
+        return {}
+    return {str(p): v for p, v in zip(table["period"], table[value_col])}
+
+
 def _empty_trend(label: str) -> pd.DataFrame:
     return pd.DataFrame(columns=["month", "period", label, "Cumulative"])
 

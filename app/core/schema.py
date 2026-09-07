@@ -16,6 +16,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
+#: Header added by the loader when several files are combined into one dataset,
+#: so every row can still say which file it came from.
+SOURCE_FILE_COLUMN = "Source File"
+
 
 # Logical data types drive cleaning + which widgets a field can power.
 DTYPE_TEXT = "text"

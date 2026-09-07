@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from . import metrics, schema, segments
+from .nulls import as_bool_mask, is_blank
 from ..config import DIR_FROM_AVS, DIR_OTHER, DIR_TO_AVS
 
 # Accepted date formats.  The export nominally uses MM-DD-YYYY, but real files
@@ -204,7 +205,10 @@ def split_migration_status(s: pd.Series) -> tuple[pd.Series, pd.Series]:
 # Derived classifications
 # --------------------------------------------------------------------------- #
 def migration_direction(path: str) -> str:
-    if not path or pd.isna(path):
+    # Missingness is tested first and by ``is_blank``: an unmapped Primary
+    # Migration Path column makes every value ``pd.NA``, and ``not pd.NA`` is a
+    # TypeError, not False.
+    if is_blank(path):
         return DIR_OTHER
     p = str(path).lower()
     if "from avs" in p:
@@ -216,6 +220,8 @@ def migration_direction(path: str) -> str:
 
 def azure_native_target(path: str) -> str:
     """Map an 'AVS → Azure Native' path to its destination service."""
+    if is_blank(path):
+        return "Azure Native (Other)"
     p = str(path).lower()
     if "sql server mi" in p or "managed instance" in p:
         return "Azure SQL Managed Instance"
@@ -338,11 +344,20 @@ def build_fact_frame(
             if f.required:
                 report["unmapped"].append(f.key)
 
+    # Which file each row came from, when the dataset was assembled from
+    # several uploads — the only way to answer "why is this account missing"
+    # once the files have been concatenated.
+    if schema.SOURCE_FILE_COLUMN in raw.columns:
+        fact["source_file"] = raw[schema.SOURCE_FILE_COLUMN].astype("string")
+
     # Track per-row data-quality notes.
     dq_flags: list[list[str]] = [[] for _ in range(n)]
 
     def flag(mask: pd.Series, msg: str, bucket: str):
-        idx = np.where(mask.to_numpy())[0]
+        # ``as_bool_mask`` first: a mask built from nullable columns carries
+        # ``pd.NA`` wherever a comparison had nothing to compare, and numpy
+        # cannot evaluate that.
+        idx = np.where(as_bool_mask(mask, fact.index).to_numpy())[0]
         for i in idx:
             dq_flags[i].append(msg)
         if len(idx):
@@ -416,7 +431,7 @@ def build_fact_frame(
                      + fact["factory_offering"].fillna("") + " | "
                      + fact["linked_offering"].fillna(""))
     eos_lookup = {v: is_av36_eos_path(v) for v in offering_text.unique()}
-    fact["is_av36_eos"] = offering_text.map(eos_lookup).astype(bool)
+    fact["is_av36_eos"] = as_bool_mask(offering_text.map(eos_lookup), fact.index)
     fact["is_from_avs"] = (fact["migration_direction"] == DIR_FROM_AVS)
     fact["is_to_avs"] = (fact["migration_direction"] == DIR_TO_AVS)
 
@@ -455,14 +470,14 @@ def build_fact_frame(
     fact["eos_status"] = derive_eos_status(fact, as_of)
 
     # 7) Approval / closure / open flags + aging.
-    fact["is_approved"] = (
+    fact["is_approved"] = as_bool_mask(
         fact["approval_date"].notna()
-        | fact["nomination_status"].str.contains("approv", case=False, na=False)
-    )
-    fact["is_declined"] = (
+        | fact["nomination_status"].str.contains("approv", case=False, na=False),
+        fact.index)
+    fact["is_declined"] = as_bool_mask(
         fact["decline_date"].notna()
-        | fact["nomination_status"].str.contains("declin|reject", case=False, na=False)
-    )
+        | fact["nomination_status"].str.contains("declin|reject", case=False, na=False),
+        fact.index)
     fact["is_closed"] = (
         (fact["migration_status_code"] == 7)
         | fact["current_state"].str.contains("done|complete", case=False, na=False)
@@ -470,6 +485,8 @@ def build_fact_frame(
         | fact["actual_end_date"].notna()
     )
     fact["is_cancelled"] = fact["eos_status"] == "Cancelled"
+    fact["is_closed"] = as_bool_mask(fact["is_closed"], fact.index)
+    fact["is_cancelled"] = as_bool_mask(fact["is_cancelled"], fact.index)
     fact["is_open"] = ~fact["is_closed"] & ~fact["is_cancelled"]
 
     # Closure date: actual end, else approval+done fallback.

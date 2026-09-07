@@ -209,6 +209,38 @@ def render() -> None:
         "tables, drill-downs and detailed data alike.")
 
     # ------------------------------------------------------------------ #
+    section("The EOS monthly programme matrix")
+    st.markdown(
+        "**Status Report → EOS Migrations (All)** carries a month-by-month grid in "
+        "two blocks, **Gen1 to Gen1** and **Gen1 to Gen2**.\n\n"
+        "Every EOS account is refreshing *away from* ageing Gen-1 (AV36) hardware — "
+        "that is what puts it in scope — so the constant half of each heading is the "
+        "*from*, and the account's own **AVS Migration - Gen1 / - Gen2** tag names the "
+        "generation it is landing **on**. An account in EOS scope by migration path "
+        "with no generation tag on any wave is in neither block; those are listed "
+        "under **Data → Data Inconsistency**.\n\n"
+        "| Row | Rule |\n| --- | --- |\n"
+        "| Total number of new engagement | Unique TPIDs, in the month of their "
+        "**Wave-1** approval date |\n"
+        "| Total number of migration start | *Blank — not in the export* |\n"
+        "| Total number of migration end | Unique TPIDs whose **latest** wave is "
+        "`7 - Completed`, in the month of its Actual End Date |\n"
+        "| Total number of engagement end | *Blank — not in the export* |\n"
+        "| Number of hosts migrated | **Sum of Total Cores** over completed wave "
+        "records, in the month each ended |\n\n"
+        "The two blank rows are blank on purpose. The export records when a "
+        "nomination was approved and when a wave *ended*; it marks neither the day "
+        "migration work began nor an engagement closure distinct from its last wave "
+        "completing. A number in either row would be a guess, so the rows keep their "
+        "place and stay empty.\n\n"
+        "The grid ignores the page's reporting period: it runs from **July 2025** to "
+        "the as-of month (further, if a completion is dated ahead of it) and shows "
+        "**every month in between**, because a month with no nominations is itself "
+        "the number being reported. The same is true of the *Fiscal years side by "
+        "side* table on every Trend Analysis page: all twelve fiscal months are "
+        "always listed, zero-filled.")
+
+    # ------------------------------------------------------------------ #
     section("Current state & the pipeline chart")
     st.markdown(
         "**On-Track is read from the Current State column** of the account's latest "
@@ -422,6 +454,28 @@ def render() -> None:
         "Segment, non-numeric values in numeric columns, regions needing cleaning, "
         "rows with no TPID and duplicate Task IDs. It is the single home for that "
         "detail; other pages only ever say whether there is anything to look at.")
+
+    # ------------------------------------------------------------------ #
+    section("Loading files — one dataset, one or many files")
+    st.markdown(
+        "A dataset can be **one file or several**. The source system exports per "
+        "offering, so AVS nominations and the '(From AVS)' Azure-native ones often "
+        "arrive separately; **Data → Data & Upload** takes them together and stacks "
+        "them into a single dataset before anything else happens, so the mapping, "
+        "cleaning, rollup, categories and every count see one portfolio.\n\n"
+        "Headers are matched **case- and whitespace-insensitively** (`tpid ` and "
+        "`TPID` are the same column), keeping the spelling from the file that "
+        "introduced each column. A column one file does not have is simply blank for "
+        "that file's rows — the same as an empty cell. Every row keeps a **Source "
+        "File** value, and the upload page reports the row and account counts each "
+        "file contributed after cleaning.\n\n"
+        "**When an upload fails**, the page shows the whole diagnosis rather than one "
+        "line: which file, which ingest stage (reading, combining, mapping, parsing, "
+        "flooring, rolling up, registering), the exception, a plain-English likely "
+        "cause, the line of application code that raised it, the row/column counts, "
+        "which columns are empty and which fields are unmapped — plus the full "
+        "traceback to paste into a bug report. Nothing is loaded on a failure; the "
+        "previously active dataset is left untouched.")
 
     # ------------------------------------------------------------------ #
     section("The exported report")

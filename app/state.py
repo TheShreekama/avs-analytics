@@ -34,30 +34,40 @@ class DataContext:
     as_of: pd.Timestamp
     con: duckdb.DuckDBPyConnection
     is_sample: bool = False
+    #: One row per uploaded file (file, rows, columns, new/shared columns).
+    sources: pd.DataFrame | None = None
+
+    @property
+    def is_multi_file(self) -> bool:
+        return self.sources is not None and len(self.sources) > 1
 
 
 # --------------------------------------------------------------------------- #
 # Cached heavy steps
 # --------------------------------------------------------------------------- #
 @st.cache_data(show_spinner=False, max_entries=4)
-def _read_raw(signature: str, name: str, data: bytes) -> pd.DataFrame:
-    return loader.read_raw(name, data)
+def _read_dataset(signature: str, files: tuple[tuple[str, bytes], ...]
+                  ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    return loader.read_files(list(files))
 
 
 @st.cache_data(show_spinner=False, max_entries=6)
-def _build_fact(signature: str, mapping_json: str, as_of_str: str,
+def _build_fact(signature: str, mapping_json: str, as_of_str: str, filename: str,
                 _raw: pd.DataFrame) -> tuple[pd.DataFrame, dict, pd.DataFrame]:
     mp = json.loads(mapping_json)
     as_of = pd.Timestamp(as_of_str) if as_of_str else None
-    fact, report = cleaning.build_fact_frame(_raw, mp, as_of)
+    with loader.ingest_stage("clean", filename, _raw, mp):
+        fact, report = cleaning.build_fact_frame(_raw, mp, as_of)
     # The reporting floor is applied here, before the rollup and before the
     # frames are registered with DuckDB, so every downstream page, query,
     # export and total sees an FY25-onwards dataset rather than filtering for
     # itself (and forgetting to, somewhere).
-    fact, report["scope"] = cleaning.apply_reporting_floor(
-        fact, REPORTING_FLOOR_FY, FY_START_MONTH)
-    customer = rollupmod.build_customer_rollup(fact, report["as_of"])
-    report["rollup"] = rollupmod.rollup_summary(customer)
+    with loader.ingest_stage("floor", filename, _raw, mp):
+        fact, report["scope"] = cleaning.apply_reporting_floor(
+            fact, REPORTING_FLOOR_FY, FY_START_MONTH)
+    with loader.ingest_stage("rollup", filename, _raw, mp):
+        customer = rollupmod.build_customer_rollup(fact, report["as_of"])
+        report["rollup"] = rollupmod.rollup_summary(customer)
     return fact, report, customer
 
 
@@ -72,27 +82,53 @@ def _make_con(cache_key: str, _fact: pd.DataFrame,
 # --------------------------------------------------------------------------- #
 def build_context(filename: str, data: bytes, mapping: dict | None = None,
                   as_of: pd.Timestamp | None = None, is_sample: bool = False) -> DataContext:
-    signature = loader.file_signature(filename, data)
-    raw = _read_raw(signature, filename, data)
+    """Build a context from a single file (the common case)."""
+    return build_dataset([(filename, data)], mapping=mapping, as_of=as_of,
+                         is_sample=is_sample)
+
+
+def build_dataset(files: list[tuple[str, bytes]], mapping: dict | None = None,
+                  as_of: pd.Timestamp | None = None,
+                  is_sample: bool = False) -> DataContext:
+    """Build a context from one or more files read as a single dataset.
+
+    Several files are concatenated on their shared headers before anything else
+    happens, so the mapping, cleaning, rollup and every report see one dataset —
+    which is the point: an AVS export and an Azure-native export describe the
+    same portfolio and have to be counted together.
+    """
+    files = [(name, data) for name, data in files]
+    if not files:
+        raise ValueError("No files to load.")
+    signature = loader.files_signature(files)
+    label = loader.dataset_label(files)
+    # Each step names itself, so a failure anywhere below reaches the upload
+    # page as an IngestError carrying the stage, the origin and a diagnosis
+    # rather than a bare exception message.
+    raw, sources = _read_dataset(signature, tuple(files))
     if mapping is None:
-        saved = mapmod.load_saved_mappings()
-        # prefer a saved mapping whose columns fit; else auto-map
-        chosen = None
-        for _name, mp in saved.items():
-            if all(v in raw.columns for v in mp.values()):
-                chosen = mp
-                break
-        mapping = mapmod.resolve_mapping(list(raw.columns), chosen)
+        with loader.ingest_stage("mapping", label, raw):
+            saved = mapmod.load_saved_mappings()
+            # prefer a saved mapping whose columns fit; else auto-map
+            chosen = None
+            for _name, mp in saved.items():
+                if all(v in raw.columns for v in mp.values()):
+                    chosen = mp
+                    break
+            mapping = mapmod.resolve_mapping(list(raw.columns), chosen)
 
     as_of_str = pd.Timestamp(as_of).isoformat() if as_of is not None else ""
     mapping_json = json.dumps(mapping, sort_keys=True)
-    fact, report, customer = _build_fact(signature, mapping_json, as_of_str, raw)
+    fact, report, customer = _build_fact(signature, mapping_json, as_of_str,
+                                         label, raw)
+    report["sources"] = sources
     cache_key = f"{signature}:{hash(mapping_json)}:{as_of_str}"
-    con = _make_con(cache_key, fact, customer)
+    with loader.ingest_stage("register", label, raw, mapping):
+        con = _make_con(cache_key, fact, customer)
 
-    return DataContext(filename=filename, signature=signature, raw=raw, mapping=mapping,
+    return DataContext(filename=label, signature=signature, raw=raw, mapping=mapping,
                        fact=fact, customer=customer, report=report, as_of=report["as_of"],
-                       con=con, is_sample=is_sample)
+                       con=con, is_sample=is_sample, sources=sources)
 
 
 def set_context(ctx: DataContext) -> None:
@@ -101,6 +137,14 @@ def set_context(ctx: DataContext) -> None:
 
 def get_context() -> DataContext | None:
     return st.session_state.get(CTX_KEY)
+
+
+RAW_FILES_KEY = "avs_raw_files"
+
+
+def remember_files(files: list[tuple[str, bytes]]) -> None:
+    """Stash the uploaded bytes so a re-map can rebuild without a re-upload."""
+    st.session_state[RAW_FILES_KEY] = list(files)
 
 
 def load_sample() -> DataContext:
@@ -128,9 +172,10 @@ def reload_with(mapping: dict | None = None, as_of: pd.Timestamp | None = None) 
         new = build_context(ctx.filename, data, mapping=mapping or ctx.mapping,
                             as_of=as_of if as_of is not None else ctx.as_of, is_sample=True)
     else:
-        # raw bytes for a user upload are stashed on the context's session entry
-        data = st.session_state.get("avs_raw_bytes")
-        new = build_context(ctx.filename, data, mapping=mapping or ctx.mapping,
+        # every uploaded file's bytes are stashed on the session, so a re-map
+        # rebuilds the whole dataset without asking for the files again
+        files = st.session_state.get(RAW_FILES_KEY) or []
+        new = build_dataset(files, mapping=mapping or ctx.mapping,
                             as_of=as_of if as_of is not None else ctx.as_of)
     set_context(new)
     return new

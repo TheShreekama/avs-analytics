@@ -14,7 +14,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.core import cleaning, kpi, mapping, rollup, segments  # noqa: E402
+from app.config import DIR_OTHER  # noqa: E402
+from app.core import (cleaning, kpi, loader, mapping, nulls, rollup, schema,  # noqa: E402
+                      segments)
 
 # Wave rows: (TPID, name, task, wave, sku, status, approved, actual_end, cores, acr, path)
 _ROWS = [
@@ -551,3 +553,235 @@ def test_in_flight_is_exactly_statuses_one_to_four():
     df = pd.DataFrame({"migration_status_code": [1, 2, 3, 4, 5, 6, 7, None]})
     assert list(kpi.in_flight(df)) == [True, True, True, True,
                                        False, False, False, False]
+
+
+# --------------------------------------------------------------------------- #
+# Partial uploads — nothing may raise on a missing column
+# --------------------------------------------------------------------------- #
+# A file that carries only some of the schema used to crash the upload with
+# "boolean value of NA is ambiguous": the derived classifications tested
+# ``not value`` before they tested for missingness, and pd.NA has no truth value.
+_PARTIAL_FILES = {
+    "ids only": "TPID,Account Name\n1001,Acme\n1002,Globex\n",
+    "no migration path": ("TPID,Account Name,WW Region,Phase,Nomination Status,"
+                          "Nom. Created Date\n"
+                          "1001,Acme,1800 Americas - Enterprise,Wave 1,Approved,2025-08-01\n"
+                          "1002,Globex,,,,\n"),
+    "everything blank": ("TPID,Account Name,Primary Migration Path,Tags,Total Cores,"
+                         "Total ACR,Actual End Date\n"
+                         "1001,Acme,,,,,\n1002,Globex,   ,  ,  ,  ,  \n"),
+    "region strips to nothing": ("TPID,Account Name,WW Region\n"
+                                 "1001,Acme,1800 Americas - Enterprise\n"
+                                 "1002,Globex,1800\n"),
+}
+
+
+@pytest.mark.parametrize("label", sorted(_PARTIAL_FILES))
+def test_a_partial_file_still_ingests(label):
+    raw = loader.read_raw(f"{label}.csv", _PARTIAL_FILES[label].encode())
+    mp = mapping.resolve_mapping(list(raw.columns))
+    built, _report = cleaning.build_fact_frame(raw, mp, pd.Timestamp("2026-09-01"))
+    assert len(built) == 2
+    assert built["migration_direction"].notna().all()
+
+
+def test_blank_checks_never_evaluate_a_missing_value():
+    for value in (pd.NA, None, float("nan"), pd.NaT, "", "   ", "N/A"):
+        assert nulls.is_blank(value) is True
+    for value in ("Onprem to AVS", 0, 0.0, False):
+        assert nulls.is_blank(value) is False
+    # The classifier that used to raise, on the value that used to raise.
+    assert cleaning.migration_direction(pd.NA) == DIR_OTHER
+
+
+def test_a_nullable_mask_becomes_a_plain_bool_mask():
+    mask = pd.Series([True, False, pd.NA], dtype="boolean")
+    out = nulls.as_bool_mask(mask)
+    assert out.dtype == bool
+    assert list(out) == [True, False, False]        # unknown means "did not match"
+
+
+# --------------------------------------------------------------------------- #
+# Ingest diagnostics — a failure has to say where and why
+# --------------------------------------------------------------------------- #
+def test_a_failed_stage_reports_stage_origin_and_cause():
+    raw = pd.DataFrame({"Empty": ["", ""], "TPID": ["1", "2"]}, dtype="string")
+    with pytest.raises(loader.IngestError) as caught:
+        with loader.ingest_stage("clean", "avs_export.xlsx", raw,
+                                 {"tpid": "TPID", "migration_path": None}):
+            cleaning.migration_direction_missing_column()   # AttributeError
+    failure = caught.value.failure
+    assert failure.stage == "clean"
+    assert failure.filename == "avs_export.xlsx"
+    assert failure.exc_type == "AttributeError"
+    assert failure.detail["Rows"] == "2"
+    assert "Empty" in failure.detail["Empty columns"]
+    assert "migration_path" in failure.detail["Unmapped fields"]
+    assert "Traceback" in failure.traceback
+    assert "avs_export.xlsx" in failure.as_text()
+
+
+def test_a_known_error_message_carries_a_plain_english_cause():
+    assert "unmapped" in loader.explain("boolean value of NA is ambiguous")
+    assert "header row" in loader.explain("No columns to parse from file")
+    assert loader.explain("something nobody has seen before") == ""
+
+
+def test_the_origin_names_app_code_not_the_stage_wrapper():
+    with pytest.raises(loader.IngestError) as caught:
+        with loader.ingest_stage("clean", "f.csv"):
+            cleaning.parse_date_series(None)             # raises inside app code
+    assert caught.value.failure.origin.startswith("app/core/cleaning.py:")
+
+
+# --------------------------------------------------------------------------- #
+# Multi-file datasets
+# --------------------------------------------------------------------------- #
+def test_files_are_stacked_on_their_shared_headers():
+    avs = pd.DataFrame({"TPID": ["1"], "Account Name": ["Acme"],
+                        "Primary Migration Path": ["Onprem to AVS"]}, dtype="string")
+    native = pd.DataFrame({"tpid ": ["2"], "Account Name": ["Globex"],
+                           "Total ACR": ["500"]}, dtype="string")
+    combined, manifest = loader.combine_raw([("avs.csv", avs), ("native.xlsx", native)])
+
+    # "tpid " matched "TPID" — headers are matched case- and space-insensitively,
+    # keeping the spelling of the file that introduced the column.
+    assert list(combined["TPID"]) == ["1", "2"]
+    # A column one file does not have is blank for its rows, never NaN.
+    assert combined.loc[0, "Total ACR"] == ""
+    assert list(combined[schema.SOURCE_FILE_COLUMN]) == ["avs.csv", "native.xlsx"]
+    assert list(manifest["file"]) == ["avs.csv", "native.xlsx"]
+    assert int(manifest.loc[1, "shared_columns"]) == 2      # TPID + Account Name
+
+
+def test_every_row_remembers_the_file_it_came_from():
+    avs = ("TPID,Account Name,Primary Migration Path,Tags\n"
+           "1001,Acme,Onprem to AVS,AVS Migration - Gen1\n").encode()
+    native = ("TPID,Account Name,Primary Migration Path\n"
+              "2002,Globex,SQL Server MI Migration (From AVS)\n").encode()
+    raw, _manifest = loader.read_files([("avs.csv", avs), ("native.csv", native)])
+    mp = mapping.resolve_mapping(list(raw.columns))
+    built, _report = cleaning.build_fact_frame(raw, mp, pd.Timestamp("2026-09-01"))
+
+    by_tpid = dict(zip(built["tpid"].astype(str), built["source_file"]))
+    assert by_tpid["1001"] == "avs.csv"
+    assert by_tpid["2002"] == "native.csv"
+    # The two files still classify independently — combining is not merging.
+    assert set(built.loc[built["tpid"] == "2002", "is_from_avs"]) == {True}
+    assert set(built.loc[built["tpid"] == "1001", "is_from_avs"]) == {False}
+
+
+def test_a_single_file_dataset_is_unchanged_but_labelled():
+    frame = pd.DataFrame({"TPID": ["1"]}, dtype="string")
+    combined, manifest = loader.combine_raw([("one.csv", frame)])
+    assert list(combined.columns) == ["TPID", schema.SOURCE_FILE_COLUMN]
+    assert len(manifest) == 1
+    assert loader.dataset_label([("one.csv", b"")]) == "one.csv"
+    assert loader.dataset_label([("a.csv", b""), ("b.csv", b"")]).startswith("2 files:")
+
+
+# --------------------------------------------------------------------------- #
+# The EOS monthly programme matrix
+# --------------------------------------------------------------------------- #
+@pytest.fixture(scope="module")
+def matrix_fact():
+    """Two Gen-1 accounts and one Gen-2, with known months and core counts."""
+    rows = [
+        # Gen-1 Acme: one wave, approved Jul-25, completed Nov-25 with 36 cores.
+        ("1001", "Acme", "a1", "Wave 1", "Gen1", "7 - Completed", "2025-07-08",
+         "2025-11-14", "36"),
+        # Gen-1 Beta: approved Sep-25.  Wave 1 completed Nov-25 (72 cores) but
+        # Wave 2 is still running, so Beta is NOT a completed migration.
+        ("1002", "Beta", "b1", "Wave 1", "Gen1", "7 - Completed", "2025-09-02",
+         "2025-11-20", "72"),
+        ("1002", "Beta", "b2", "Wave 2", "Gen1", "4 - Migration In Progress",
+         "2025-12-01", "", ""),
+        # Gen-2 Gamma: approved Aug-25, completed Feb-26 with 52 cores.
+        ("2001", "Gamma", "g1", "Wave 1", "Gen2", "7 - Completed", "2025-08-11",
+         "2026-02-03", "52"),
+    ]
+    raw = pd.DataFrame([{
+        "TPID": t, "Customer Name": n, "Task ID": k, "Phase": w,
+        "Tags": f"Qualify and AccelerateAVS Migration - {g}",
+        "Migration Status": s, "Nom. Approval Date": a, "Nom. Created Date": a,
+        "Actual End Date": e, "Total Cores": c,
+        "Primary Migration Path": "AV36/AV36P/AV52 - EOS",
+        "WW Region": "Americas - Enterprise",
+    } for t, n, k, w, g, s, a, e, c in rows]).astype("string")
+    mp = mapping.resolve_mapping(list(raw.columns))
+    built, _report = cleaning.build_fact_frame(raw, mp, pd.Timestamp("2026-03-01"))
+    return built
+
+
+def _matrix(fact_frame, generation, end="2026-03-01"):
+    block = fact_frame[fact_frame["generation"] == generation]
+    months = kpi.month_span(pd.Timestamp("2025-07-01"), pd.Timestamp(end))
+    grid = kpi.monthly_matrix(block, months)
+    return grid.set_index("Measure")
+
+
+def test_matrix_shows_every_month_including_the_empty_ones(matrix_fact):
+    grid = _matrix(matrix_fact, segments.GEN_1)
+    months = [c for c in grid.columns]
+    assert months == ["Jul-25", "Aug-25", "Sep-25", "Oct-25", "Nov-25", "Dec-25",
+                      "Jan-26", "Feb-26", "Mar-26"]
+    # Oct-25 has nothing in it and is still a column, reading zero.
+    assert grid.loc["Total number of new engagement", "Oct-25"] == "0"
+
+
+def test_matrix_counts_match_the_documented_metric_rules(matrix_fact):
+    gen1 = _matrix(matrix_fact, segments.GEN_1)
+    # New engagements: unique TPIDs in the month of their Wave-1 approval date.
+    assert gen1.loc["Total number of new engagement", "Jul-25"] == "1"
+    assert gen1.loc["Total number of new engagement", "Sep-25"] == "1"
+    # Migration ends: only Acme — Beta's latest wave is still in progress.
+    assert gen1.loc["Total number of migration end", "Nov-25"] == "1"
+    # Hosts: Total Cores summed over every completed record, so 36 + 72.
+    assert gen1.loc["Number of hosts migrated", "Nov-25"] == "108"
+
+    gen2 = _matrix(matrix_fact, segments.GEN_2)
+    assert gen2.loc["Total number of new engagement", "Aug-25"] == "1"
+    assert gen2.loc["Total number of migration end", "Feb-26"] == "1"
+    assert gen2.loc["Number of hosts migrated", "Feb-26"] == "52"
+
+
+def test_the_two_unavailable_rows_are_blank_not_zero(matrix_fact):
+    grid = _matrix(matrix_fact, segments.GEN_1)
+    for label in kpi.MATRIX_ROWS_UNAVAILABLE:
+        assert set(grid.loc[label]) == {""}
+    # …and they keep their place in the reported order.
+    assert list(grid.index) == list(kpi.MATRIX_ROWS)
+
+
+def test_matrix_runs_past_the_as_of_date_to_reach_a_future_completion(matrix_fact):
+    gen2 = matrix_fact[matrix_fact["generation"] == segments.GEN_2]
+    # As-of Sep-25, but Gamma completes in Feb-26: the span has to reach it.
+    months = kpi.matrix_month_span(gen2, pd.Timestamp("2025-07-01"),
+                                   pd.Timestamp("2025-09-15"))
+    assert str(months[0]) == "2025-07" and str(months[-1]) == "2026-02"
+
+
+def test_an_empty_generation_still_renders_the_whole_grid(matrix_fact):
+    empty = matrix_fact[matrix_fact["generation"] == segments.GEN_UNCLASSIFIED]
+    assert empty.empty
+    grid = _matrix(matrix_fact, segments.GEN_UNCLASSIFIED)
+    assert len(grid.columns) == 9
+    assert grid.loc["Number of hosts migrated", "Nov-25"] == "0"
+
+
+def test_the_fiscal_year_grid_lists_all_twelve_months():
+    """A month with no data keeps its row, so the grid lines up with the chart."""
+    from app.core import metrics as metrics_mod
+    from app.views import trend_analysis
+
+    split = pd.DataFrame({"fy_month": ["Aug", "Nov", "Aug"],
+                          "fy": ["FY25", "FY25", "FY26"],
+                          "Nominations": [3, 5, 2]})
+    order = metrics_mod.fiscal_month_order(7)
+    grid = trend_analysis._fy_grid(split, trend_analysis._BY_KEY["nominations"], order)
+
+    assert list(grid["Month"]) == order + ["Total"]
+    row = grid.set_index("Month")
+    assert row.loc["Jul", "FY25"] == "0"       # empty month, still a row
+    assert row.loc["Aug", "FY26"] == "2"
+    assert row.loc["Total", "FY25"] == "8"

@@ -259,3 +259,25 @@ CATEGORY_HELP = {
         "Migration - Gen1/Gen2' tag pulls a (From AVS) account into them."
     ),
 }
+
+
+EOS_MATRIX = (
+    "The EOS programme's month-by-month grid, split by the generation an "
+    "account is refreshing ON TO.\n"
+    "Every EOS account is coming FROM Gen-1 hardware — that is what puts it in "
+    "scope — so the two blocks are read as 'Gen1 to …' and are selected by the "
+    "account's own generation tag: 'Gen1 to Gen1' is every account tagged 'AVS "
+    "Migration - Gen1', 'Gen1 to Gen2' every account tagged '- Gen2'. Accounts "
+    "in EOS scope by migration path with no generation tag on any wave belong "
+    "to neither block; they are listed under Data → Data Inconsistency.\n"
+    "Rows use the same calculations as the rest of the report: new engagements "
+    "are unique TPIDs in the month of their Wave-1 approval date; migration "
+    "ends are unique TPIDs whose LATEST wave is '7 - Completed', in the month "
+    "of its Actual End Date; hosts migrated is the sum of Total Cores over "
+    "every completed wave record, never a count of accounts.\n"
+    "'Total number of migration start' and 'Total number of engagement end' "
+    "are left blank on purpose: the export records when a nomination was "
+    "approved and when a wave ended, but marks neither the day migration work "
+    "began nor an engagement closure distinct from its last wave completing. "
+    "A number there would be a guess."
+)

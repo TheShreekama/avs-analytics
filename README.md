@@ -2,9 +2,10 @@
 
 **A professional, 100% local executive dashboard for Azure VMware Solution (AVS) migration analytics and reporting.**
 
-Upload your AVS nominations export (CSV / XLSX / XLS) and instantly get executive
-dashboards, trend analysis, a deterministic insights engine, and a one‑click
-executive PDF — all running entirely on your own machine.
+Upload your AVS nominations export — one file, or several that make up one dataset
+(CSV / XLSX / XLS) — and instantly get executive dashboards, trend analysis, a
+deterministic insights engine, and a one‑click executive PDF — all running entirely
+on your own machine.
 
 ![Overview](docs/screenshots/01_overview.png)
 
@@ -167,6 +168,24 @@ The app understands the standard AVS nominations export schema out of the box an
 
 Supported uploads: **CSV, XLSX, XLS**. First row must be headers.
 
+### Several files, one dataset
+
+The source system exports per offering, so AVS nominations and the "(From AVS)"
+Azure‑native ones often arrive as separate files. Select them **all at once** on
+**Data & Upload**: they are stacked into a single dataset before anything else
+happens, so the mapping, cleaning, rollup and every report see one portfolio.
+
+- Headers are matched **case‑ and whitespace‑insensitively** (`tpid ` = `TPID`),
+  keeping the spelling from the file that introduced each column.
+- A column one file does not have is **blank** for that file's rows.
+- Every row keeps a **Source File** value, and the page reports what each file
+  contributed after cleaning.
+
+If an upload fails, the page shows the whole diagnosis — the file, the ingest stage,
+the error, a plain‑English likely cause, the line of code that raised it, which
+columns are empty, which fields are unmapped, and the full traceback. Nothing is
+loaded on a failure: the dataset you already had is untouched.
+
 ### What the app derives from your data
 - **Migration direction** — *Onboard to AVS* vs *AVS → Azure Native* (from the migration path).
 - **Azure‑native target** — e.g. *SQL Server MI Migration (From AVS)* → *Azure SQL Managed Instance*.
@@ -263,6 +282,8 @@ avs-analytics/
 - **Port 8501 already in use** → `.venv\Scripts\python.exe -m streamlit run Home.py --server.port 8600`
   then open `http://127.0.0.1:8600`.
 - **Required fields unmapped after upload** → open **Column Mapping** and map the fields marked •.
+- **An upload failed** → the red panel on **Data & Upload** names the stage, the likely
+  cause and the exact line; open **🐞 Full traceback** and paste that into the bug report.
 
 ---
 

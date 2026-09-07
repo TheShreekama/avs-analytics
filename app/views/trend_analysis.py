@@ -207,7 +207,10 @@ def _fy_grid(split: pd.DataFrame, measure: Measure, order: list[str]) -> pd.Data
     """
     grid = split.pivot_table(index="fy_month", columns="fy",
                              values=measure.value_col, aggfunc="sum")
-    grid = grid.reindex([m for m in order if m in grid.index]).fillna(0)
+    # Every fiscal month, always, zero-filled: a month with no nominations is
+    # itself the finding, and dropping the row silently shifts the ones below it
+    # so the table no longer lines up against the chart's Jul → Jun axis.
+    grid = grid.reindex(order).fillna(0)
     grid.loc["Total"] = grid.sum()
     out = grid.reset_index().rename(columns={"fy_month": "Month"})
     out.columns.name = None

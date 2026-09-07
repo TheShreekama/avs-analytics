@@ -24,7 +24,7 @@ import pandas as pd
 import streamlit as st
 
 from app import state
-from app.config import FY_START_MONTH
+from app.config import EOS_MATRIX_START_FY, FY_START_MONTH
 from app.core import glossary, kpi, metrics, segments
 from app.core.metrics import fmt_currency, fmt_int
 from app.ui import charts, components, drilldown
@@ -96,6 +96,8 @@ def render(category: str) -> None:
     unit_label = _unit(category)
     _executive_summary(ctx, fact, waves, start, end, key, unit_label, category,
                        shown, preset)
+    if category == segments.CAT_EOS_ALL:
+        _generation_matrix(ctx, fact, key)
     _pipeline(fact, waves, key)
     if category == segments.CAT_AVS_NATIVE:
         _offering_and_target(fact, key)
@@ -105,6 +107,45 @@ def render(category: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
+#: The matrix blocks: (generation tag, heading).  Every EOS account is refreshing
+#: away from ageing Gen-1 hardware, so the tag names the generation it lands ON
+#: and the "Gen1 to" half of each heading is the constant.
+_MATRIX_BLOCKS = ((segments.GEN_1, "Gen1 to Gen1"),
+                  (segments.GEN_2, "Gen1 to Gen2"))
+
+
+def _generation_matrix(ctx, fact: pd.DataFrame, key: str) -> None:
+    """The programme's month-by-month grid, one block per target generation.
+
+    Deliberately outside the page's reporting-period control: this grid runs
+    from a fixed July start to today, showing every month in between whether or
+    not anything happened in it, because a month with no nominations is itself
+    the number being reported.
+    """
+    section("Monthly programme matrix", help=glossary.EOS_MATRIX,
+            period="Fixed — July onwards, every month shown")
+    start = metrics.named_fiscal_year_start(EOS_MATRIX_START_FY, FY_START_MONTH)
+    st.caption(f"From **{start:%b %Y}** to **{ctx.as_of:%b %Y}**, every month "
+               "included. Blocks are the generation each account is refreshing "
+               "on to — all EOS accounts are coming from Gen-1 hardware. "
+               "*Migration start* and *engagement end* are blank: the export "
+               "does not record either date.")
+    for generation, title in _MATRIX_BLOCKS:
+        block = fact[fact["generation"] == generation]
+        accounts = segments.tpid_key(block).nunique() if not block.empty else 0
+        subheading(title)
+        st.caption(f"**{fmt_int(accounts)}** accounts tagged "
+                   f"**AVS Migration - {generation.replace('-', '')}** · "
+                   f"**{fmt_int(len(block))}** nomination waves.")
+        months = kpi.matrix_month_span(block, start, ctx.as_of)
+        grid = kpi.monthly_matrix(block, months)
+        components.show_table(grid)
+        st.download_button(
+            f"⬇️ Export {title} to CSV", grid.to_csv(index=False).encode("utf-8"),
+            file_name=f"eos-matrix-{generation.lower().replace('-', '')}.csv",
+            mime="text/csv", key=f"{key}_matrix_{generation}")
+
+
 def _population_note(ctx, category: str, fact: pd.DataFrame) -> None:
     tpids = fmt_int(segments.tpid_key(fact).nunique()) if not fact.empty else "0"
     bits = [f"<b>{tpids}</b> TPIDs · <b>{fmt_int(len(fact))}</b> nomination waves"]
