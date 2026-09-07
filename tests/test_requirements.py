@@ -15,8 +15,8 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.config import DIR_OTHER  # noqa: E402
-from app.core import (cleaning, kpi, loader, mapping, nulls, rollup, schema,  # noqa: E402
-                      segments)
+from app.core import (cleaning, kpi, loader, mapping, metrics, nulls, rollup,  # noqa: E402
+                      schema, segments)
 
 # Wave rows: (TPID, name, task, wave, sku, status, approved, actual_end, cores, acr, path)
 _ROWS = [
@@ -751,8 +751,6 @@ def test_each_fiscal_year_closes_with_its_own_total_column(matrix_fact):
     assert grid.loc["Total number of new engagement", "FY26 Total"] == "3"
     assert grid.loc["Number of hosts migrated", "FY26 Total"] == "108"
     assert grid.loc["Total number of new engagement", "FY27 Total"] == "0"
-    # A row with no answer has no year total either — never a spurious zero.
-    assert grid.loc["Total number of engagement end", "FY26 Total"] == ""
 
 
 def test_matrix_counts_match_the_documented_metric_rules(matrix_fact):
@@ -813,11 +811,19 @@ def test_matrix_counts_migration_starts_in_their_own_month(matrix_fact):
     assert gen2.loc["Total number of migration start", "Aug-25"] == "1"   # Gamma
 
 
-def test_the_unanswerable_row_is_blank_not_zero(matrix_fact):
+def test_engagement_end_mirrors_migration_end(matrix_fact):
+    """The export has no engagement-closure date, so the row repeats migration end.
+
+    An account whose latest wave has completed is the closest the data comes to
+    an engagement that ended, so the two rows carry the same values by
+    construction rather than by coincidence.
+    """
     grid = _matrix(matrix_fact, segments.GEN_1)
-    for label in kpi.MATRIX_ROWS_UNAVAILABLE:
-        assert set(grid.loc[label]) == {""}
-    # …and they keep their place in the reported order.
+    assert (list(grid.loc["Total number of engagement end"])
+            == list(grid.loc["Total number of migration end"]))
+    assert grid.loc["Total number of engagement end", "Nov-25"] == "1"
+    # Every row now carries numbers, and they keep their reported order.
+    assert not kpi.MATRIX_ROWS_UNAVAILABLE
     assert list(grid.index) == list(kpi.MATRIX_ROWS)
 
 
@@ -972,3 +978,138 @@ def test_small_count_axes_get_whole_number_ticks():
     html_report._integer_ticks(fig)
     assert fig.layout.yaxis.dtick == 1
     assert fig.layout.yaxis2.dtick is None
+
+
+def test_report_values_are_escaped_exactly_once(html_ctx, matrix_fact):
+    """An "&" in an account name must not reach the page as "&amp;amp;"."""
+    from app.core import exporter as exp, html_report
+
+    pop = segments.population(matrix_fact, segments.CAT_EOS_ALL)
+    waves = kpi.wave_index(pop)
+    rows, layout, _total = exp.account_rows(pop, waves, True)
+    named = rows.copy()
+    named.loc[named.index[0], "customer_name"] = "Ação & Café <Ltd>"
+    frame = exp.format_accounts(named, layout, escape=html_report.plain)
+
+    # The shared formatter hands the renderer raw text …
+    assert "Ação & Café <Ltd>" in list(frame["Customer"])
+    # … and the renderer escapes it once, so the browser shows the original.
+    markup = html_report._table(frame, "t")
+    assert "Ação &amp; Café &lt;Ltd&gt;" in markup
+    assert "&amp;amp;" not in markup
+
+
+def test_non_latin_account_names_survive_the_html_report(html_ctx, matrix_fact):
+    """A Japanese account name is reported, not dropped or mangled."""
+    from app.core import html_report
+    import app.state as state_mod
+    from app.core import loader as loader_mod, rollup as rollup_mod
+
+    fact = matrix_fact.copy()
+    fact["customer_name"] = fact["customer_name"].astype("string")
+    fact.loc[fact.index[0], "customer_name"] = "株式会社ジェーシービー"
+    customer = rollup_mod.build_customer_rollup(fact, pd.Timestamp("2026-03-01"))
+    ctx = state_mod.DataContext(
+        filename="jp.csv", signature="s", raw=pd.DataFrame(), mapping={},
+        fact=fact, customer=customer, report=dict(html_ctx.report),
+        as_of=pd.Timestamp("2026-03-01"),
+        con=loader_mod.make_connection(fact, customer))
+
+    doc = html_report.build_html_report(ctx, reports=["eos"]).decode("utf-8")
+    assert "株式会社ジェーシービー" in doc          # verbatim, not escaped away
+    assert 'charset="utf-8"' in doc.lower()
+
+
+# --------------------------------------------------------------------------- #
+# WW Region, stage codes and the pipeline colours
+# --------------------------------------------------------------------------- #
+def test_stage_labels_shorten_the_axis_and_hand_back_a_key(matrix_fact):
+    """Five 30-character status names on one axis leave no room for the plot."""
+    short, legend = kpi.stage_labels(matrix_fact)
+    assert set(short) <= {"Stage 2", "Stage 4", "Stage 7"}
+    assert legend == sorted(legend, key=lambda pair: pair[0])   # ordered by code
+    assert dict(legend)["Stage 7"] == "Completed"
+    # A row with no code keeps its full label rather than hiding behind a number.
+    uncoded = matrix_fact.assign(migration_status_code=pd.NA,
+                                 migration_status_label="Something Else")
+    short, legend = kpi.stage_labels(uncoded)
+    assert set(short) == {"Something Else"} and legend == []
+
+
+def test_the_regional_cut_reads_ww_region_and_stage_codes(matrix_fact):
+    from app.core import exporter as exp
+    waves = kpi.wave_index(matrix_fact)
+    pivot, heat, legend = exp.region_status(waves.last)
+    assert list(heat.index) == ["Americas - Enterprise"]   # the full WW Region
+    assert all(str(s).startswith("Stage ") for s in pivot.index)
+    assert legend                                          # …with its key
+
+
+def test_on_track_and_completed_are_different_colours():
+    """Both drew green: the palette keyed "On Track", the state reads "On-Track"."""
+    from app.config import STATUS_COLORS
+    from app.ui import charts as charts_mod
+    colours = charts_mod._color_for([kpi.STATE_ON_TRACK, kpi.STATE_COMPLETED])
+    assert len(set(colours)) == 2
+    assert colours[1] == STATUS_COLORS["Completed"]
+    assert colours[0] == STATUS_COLORS["On Track"]
+
+
+def test_a_pie_gets_selectable_chips_because_streamlit_cannot_report_slices():
+    """Streamlit returns no selection points for pie traces, whatever the mode."""
+    from app.ui import drilldown as dd
+    assert hasattr(dd, "selectable_slices")
+    assert dd.selectable_slices([], key="k") == []
+
+
+# --------------------------------------------------------------------------- #
+# HTML report — the second round of changes
+# --------------------------------------------------------------------------- #
+def test_the_header_carries_only_the_period_pill(html_doc):
+    assert html_doc.count('<span class="chip">') == 1
+    assert "Period:" in html_doc
+    for gone in ("Scope:", "As of:", "Dataset:", "Accounts:", "Generated:"):
+        assert f"{gone}</b>" not in html_doc
+
+
+def test_a_this_fy_row_is_added_when_the_period_is_something_else(html_ctx):
+    """The dashboard's two-row rule, in the file: a month keeps its fiscal year."""
+    from app.core import html_report
+
+    month = html_report.build_html_report(
+        html_ctx, reports=["eos"], drilldown=False,
+        period_label="01 Nov 2025 -> 30 Nov 2025",
+        date_window=(pd.Timestamp("2025-11-01"),
+                     pd.Timestamp("2025-11-30"))).decode("utf-8")
+    assert "Two periods:" in month
+    assert "This FY (FY26)" in month
+    assert month.count('<div class="kpis">') == 2      # FY row, then period row
+
+    fy_span = metrics.date_preset_range(html_ctx.as_of, "This FY", 7)
+    same = html_report.build_html_report(
+        html_ctx, reports=["eos"], drilldown=False, period_label="This FY",
+        date_window=(fy_span[0], fy_span[1])).decode("utf-8")
+    assert "Two periods:" not in same                  # nothing to compare against
+    assert same.count('<div class="kpis">') == 1
+
+
+def test_underlying_data_shows_the_accounts_not_just_the_chart_numbers(html_doc):
+    """Same as the app's drill-down: the records the metric counted."""
+    assert "Underlying accounts —" in html_doc
+    assert "Monthly numbers —" in html_doc             # the counts are kept too
+    assert "records</span>" in html_doc                # badged by record count
+    assert "Accounts by state" in html_doc
+
+
+def test_money_axes_are_written_in_k_and_m(html_ctx):
+    from app.core import html_report
+    doc = html_report.build_html_report(html_ctx, reports=["eos"],
+                                        drilldown=False).decode("utf-8")
+    # The ACR chart's axis is $-prefixed and SI-formatted ($2M, $840k) rather
+    # than a raw 2,000,000.
+    assert '"tickprefix": "$"' in doc or '"tickprefix":"$"' in doc
+
+
+def test_the_report_offers_a_wide_reading_mode(html_doc):
+    assert 'id="toggle-width"' in html_doc
+    assert "--page-w" in html_doc and "body.wide" in html_doc

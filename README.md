@@ -168,6 +168,11 @@ so it opens from a mail client's download folder on a machine with no network. I
 cleanly too. Expect a few megabytes: the charting library has to travel with it for any
 of that to work offline.
 
+It follows the dashboard where it counts: every drill‑down opens the **accounts** behind
+the number, not a second copy of the chart; the tiles gain a **This FY** row whenever the
+reporting period is something else; money reads `$2M` / `$840K` on axes as well as tiles;
+and a **Wide** toggle sets the reading width.
+
 CSV exports of the cleaned data, the insights and the inconsistency review are available
 on the same page.
 
@@ -203,6 +208,8 @@ columns are empty, which fields are unmapped, and the full traceback. Nothing is
 loaded on a failure: the dataset you already had is untouched.
 
 ### What the app derives from your data
+- **WW Region** — the source `WW Region` value, cleaned of numeric prefixes; every
+  grouping, filter and chart reports on it under that name.
 - **Migration direction** — *Onboard to AVS* vs *AVS → Azure Native* (from the migration path).
 - **Azure‑native target** — e.g. *SQL Server MI Migration (From AVS)* → *Azure SQL Managed Instance*.
 - **EOS / operational status** — unified from Current State + Milestone Status + Migration

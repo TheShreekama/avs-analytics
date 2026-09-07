@@ -34,7 +34,11 @@ def stylesheet() -> str:
   --radius: 12px;
   --shadow: 0 1px 2px rgba(16,24,40,.05), 0 4px 16px rgba(16,24,40,.05);
   --nav-w: 268px;
+  /* The reading width. Comfortable by default; the "Wide" toggle lifts it to
+     the window so a matrix spanning two fiscal years fits without scrolling. */
+  --page-w: 1560px;
 }}
+body.wide {{ --page-w: 100%; }}
 
 * {{ box-sizing: border-box; }}
 html {{ scroll-behavior: smooth; scroll-padding-top: 1.2rem; }}
@@ -52,7 +56,7 @@ a:hover {{ text-decoration: underline; }}
               var(--accent) 130%);
   color: #fff; padding: 3.2rem 2.4rem 2.6rem;
 }}
-.cover-inner {{ max-width: 1180px; margin: 0 auto; }}
+.cover-inner {{ max-width: var(--page-w); margin: 0 auto; }}
 .cover h1 {{ margin: 0 0 .35rem; font-size: 2.3rem; font-weight: 700;
              letter-spacing: -.02em; }}
 .cover .sub {{ font-size: 1.12rem; opacity: .93; margin: 0 0 1.5rem; }}
@@ -65,10 +69,12 @@ a:hover {{ text-decoration: underline; }}
 .chip b {{ font-weight: 600; }}
 
 /* ----------------------------------------------------------------- shell -- */
-.shell {{ max-width: 1180px; margin: 0 auto; padding: 0 1.4rem 4rem;
+.shell {{ max-width: var(--page-w); margin: 0 auto; padding: 0 1.4rem 4rem;
           display: grid; grid-template-columns: var(--nav-w) minmax(0, 1fr);
           gap: 2rem; align-items: start; }}
 @media (max-width: 980px) {{ .shell {{ grid-template-columns: 1fr; }} }}
+/* Two charts side by side stop being readable well before the page does. */
+@media (max-width: 1180px) {{ .grid2 {{ grid-template-columns: 1fr; }} }}
 
 nav.toc {{
   position: sticky; top: 1rem; margin-top: 1.6rem; background: var(--card);
@@ -85,7 +91,9 @@ nav.toc li a:hover {{ background: var(--bg); text-decoration: none; }}
 nav.toc li a.sub {{ padding-left: 1.35rem; font-size: .84rem; color: var(--muted); }}
 nav.toc li a.active {{ background: #EAF3FC; color: var(--primary-dark);
                        border-left-color: var(--primary); font-weight: 600; }}
-.toc-tools {{ margin-top: .8rem; display: flex; gap: .4rem; }}
+.toc-tools {{ margin-top: .8rem; display: flex; gap: .4rem; flex-wrap: wrap; }}
+button.btn[aria-pressed="true"] {{ border-color: var(--primary);
+                                   background: #EAF3FC; color: var(--primary-dark); }}
 
 main {{ min-width: 0; margin-top: 1.6rem; }}
 
@@ -312,6 +320,25 @@ def script() -> str:
     // A Plotly chart sized while hidden lays out at zero width; resize on reveal.
     if (open) resizeCharts();
   }
+  // ---- reading width ------------------------------------------------------
+  // Remembered per reader, since it is a preference about their screen rather
+  // than anything about the report.
+  var width = document.getElementById('toggle-width');
+  function setWide(on) {
+    document.body.classList.toggle('wide', on);
+    if (width) width.setAttribute('aria-pressed', on ? 'true' : 'false');
+    try { localStorage.setItem('avs-wide', on ? '1' : '0'); } catch (e) { /* private */ }
+    resizeCharts();
+  }
+  if (width) {
+    var saved = '0';
+    try { saved = localStorage.getItem('avs-wide') || '0'; } catch (e) { /* private */ }
+    setWide(saved === '1');
+    width.addEventListener('click', function () {
+      setWide(!document.body.classList.contains('wide'));
+    });
+  }
+
   var expand = document.getElementById('expand-all');
   var collapse = document.getElementById('collapse-all');
   if (expand) expand.addEventListener('click', function () { setAll(true); });

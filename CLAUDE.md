@@ -58,9 +58,11 @@ under Streamlit's AppTest in both counting modes.
   path contains "(From AVS)"). From-AVS data appears **only** on `avs_native_status` and
   `avs_to_azure` pages. Scope is enforced centrally in `components.filter_sidebar(scope=...)`
   (which also scopes filter options and counts) and per-section in `exporter.build_report`.
-- **Region.** Use `region_geo` (geography only: Americas / EMEA / ASIA) for all region
-  groupings/filters/insights. `ww_region` keeps the full "Geo - Segment" value; the segment
-  is in `customer_segment`.
+- **WW Region.** `region_geo` **is** the cleaned `ww_region` value verbatim (numeric
+  prefixes stripped, flagged as DQ) and is labelled **"WW Region"** everywhere — the
+  export now carries what the business reports on ("Americas - Enterprise", "Americas
+  SME&C", "MS Elevate"), so nothing reduces it to a geography any more. Group, filter
+  and label on `region_geo`; `customer_segment` is still reported separately.
 - **Wave dedup (`customer` table).** Approval/creation date = Wave-1 (lowest wave number);
   status/region/closure = last wave; category membership = ANY wave; ACR/cores summed.
   Toggle grain with `analytics.use_table("customer" | "fact")` (driven by the sidebar
@@ -138,8 +140,9 @@ under Streamlit's AppTest in both counting modes.
   reuse `monthly_unique_tpids` / `monthly_migrations_completed` / `monthly_hosts`;
   *migration start* is **derived** (`kpi.migration_start_dates`: earliest wave whose
   Current State reads On Track/Done → Actual Start, else Planned Start, else Nom.
-  Approval); only *engagement end* stays **blank** (`MATRIX_ROWS_UNAVAILABLE`) — the
-  export has no such date. Columns run from `config.EOS_MATRIX_START_FY` (FY26 =
+  Approval); *engagement end* **mirrors migration end** (`MATRIX_ROWS_MIRRORED`) — the
+  export has no closure date distinct from the last wave completing, so the two rows
+  carry identical values by construction. Columns run from `config.EOS_MATRIX_START_FY` (FY26 =
   Jul 2025) to the as-of month or the latest completion, **every month shown**, each
   fiscal year closing with its own total column. The Trend Analysis "Fiscal years
   side by side" grid likewise lists all twelve months.
@@ -150,6 +153,22 @@ under Streamlit's AppTest in both counting modes.
   `format_accounts`, `labelled`, `clean`, `REPORTS`) — add a measure in one place,
   not two. The HTML inlines the Plotly bundle, the CSS and its script, so it opens
   offline from an email attachment; that is what makes it ~5 MB.
+- **Stage codes on the regional cut.** `kpi.stage_labels` turns "4 - Executing
+  Migration" into the axis label **"Stage 4"** plus a key `[("Stage 4", "Executing
+  Migration"), …]`; five full status names on one axis leave the plot a sliver.
+  `exporter.region_status` returns `(status×region, region×status, legend)` and both
+  renderers print the key under the charts.
+- **A pie cannot be clicked in Streamlit.** `st.plotly_chart(on_select=...)` returns an
+  empty `points` list for pie/donut/sunburst traces whatever the `selection_mode` —
+  verified in a browser — so the by-state doughnut is filtered by
+  `drilldown.selectable_slices` (chips under the chart) and its summary table, never by
+  the slice. Cartesian traces select normally.
+- **HTML report specifics.** One header pill (the period); a This-FY KPI row above the
+  selected period's row whenever they differ (`_this_fy`, mirroring the dashboard's
+  Executive Summary); money axes as `$2M` / `$840k` (`figure(..., currency=True)`); every
+  drill-down accordion carries the **accounts** via `kpi.drilldown_frame`, with the chart's
+  own monthly numbers beside them; `--page-w` plus a **Wide** toggle (remembered in
+  `localStorage`) for the reading width.
 - **Drill-down.** Charts use a category x-axis and `drilldown.normalize_bucket` so a
   Plotly month label ("2026-06-01") matches the record's period ("2026-06"); summary
   tables are `st.dataframe(on_select=...)` rows that select the same bucket.

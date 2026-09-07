@@ -120,7 +120,7 @@ def _bad_date_samples(rep: dict) -> None:
 # Filter sidebar
 # --------------------------------------------------------------------------- #
 _FILTER_LABELS = {f.key: f.label for f in schema.CANONICAL_FIELDS}
-_FILTER_LABELS.update({"region_geo": "Region", "migration_direction": "Direction",
+_FILTER_LABELS.update({"region_geo": "WW Region", "migration_direction": "Direction",
                        "azure_target": "Azure Target", "eos_status": "Operational Status",
                        "migration_status_label": "Migration Status"})
 
@@ -275,7 +275,7 @@ _NICE.update({
     "aging_days": "Age (days)", "cycle_time_days": "Cycle Time (days)",
     "migration_status_label": "Migration Status", "dq_flags": "Data Quality Notes",
     "approval_latency_days": "Approval Latency (days)", "is_open": "Open", "is_closed": "Closed",
-    "region_geo": "Region", "migration_path": "Migration Path (offering)",
+    "region_geo": "WW Region", "migration_path": "Migration Path (offering)",
 })
 
 

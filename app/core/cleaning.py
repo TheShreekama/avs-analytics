@@ -175,17 +175,6 @@ def normalize_ww_region(s: pd.Series) -> pd.Series:
     return out.replace({"": pd.NA})
 
 
-def geo_region(s: pd.Series) -> pd.Series:
-    """Reduce a WW Region to its geography only.
-
-    The export combines geography and segment ("Americas - Enterprise"); reports
-    show region as the geography (Americas / EMEA / ASIA), with the segment kept
-    separately in ``customer_segment``.  Takes the part before the first ' - '.
-    """
-    out = s.astype("string").str.split(r"\s*[-–]\s*", n=1, regex=True).str[0].str.strip()
-    return out.replace({"": pd.NA}).fillna("Unknown")
-
-
 def _wave_num(x) -> float:
     m = re.search(r"(\d+)", str(x))
     return float(m.group(1)) if m else np.nan
@@ -403,8 +392,11 @@ def build_fact_frame(
         dirty = fact["ww_region"].notna() & (cleaned_region != fact["ww_region"].str.strip())
         flag(dirty, "WW Region had numeric prefix (cleaned)", "dirty_region")
         fact["ww_region"] = cleaned_region.fillna("Unknown")
-        # Geography-only region (Americas / EMEA / ASIA), segment dropped.
-        fact["region_geo"] = geo_region(fact["ww_region"])
+        # Every region grouping, filter and chart reads ``region_geo``.  It used
+        # to hold the geography alone ("Americas - Enterprise" -> "Americas");
+        # the export now carries the value the business reports on directly, so
+        # it is the cleaned WW Region verbatim and is labelled "WW Region".
+        fact["region_geo"] = fact["ww_region"]
 
     seg = fact["customer_segment"].astype("string").str.strip()
     # ``apply`` hands <NA> straight to the lambda when the column is unmapped or

@@ -131,7 +131,7 @@ def _generation_matrix(ctx, fact: pd.DataFrame, key: str) -> None:
                "EOS accounts are coming from Gen-1 hardware. *Migration start* is "
                "derived (earliest wave reading On Track or Done → Actual Start "
                "Date, else Planned Start, else Nom. Approval); *engagement end* "
-               "is blank, as the export does not record it.")
+               "repeats *migration end*, the closest the export comes to it.")
     for generation, title in _MATRIX_BLOCKS:
         block = fact[fact["generation"] == generation]
         accounts = segments.tpid_key(block).nunique() if not block.empty else 0
@@ -270,8 +270,8 @@ def _pipeline(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
     section("Current pipeline", help=glossary.PIPELINE,
             period="Current state — not filtered by the reporting period")
     st.caption("Every account in this category at its latest wave, whatever its "
-               "nomination date. Click a slice, bar or table row to open the "
-               "accounts behind it.")
+               "nomination date. Pick a state below the doughnut, or click a bar "
+               "or table row, to open the accounts behind it.")
     states, state_rows = kpi.by_state(fact, lasts=waves.last)
     stages, stage_rows = kpi.on_track_by_stage(fact, lasts=waves.last)
 
@@ -281,12 +281,23 @@ def _pipeline(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
         components.empty_state("No On-Track or Completed accounts to report.")
     else:
         fig = charts.donut(states, "category", "count", height=320)
-        drilldown.chart_with_drilldown(
-            fig, state_rows.assign(bucket=state_rows["state"]), "bucket",
-            key=f"{key}_state", what="accounts",
-            summary=states.rename(columns={"category": "State", "count": "Accounts",
-                                           "acr": "ACR"}),
-            summary_bucket="State")
+        counts = dict(zip(states["category"], states["count"]))
+        picked: list[str] = []
+        left, right = st.columns([3, 2])
+        with left:
+            drilldown.selectable_chart(fig, key=f"{key}_state")
+            # The chips are the donut's click target: Streamlit reports no
+            # selection points for a pie trace, so the slice itself cannot
+            # filter however it is configured.
+            picked += drilldown.selectable_slices(
+                list(states["category"]), key=f"{key}_state_pills", counts=counts)
+        with right:
+            picked += drilldown.selectable_table(
+                states.rename(columns={"category": "State", "count": "Accounts",
+                                       "acr": "ACR"}),
+                key=f"{key}_state_table", bucket_col="State")
+        drilldown.drilldown(state_rows.assign(bucket=state_rows["state"]), "bucket",
+                            picked, key=f"{key}_state", what="accounts")
 
     subheading("On-track nominations by stage", help=glossary.BY_STAGE,
                period="All On-Track accounts — not filtered by the reporting period")
@@ -311,9 +322,10 @@ def _regional_breakdown(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> N
     """
     section("Regional breakdown", help=glossary.REGIONAL_BREAKDOWN,
             period="Current state — not filtered by the reporting period")
-    st.caption("Accounts at their latest wave, by region and migration status — "
-               "the four in-flight stages and Completed only. Click a segment of "
-               "the stacked bar to open exactly the accounts in that region *and* "
+    st.caption("Accounts at their latest wave, by WW Region and migration status — "
+               "the four in-flight stages and Completed only. Stages are shown by "
+               "their code, with the key below the charts. Click a segment of the "
+               "stacked bar to open exactly the accounts in that region *and* "
                "that stage.")
     rows = waves.last
     if rows.empty or "region_geo" not in rows.columns:
@@ -325,9 +337,9 @@ def _regional_breakdown(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> N
             "No accounts are in a reported migration stage — every account here "
             "is deferred or cancelled.")
         return
+    stages_short, stage_key = kpi.stage_labels(rows)
     rows = rows.assign(
-        _status=rows["migration_status_label"].astype("string")
-                                              .replace({"": pd.NA}).fillna("Unknown"),
+        _status=stages_short,
         _region=rows["region_geo"].astype("string")
                                   .replace({"": pd.NA}).fillna("Unknown"))
     pivot = pd.crosstab(rows["_status"], rows["_region"])
@@ -340,14 +352,18 @@ def _regional_breakdown(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> N
         # Each trace is a region and each x position a stage, so a clicked
         # segment identifies both — hence the region-qualified bucket below.
         picked = drilldown.selectable_chart(
-            charts.stacked_bar(pivot, title="Migration status by region",
+            charts.stacked_bar(pivot, title="Migration status by WW Region",
                                percent=(mode == "Share %")),
             key=f"{key}_region_bar",
             curve_labels=[str(c) for c in pivot.columns],
             curve_join=_REGION_STAGE_JOIN)
     with c2:
-        st.plotly_chart(charts.heatmap(heat, title="Region × status heatmap"),
+        st.plotly_chart(charts.heatmap(heat, title="WW Region × status heatmap"),
                         width="stretch")
+
+    if stage_key:
+        st.caption("**Stage key** — " + " · ".join(
+            f"**{short}** {name}" for short, name in stage_key))
 
     records = rows.assign(
         bucket=rows["_region"].astype(str) + _REGION_STAGE_JOIN
@@ -355,9 +371,9 @@ def _regional_breakdown(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> N
     drilldown.drilldown(records, "bucket", picked, key=f"{key}_region",
                         what="accounts")
     drilldown.data_expander(
-        pivot.reset_index().rename(columns={"_status": "Migration Status"}),
-        f"{key}_region_grid", label="Underlying data — status × region",
-        caption="Account counts per migration status and region: the numbers "
+        pivot.reset_index().rename(columns={"_status": "Stage"}),
+        f"{key}_region_grid", label="Underlying data — stage × WW Region",
+        caption="Account counts per migration stage and WW Region: the numbers "
                 "both charts above are drawn from.")
 
 

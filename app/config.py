@@ -48,7 +48,12 @@ PALETTE = {
 STATUS_COLORS = {
     # operational / EOS taxonomy
     "Completed": "#107C41",
+    # Both spellings: the Current State column writes "On Track", the derived
+    # pipeline state writes "On-Track", and without the second key the state
+    # fell through to the categorical sequence — whose second colour is also
+    # green, so Completed and On-Track drew identically.
     "On Track": "#0F6CBD",
+    "On-Track": "#0F6CBD",
     "At Risk": "#C77700",
     "Delayed": "#D97706",
     "Blocked": "#C4314B",

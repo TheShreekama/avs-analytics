@@ -305,8 +305,8 @@ def test_regional_breakdown_ignores_the_counting_mode_toggle():
     for mode in ("Customer (deduplicated)", "Nomination (wave-level)"):
         at = _render("category_dashboard.all_avs", mode)
         assert not at.exception, f"{mode} raised: {at.exception}"
-        target = next((e for e in at.expander if "status × region" in (e.label or "")),
-                      None)
+        target = next((e for e in at.expander
+                       if "stage × WW Region" in (e.label or "")), None)
         assert target is not None, f"{mode}: no regional-breakdown panel found"
         assert target.dataframe, f"{mode}: regional-breakdown panel has no table"
         tables[mode] = target.dataframe[0].value

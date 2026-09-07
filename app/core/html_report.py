@@ -21,7 +21,6 @@ import html
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -58,6 +57,22 @@ def esc(value) -> str:
     return html.escape(str(value), quote=True)
 
 
+def plain(value) -> str:
+    """One value as *unescaped* display text — dates formatted, missing blank.
+
+    What :func:`esc` does minus the escaping, for the shared account formatter
+    in :mod:`app.core.exporter`: the table renderer escapes every cell itself,
+    so escaping here too would turn an "&" in an account name into "&amp;".
+    """
+    if value is None or value is pd.NaT:
+        return ""
+    if isinstance(value, pd.Timestamp):
+        return "" if pd.isna(value) else f"{value:%d %b %Y}"
+    if isinstance(value, float) and pd.isna(value):
+        return ""
+    return str(value)
+
+
 def rich(text) -> str:
     """Escaped text with the insight engine's ``**bold**`` markers honoured.
 
@@ -85,11 +100,14 @@ class _Builder:
     def anchor(self, anchor: str, label: str, sub: bool = False) -> None:
         self.toc.append((anchor, label, sub))
 
-    def figure(self, fig: go.Figure, height: int = 340) -> str:
+    def figure(self, fig: go.Figure, height: int = 340,
+               currency: bool = False) -> str:
         """One interactive chart: a div now, a Plotly.newPlot call at the end.
 
         Figures are emitted as data rather than as pre-rendered HTML so the
         4.8 MB Plotly bundle is written **once** for the whole document.
+        ``currency`` puts money on the axis the way the tiles write it — $2M,
+        $840K — rather than as 2,000,000.
         """
         self.figures += 1
         div = f"fig{self.figures}"
@@ -107,7 +125,14 @@ class _Builder:
         # ``cliponaxis`` so a bar's value label is not cut off by the plot edge.
         fig.update_traces(width=0.62, cliponaxis=False, selector={"type": "bar"})
         fig.update_yaxes(rangemode="tozero")
-        _integer_ticks(fig)
+        if currency:
+            # SI suffixes with a $ prefix: "$2M", "$840k". Plotly writes "k"
+            # lowercase, so the tick text is post-processed to "K" for the
+            # thousands step, matching ``metrics.fmt_currency``.
+            fig.update_yaxes(tickprefix="$", tickformat="~s")
+            fig.update_traces(hovertemplate="%{x}: $%{y:,.0f}<extra></extra>")
+        else:
+            _integer_ticks(fig)
         payload = json.loads(pio.to_json(fig))
         self.scripts.append(
             f"Plotly.newPlot({json.dumps(div)}, {json.dumps(payload['data'])}, "
@@ -220,6 +245,30 @@ def _accordion(title: str, body: str, badge: str = "", open_: bool = False) -> s
             f'<div class="acc-body">{body}</div></details>')
 
 
+def _records_accordion(title: str, rows: pd.DataFrame, table_id: str,
+                       limit: int = 500) -> str:
+    """The records behind a chart, formatted as the app's drill-down formats them.
+
+    ``kpi.drilldown_frame`` is the same call the dashboard makes, so the columns,
+    the ordering and the money formatting are identical on screen and in the file.
+    """
+    if rows is None or getattr(rows, "empty", True):
+        return _accordion(title, '<p class="empty">No records behind this.</p>',
+                          badge="0")
+    frame = kpi.drilldown_frame(rows)
+    if frame.empty:
+        return _accordion(title, '<p class="empty">No records behind this.</p>',
+                          badge="0")
+    total = len(frame)
+    shown = frame.head(limit).map(plain)
+    note = ""
+    if total > limit:
+        note = (f'<p class="note">Showing the first {fmt_int(limit)} of '
+                f"{fmt_int(total)} records.</p>")
+    return _accordion(title, note + _searchable_table(shown, table_id),
+                      badge=f"{fmt_int(total)} records")
+
+
 def _card(title: str, note: str, body: str) -> str:
     head = f'<h3 class="block">{esc(title)}</h3>' if title else ""
     sub = f'<p class="note">{esc(note)}</p>' if note else ""
@@ -240,7 +289,27 @@ def _population_line(spec, pop: pd.DataFrame) -> str:
     return f'<div class="popline">{" &nbsp;·&nbsp; ".join(bits)}</div>'
 
 
-def _summary(doc: _Builder, spec, pop, waves, start, end, period_label) -> None:
+def _summary(doc: _Builder, spec, pop, waves, start, end, period_label,
+             fy_window=None, fy_label: str = "") -> None:
+    """The headline tiles, over a This-FY row when the period is not This FY.
+
+    The same two-row rule the dashboard's Executive Summary uses: selecting
+    "This Month" answers how the month went but loses the year it sits in, so
+    anything other than This FY gets the fiscal year above it.  Each row is
+    measured over its own window — never one derived from the other.
+    """
+    if fy_window and fy_window[0] is not None:
+        doc.write('<p class="note">Two periods: the fiscal year you are in, then '
+                  "the period selected for this report. Each row is measured over "
+                  "its own window.</p>"
+                  f'<h4 class="sub">{esc(fy_label)}</h4>')
+        _summary_row(doc, spec, pop, waves, fy_window[0], fy_window[1], fy_label)
+        doc.write(f'<h4 class="sub">{esc(period_label)}</h4>')
+    _summary_row(doc, spec, pop, waves, start, end, period_label)
+
+
+def _summary_row(doc: _Builder, spec, pop, waves, start, end,
+                 period_label: str) -> None:
     head = exporter.headline(pop, waves, start, end)
     doc.write(_kpi_tiles([
         ("New engagements", fmt_int(head["engagements"].value), period_label),
@@ -253,28 +322,36 @@ def _summary(doc: _Builder, spec, pop, waves, start, end, period_label) -> None:
 
 def _trends(doc: _Builder, spec, pop, waves, start, end) -> None:
     """The four monthly measures, each a bar chart with a cumulative line."""
-    noms, _ = kpi.monthly_unique_tpids(pop, "approval_date", start, end,
-                                       firsts=waves.first)
-    acr, _ = kpi.monthly_acr_claimed(pop, start, end)
-    hosts, _ = kpi.monthly_hosts(pop, start, end)
-    done, _ = kpi.monthly_migrations_completed(pop, start, end, lasts=waves.last)
-    series = [("Nominations per month (unique TPIDs)", noms, "Nominations", False),
-              ("ACR claimed per month", acr, "ACR Claimed", True),
-              (f"{spec.unit_label} per month (Total Cores)", hosts, "Hosts", False),
-              ("Migrations completed per month (unique TPIDs)", done,
+    noms, nom_rows = kpi.monthly_unique_tpids(pop, "approval_date", start, end,
+                                              firsts=waves.first)
+    acr, acr_rows = kpi.monthly_acr_claimed(pop, start, end)
+    hosts, host_rows = kpi.monthly_hosts(pop, start, end)
+    done, done_rows = kpi.monthly_migrations_completed(pop, start, end,
+                                                       lasts=waves.last)
+    series = [("Nominations per month (unique TPIDs)", noms, nom_rows,
+               "Nominations", False),
+              ("ACR claimed per month", acr, acr_rows, "ACR Claimed", True),
+              (f"{spec.unit_label} per month (Total Cores)", hosts, host_rows,
+               "Hosts", False),
+              ("Migrations completed per month (unique TPIDs)", done, done_rows,
                "Migrations Completed", False)]
     drawn = []
-    for title, table, value_col, currency in series:
+    for title, table, rows, value_col, currency in series:
         if table.empty:
             continue
         fig = charts.trend_chart(table, "period", value_col, "Cumulative",
                                  height=300)
-        body = doc.figure(fig, height=300) + _accordion(
-            f"Underlying data — {title}",
-            _table(exporter.trend_table(table, value_col, currency),
-                   _slug("t", spec.key, value_col.lower().replace(" ", "")),
+        slug = _slug("t", spec.key, value_col.lower().replace(" ", ""))
+        body = doc.figure(fig, height=300, currency=currency)
+        body += _accordion(
+            f"Monthly numbers — {title}",
+            _table(exporter.trend_table(table, value_col, currency), slug + "-m",
                    numeric={value_col, "Cumulative"}),
             badge=f"{fmt_int(len(table))} months")
+        # The records behind the line, exactly as the app's drill-down shows
+        # them: the accounts, not a second copy of the chart's own numbers.
+        body += _records_accordion(f"Underlying accounts — {title}", rows,
+                                   slug + "-r")
         drawn.append(f'<div><h4 class="sub">{esc(title)}</h4>{body}</div>')
     if not drawn:
         doc.write(_card("Trends — month over month", "",
@@ -314,27 +391,39 @@ def _pipeline(doc: _Builder, spec, pop, waves) -> None:
 
 
 def _regional(doc: _Builder, spec, waves) -> None:
-    pivot, heat = exporter.region_status(waves.last)
+    """Where the category sits by WW Region, with stages named by their code.
+
+    The full status names ("Validating Commitment & Initial Scope") are long
+    enough that five of them on an axis leave the plot a sliver, so the axis
+    carries the code and the key sits under the charts.  The two charts also get
+    a full-width row of their own rather than sharing one — a stacked bar and a
+    heatmap side by side in half a column each are unreadable.
+    """
+    pivot, heat, legend = exporter.region_status(waves.last)
     if pivot.empty:
         return
-    body = ('<div><h4 class="sub">Migration status by region</h4>'
-            + doc.figure(charts.stacked_bar(pivot), height=340)
-            + '</div><div><h4 class="sub">Region × status heatmap</h4>'
-            + doc.figure(charts.heatmap(heat), height=340) + "</div>")
+    body = ('<h4 class="sub">Migration status by WW Region</h4>'
+            + doc.figure(charts.stacked_bar(pivot), height=430)
+            + '<h4 class="sub">WW Region × status heatmap</h4>'
+            + doc.figure(charts.heatmap(heat), height=430))
+    if legend:
+        body += ('<p class="note"><b>Stage key</b> — ' + " &nbsp;·&nbsp; ".join(
+            f"<b>{esc(short)}</b> {esc(name)}" for short, name in legend) + "</p>")
     table = heat.copy()
     table["Total"] = table.sum(axis=1)
-    table = table.reset_index().rename(columns={table.index.name or "index": "Region"})
+    table = table.reset_index().rename(
+        columns={table.index.name or "index": "WW Region"})
     body += _accordion(
-        "Underlying data — region × status",
+        "Underlying data — stage × WW Region",
         _table(table.map(lambda v: fmt_int(v) if isinstance(v, (int, float)) else v),
                _slug("rg", spec.key),
                numeric=set(table.columns[1:]), row_head=True),
         badge=f"{fmt_int(len(table))} regions")
     doc.write(_card(
         "Regional breakdown",
-        "Accounts at their latest wave, by region and migration status — one row "
-        "per TPID, so this agrees with the state chart above rather than counting "
-        "waves.", f'<div class="grid2">{body}</div>'))
+        "Accounts at their latest wave, by WW Region and migration status — one "
+        "row per TPID, so this agrees with the state chart above rather than "
+        "counting waves.", body))
 
 
 def _offerings(doc: _Builder, spec, pop) -> None:
@@ -442,7 +531,9 @@ def _accounts(doc: _Builder, spec, pop, waves, max_rows: int) -> None:
                         '<p class="empty">No accounts to list.</p>'))
         return
     shown = rows.head(max_rows)
-    frame = exporter.format_accounts(shown, layout, escape=esc)
+    # ``plain`` not ``esc``: ``_table`` escapes every cell, and escaping twice
+    # renders "Ação & Café" as "Ação &amp; Café".
+    frame = exporter.format_accounts(shown, layout, escape=plain)
     note = ("One row per account at its latest wave — the grain every unique-TPID "
             "metric in this report is counted at. Sorted by region, largest ACR "
             "first; click any column header to re-sort.")
@@ -455,35 +546,66 @@ def _accounts(doc: _Builder, spec, pop, waves, max_rows: int) -> None:
 
 
 def _drilldown(doc: _Builder, spec, pop, waves, max_rows: int) -> None:
-    """Everything behind the report, in accordions, closed until asked for."""
-    states, _ = kpi.by_state(pop, lasts=waves.last)
+    """Everything behind the report, in accordions, closed until asked for.
+
+    Each block is the *accounts* the chart counted — the same records the app's
+    drill-down opens — with the summary counts alongside them.
+    """
+    states, state_rows = kpi.by_state(pop, lasts=waves.last)
+    stages, stage_rows = kpi.on_track_by_stage(pop, lasts=waves.last)
     blocks = []
     if not states.empty:
         table = states.rename(columns={"category": "State", "count": "Accounts"})
         table["Accounts"] = table["Accounts"].map(fmt_int)
         blocks.append(_accordion(
-            "Accounts by state", _table(table, _slug("ds", spec.key),
-                                        numeric={"Accounts"}, row_head=True),
+            "Counts by state", _table(table, _slug("ds", spec.key),
+                                      numeric={"Accounts"}, row_head=True),
             badge=f"{fmt_int(len(table))} states"))
-    stages, _ = kpi.on_track_by_stage(pop, lasts=waves.last)
+        blocks.append(_records_accordion("Accounts by state", state_rows,
+                                         _slug("dsr", spec.key)))
     if not stages.empty:
         table = stages.rename(columns={"category": "Stage", "count": "Accounts"})
         table["Accounts"] = table["Accounts"].map(fmt_int)
         blocks.append(_accordion(
-            "On-track accounts by stage", _table(table, _slug("dg", spec.key),
-                                                 numeric={"Accounts"}, row_head=True),
+            "Counts by stage", _table(table, _slug("dg", spec.key),
+                                      numeric={"Accounts"}, row_head=True),
             badge=f"{fmt_int(len(table))} stages"))
+        blocks.append(_records_accordion("On-track accounts by stage", stage_rows,
+                                         _slug("dgr", spec.key)))
     if blocks:
-        doc.write(_card("Supporting detail", "The numbers behind the charts above.",
-                        "".join(blocks)))
+        doc.write(_card("Supporting detail",
+                        "The accounts behind each chart above, and the counts "
+                        "they add up to.", "".join(blocks)))
     _accounts(doc, spec, pop, waves, max_rows)
 
 
 # --------------------------------------------------------------------------- #
 # Assembly
 # --------------------------------------------------------------------------- #
+def _this_fy(ctx, start, end) -> tuple[tuple | None, str]:
+    """The fiscal year the as-of date sits in — unless that *is* the window.
+
+    Mirrors the dashboard's Executive Summary, which puts a This-FY row above
+    the selected period whenever they differ, so a month's numbers keep the year
+    they sit in.  Returns ``(None, "")`` when the report already covers This FY.
+    """
+    span = metrics.date_preset_range(ctx.as_of, "This FY", FY_START_MONTH)
+    if not span:
+        return None, ""
+    fy_start, fy_end = pd.Timestamp(span[0]).date(), pd.Timestamp(span[1]).date()
+    same = (start is not None and end is not None
+            and pd.Timestamp(start).date() == fy_start
+            and pd.Timestamp(end).date() == fy_end)
+    if same or (start is None and end is None):
+        return None, ""
+    label = (f"This FY ({metrics.fiscal_year_label(fy_start, FY_START_MONTH)}) — "
+             f"{fy_start:%d %b %Y} → {fy_end:%d %b %Y}")
+    return (fy_start, fy_end), label
+
+
 def _report(doc: _Builder, ctx, fact: pd.DataFrame, spec, start, end,
-            period_label: str, drilldown: bool, max_rows: int) -> None:
+            period_label: str, drilldown: bool, max_rows: int,
+            fy_window=None, fy_label: str = "") -> None:
     pop = segments.population(fact, spec.category)
     anchor = f"rpt-{spec.key}"
     doc.anchor(anchor, spec.title)
@@ -498,7 +620,7 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, spec, start, end,
         return
 
     waves = kpi.wave_index(pop)
-    _summary(doc, spec, pop, waves, start, end, period_label)
+    _summary(doc, spec, pop, waves, start, end, period_label, fy_window, fy_label)
     if spec.key == "eos":
         _eos_matrix(doc, ctx, pop)
     _trends(doc, spec, pop, waves, start, end)
@@ -531,7 +653,8 @@ def _inconsistency(doc: _Builder, ctx) -> None:
             blocks.append(_accordion(label, '<p class="empty">Nothing flagged.</p>',
                                      badge="0"))
             continue
-        shown = frame.head(500).map(esc)
+        # ``plain`` for the same reason as the account table: ``_table`` escapes.
+        shown = frame.head(500).map(plain)
         blocks.append(_accordion(
             label, _searchable_table(shown, _slug("apx", name)),
             badge=f"{fmt_int(len(frame))} rows"))
@@ -559,24 +682,22 @@ def build_html_report(ctx, where: str = "", scope_label: str = "All data",
              if k in exporter._BY_KEY]
     chosen = [a for a in (appendices or []) if a in dict(exporter.APPENDIX_LIBRARY)]
     start, end = date_window or (None, None)
+    fy_window, fy_label = _this_fy(ctx, start, end)
     fact = analytics.select_all(ctx.con, where, table="fact")
 
     doc = _Builder(body=[], scripts=[], toc=[])
     for spec in specs:
         _report(doc, ctx, fact, spec, start, end, period_label, drilldown,
-                max_account_rows)
+                max_account_rows, fy_window, fy_label)
     if "inconsistency" in chosen:
         _inconsistency(doc, ctx)
     if not specs and not chosen:
         doc.write('<div class="card"><p class="empty">No reports were '
                   "selected.</p></div>")
 
-    chips = [f"Scope: <b>{esc(scope_label)}</b>",
-             f"Period: <b>{esc(period_label)}</b>",
-             f"As of: <b>{ctx.as_of:%d %b %Y}</b>",
-             f"Dataset: <b>{esc(ctx.filename)}</b>",
-             f"Accounts: <b>{fmt_int(segments.tpid_key(ctx.fact).nunique())}</b>",
-             f"Generated: <b>{datetime.now():%d %b %Y %H:%M}</b>"]
+    # One pill only: the reporting period. Scope, as-of, dataset, account count
+    # and generation time all appear elsewhere in the report or in the file name.
+    chips = [f"Period: <b>{esc(period_label)}</b>"]
     return _document(title, subtitle, chips, doc).encode("utf-8")
 
 
@@ -590,6 +711,8 @@ def _document(title: str, subtitle: str, chips: list[str], doc: _Builder) -> str
            '<div class="toc-tools">'
            '<button class="btn" id="expand-all" type="button">Expand all</button>'
            '<button class="btn" id="collapse-all" type="button">Collapse all</button>'
+           '<button class="btn" id="toggle-width" type="button" '
+           'aria-pressed="false">Wide</button>'
            "</div></nav>") if doc.toc else ""
     return f"""<!DOCTYPE html>
 <html lang="en"><head>
