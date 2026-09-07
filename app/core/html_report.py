@@ -58,6 +58,22 @@ def esc(value) -> str:
     return html.escape(str(value), quote=True)
 
 
+def plain(value) -> str:
+    """One value as *unescaped* display text — dates formatted, missing blank.
+
+    What :func:`esc` does minus the escaping, for the shared account formatter
+    in :mod:`app.core.exporter`: the table renderer escapes every cell itself,
+    so escaping here too would turn an "&" in an account name into "&amp;".
+    """
+    if value is None or value is pd.NaT:
+        return ""
+    if isinstance(value, pd.Timestamp):
+        return "" if pd.isna(value) else f"{value:%d %b %Y}"
+    if isinstance(value, float) and pd.isna(value):
+        return ""
+    return str(value)
+
+
 def rich(text) -> str:
     """Escaped text with the insight engine's ``**bold**`` markers honoured.
 
@@ -442,7 +458,9 @@ def _accounts(doc: _Builder, spec, pop, waves, max_rows: int) -> None:
                         '<p class="empty">No accounts to list.</p>'))
         return
     shown = rows.head(max_rows)
-    frame = exporter.format_accounts(shown, layout, escape=esc)
+    # ``plain`` not ``esc``: ``_table`` escapes every cell, and escaping twice
+    # renders "Ação & Café" as "Ação &amp; Café".
+    frame = exporter.format_accounts(shown, layout, escape=plain)
     note = ("One row per account at its latest wave — the grain every unique-TPID "
             "metric in this report is counted at. Sorted by region, largest ACR "
             "first; click any column header to re-sort.")
@@ -531,7 +549,8 @@ def _inconsistency(doc: _Builder, ctx) -> None:
             blocks.append(_accordion(label, '<p class="empty">Nothing flagged.</p>',
                                      badge="0"))
             continue
-        shown = frame.head(500).map(esc)
+        # ``plain`` for the same reason as the account table: ``_table`` escapes.
+        shown = frame.head(500).map(plain)
         blocks.append(_accordion(
             label, _searchable_table(shown, _slug("apx", name)),
             badge=f"{fmt_int(len(frame))} rows"))

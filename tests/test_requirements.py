@@ -972,3 +972,43 @@ def test_small_count_axes_get_whole_number_ticks():
     html_report._integer_ticks(fig)
     assert fig.layout.yaxis.dtick == 1
     assert fig.layout.yaxis2.dtick is None
+
+
+def test_report_values_are_escaped_exactly_once(html_ctx, matrix_fact):
+    """An "&" in an account name must not reach the page as "&amp;amp;"."""
+    from app.core import exporter as exp, html_report
+
+    pop = segments.population(matrix_fact, segments.CAT_EOS_ALL)
+    waves = kpi.wave_index(pop)
+    rows, layout, _total = exp.account_rows(pop, waves, True)
+    named = rows.copy()
+    named.loc[named.index[0], "customer_name"] = "Ação & Café <Ltd>"
+    frame = exp.format_accounts(named, layout, escape=html_report.plain)
+
+    # The shared formatter hands the renderer raw text …
+    assert "Ação & Café <Ltd>" in list(frame["Customer"])
+    # … and the renderer escapes it once, so the browser shows the original.
+    markup = html_report._table(frame, "t")
+    assert "Ação &amp; Café &lt;Ltd&gt;" in markup
+    assert "&amp;amp;" not in markup
+
+
+def test_non_latin_account_names_survive_the_html_report(html_ctx, matrix_fact):
+    """A Japanese account name is reported, not dropped or mangled."""
+    from app.core import html_report
+    import app.state as state_mod
+    from app.core import loader as loader_mod, rollup as rollup_mod
+
+    fact = matrix_fact.copy()
+    fact["customer_name"] = fact["customer_name"].astype("string")
+    fact.loc[fact.index[0], "customer_name"] = "株式会社ジェーシービー"
+    customer = rollup_mod.build_customer_rollup(fact, pd.Timestamp("2026-03-01"))
+    ctx = state_mod.DataContext(
+        filename="jp.csv", signature="s", raw=pd.DataFrame(), mapping={},
+        fact=fact, customer=customer, report=dict(html_ctx.report),
+        as_of=pd.Timestamp("2026-03-01"),
+        con=loader_mod.make_connection(fact, customer))
+
+    doc = html_report.build_html_report(ctx, reports=["eos"]).decode("utf-8")
+    assert "株式会社ジェーシービー" in doc          # verbatim, not escaped away
+    assert 'charset="utf-8"' in doc.lower()
