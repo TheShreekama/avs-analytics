@@ -9,7 +9,8 @@ Portfolio KPIs, status & regional distribution, delivery‑health charts, and to
 ## 1 · Status Report
 One page per migration category — **All AVS Migrations**, **EOS Migrations (All / Gen‑1 /
 Gen‑2)** and **AVS → Azure Native** — each with headline metrics, the current pipeline, a
-regional breakdown whose stacked‑bar segments drill into that region *and* stage, and
+regional breakdown by **WW Region** whose stacked‑bar segments drill into that region
+*and* stage (stages shown by code, with a key), and
 detailed data at **one row per account (TPID)**. **EOS Migrations (All)** additionally
 carries the monthly programme matrix — *Gen1 to Gen1* and *Gen1 to Gen2*, every month
 from July 2025 onwards including the empty ones.

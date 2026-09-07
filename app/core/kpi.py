@@ -361,14 +361,18 @@ MATRIX_ROWS: tuple[str, ...] = (
     "Number of hosts migrated",
 )
 
-#: Rows the source export cannot answer, kept in place and left blank rather
-#: than filled with a number that would be a guess.  Nothing in the file marks
-#: the day an engagement was closed out as distinct from its last wave
-#: completing.  (*Migration start* used to be here too; it is now derived — see
-#: ``migration_start_dates``.)
-MATRIX_ROWS_UNAVAILABLE: frozenset[str] = frozenset({
-    "Total number of engagement end",
-})
+#: Rows the source export cannot answer on their own, and what stands in for
+#: them.  The file marks when a wave *ended* but not an engagement closure
+#: distinct from its last wave completing, so "engagement end" reports the same
+#: measure as "migration end" rather than staying blank: an account whose latest
+#: wave has completed is the closest the data comes to an engagement that ended.
+MATRIX_ROWS_MIRRORED: dict[str, str] = {
+    "Total number of engagement end": "Total number of migration end",
+}
+
+#: Rows with no answer at all — none, now that engagement end mirrors migration
+#: end and migration start is derived (see ``migration_start_dates``).
+MATRIX_ROWS_UNAVAILABLE: frozenset[str] = frozenset()
 
 #: How a month is labelled across the top ("Jul-25").
 MATRIX_MONTH_FORMAT = "%b-%y"
@@ -438,7 +442,7 @@ def monthly_matrix(fact: pd.DataFrame, months: list[pd.Period],
         if label in MATRIX_ROWS_UNAVAILABLE:
             data[label] = [None] * len(months)
             continue
-        counts = by_row.get(label, {})
+        counts = by_row.get(MATRIX_ROWS_MIRRORED.get(label, label), {})
         data[label] = [float(counts.get(str(m), 0)) for m in months]
     return _matrix_frame(data, months, fy_start_month)
 
@@ -617,6 +621,35 @@ def state_of(df: pd.DataFrame) -> pd.Series:
     out[cancelled] = STATE_CANCELLED
     out[completed] = STATE_COMPLETED
     return out
+
+
+def stage_labels(df: pd.DataFrame) -> tuple[pd.Series, list[tuple[str, str]]]:
+    """Short axis labels ("Stage 4") and the legend that decodes them.
+
+    The migration statuses are long — "Validating Commitment & Initial Scope" is
+    36 characters — and five of them on one axis leave the plot itself a sliver.
+    The Migration Status column already numbers them ("4 - Executing Migration"),
+    so the axis carries the number and the full name moves to a legend beneath.
+
+    Returns ``(labels, legend)`` where legend is ``[("Stage 4", "Executing
+    Migration"), …]`` ordered by code.  A row with no code keeps its full label,
+    so nothing is hidden behind a number that has no key.
+    """
+    if df.empty:
+        return pd.Series(dtype="object"), []
+    code = pd.to_numeric(df.get("migration_status_code"), errors="coerce")
+    full = (df.get("migration_status_label", pd.Series("", index=df.index))
+            .astype("string").replace({"": pd.NA}).fillna("Unknown"))
+    short = pd.Series(
+        [f"Stage {int(c)}" if pd.notna(c) else f for c, f in zip(code, full)],
+        index=df.index, dtype="object")
+    pairs = {}
+    for c, sh, fu in zip(code, short, full):
+        if pd.notna(c) and sh not in pairs:
+            pairs[sh] = (int(c), str(fu))
+    legend = [(sh, name) for sh, (_c, name) in
+              sorted(pairs.items(), key=lambda kv: kv[1][0])]
+    return short, legend
 
 
 def by_state(fact: pd.DataFrame, lasts: pd.DataFrame | None = None,

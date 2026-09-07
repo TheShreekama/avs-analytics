@@ -84,13 +84,16 @@ def render() -> None:
         "on **Data → Data Inconsistency**.")
 
     # ------------------------------------------------------------------ #
-    section("Region")
+    section("WW Region")
     st.markdown(
-        "The source `WW Region` combines geography and segment (e.g. "
-        "*“Americas - Enterprise”*). Reports show **region as geography only** "
-        "(**Americas / EMEA / ASIA**) — the part before the first “ - ”. The segment "
-        "is preserved separately in **Customer Segment**. Any leading numeric prefix "
-        "(e.g. *“1800 Americas”*) is stripped and flagged as a data-quality issue.")
+        "Every region grouping, filter, chart and export reads the source "
+        "**`WW Region`** column, and is labelled **WW Region** — the value the "
+        "business reports on, whatever shape it takes (*“Americas”*, *“Americas "
+        "SME&C”*, *“MS Elevate”*, *“EMEA”*, *“ASIA”*). Reports no longer reduce it "
+        "to a geography.\n\n"
+        "Any leading numeric prefix (e.g. *“1800 Americas”*) is stripped and "
+        "flagged as a data-quality issue; the **Customer Segment** column is "
+        "reported separately and is unaffected.")
 
     # ------------------------------------------------------------------ #
     section("Risk")
@@ -235,10 +238,11 @@ def render() -> None:
         "chain runs Actual Start → Planned Start → Nom. Approval so a partly-filled "
         "row still lands in a month. An account with no On Track / Done wave has "
         "not started and is not counted.\n\n"
-        "**Engagement end stays blank on purpose.** The export marks when a wave "
+        "**Engagement end repeats migration end.** The export marks when a wave "
         "*ended* but not an engagement closure distinct from its last wave "
-        "completing. A number there would be a guess, so the row keeps its place "
-        "and stays empty.\n\n"
+        "completing, so an account whose latest wave has completed is the closest "
+        "the data comes to an engagement that ended. The two rows therefore carry "
+        "identical values by construction, not by coincidence.\n\n"
         "**Each fiscal year closes with its own total column** — FY26 after Jun-26, "
         "FY27 at the end — summing that year's months. Every measure places a TPID "
         "in exactly one month, so a year's total is the sum of its months with "
@@ -501,6 +505,12 @@ def render() -> None:
         "opens from a mail client's download folder on a machine with no network, "
         "which is where it will be read. That is also why it is a few megabytes: "
         "the charting library has to travel with it.\n\n"
+        "It follows the dashboard in the ways that matter: every drill-down opens "
+        "the **accounts** the metric counted (the same `drilldown_frame` the screen "
+        "uses) alongside the chart's own monthly numbers; the headline tiles gain a "
+        "**This FY** row above them whenever the selected period is something else; "
+        "and money reads `$2M` / `$840K` on axes as well as tiles. A **Wide** toggle "
+        "sets the reading width, and the header carries one pill — the period.\n\n"
         "*The PDF* is built in two parts.\n\n"
         "*Part 1 — Executive reports.* One page-set per migration motion, each "
         "mirroring its Status Report page:\n\n"

@@ -100,6 +100,26 @@ def _label_at(labels: list[list[str]], point: dict) -> str | None:
     return None
 
 
+def selectable_slices(labels: list[str], key: str, *, counts=None,
+                      label: str = "Filter by state") -> list[str]:
+    """Clickable chips standing in for a pie chart's slices.
+
+    Streamlit's plotly selection API reports points for cartesian traces only —
+    a click on a pie, donut or sunburst slice comes back with an empty ``points``
+    list, whatever the selection mode, so a donut can never be filtered by
+    clicking it.  These chips sit under the donut and do what clicking a slice
+    would: pick one or more categories and the records below narrow to them.
+    """
+    if not labels:
+        return []
+    shown = [f"{name} ({fmt_int(counts[name])})" if counts and name in counts else str(name)
+             for name in labels]
+    back = dict(zip(shown, labels))
+    picked = st.pills(label, shown, selection_mode="multi", key=key,
+                      label_visibility="visible")
+    return [normalize_bucket(back[p]) for p in (picked or [])]
+
+
 def selectable_table(df: pd.DataFrame, key: str, bucket_col: str) -> list[str]:
     """Render a summary table whose rows can be clicked to drill into them.
 

@@ -231,14 +231,20 @@ def test_av36_eos_path_detector():
 
 
 # --------------------------------------------------------------------------- #
-# Region geography + reporting scope
+# WW Region + reporting scope
 # --------------------------------------------------------------------------- #
-def test_region_geo_strips_segment(built):
+def test_region_is_the_full_ww_region(built):
+    """Reports group by the WW Region value itself, not by a geography cut of it."""
     _, fact, _, _ = built
-    # ww_region keeps the full value; region_geo is geography only.
-    assert set(fact["region_geo"].unique()) <= {"Americas", "EMEA", "ASIA", "Unknown"}
-    assert (fact["ww_region"].str.contains(" - ")).any()       # segment retained in ww_region
-    assert not (fact["region_geo"].str.contains(" - ")).any()  # but not in region_geo
+    assert list(fact["region_geo"]) == list(fact["ww_region"])
+    assert (fact["ww_region"].str.contains(" - ")).any()   # the segment is kept
+
+
+def test_numeric_prefixes_are_still_stripped_from_the_region(built):
+    """"1800 Americas - Enterprise" cleans to "Americas - Enterprise"."""
+    _, fact, report, _ = built
+    assert not fact["region_geo"].str.match(r"^\s*\d").any()
+    assert report["dq"].get("dirty_region", 0) > 0         # and it is flagged
 
 
 def test_scope_clause():

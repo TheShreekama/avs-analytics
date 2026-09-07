@@ -90,7 +90,7 @@ MAX_DRILLDOWN_ROWS = 300
 ACCOUNT_COLUMNS = [
     ("tpid", "TPID", 1.9),
     ("customer_name", "Customer", 4.3),
-    ("region_geo", "Region", 1.8),
+    ("region_geo", "WW Region", 1.8),
     ("migration_status_label", "Migration Status", 4.1),
     ("current_state", "Current State", 3.0),
     ("solution_architect", "Solution Architect", 3.0),
@@ -168,21 +168,24 @@ def trend_table(table: pd.DataFrame, value_col: str, currency: bool) -> pd.DataF
     return out
 
 
-def region_status(lasts: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Status × region and region × status, at account grain (latest wave).
+def region_status(lasts: pd.DataFrame
+                  ) -> tuple[pd.DataFrame, pd.DataFrame, list[tuple[str, str]]]:
+    """Status × WW Region and WW Region × status, at account grain (latest wave).
 
     Restricted to the stages the dashboards break down by — the four in-flight
-    ones plus Completed — so the PDF and the screen cannot disagree.
+    ones plus Completed — so the PDF and the screen cannot disagree.  Stages are
+    labelled by their code ("Stage 4"); the third return value is the legend
+    that decodes them, since the full names are too long for an axis.
     """
     if lasts.empty or "region_geo" not in lasts.columns:
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), []
     lasts = lasts[kpi.reported_stages(lasts)]
     if lasts.empty:
-        return pd.DataFrame(), pd.DataFrame()
-    rows = lasts.assign(_status=clean(lasts["migration_status_label"]),
-                        _region=clean(lasts["region_geo"]))
+        return pd.DataFrame(), pd.DataFrame(), []
+    stages, legend = kpi.stage_labels(lasts)
+    rows = lasts.assign(_status=stages, _region=clean(lasts["region_geo"]))
     return (pd.crosstab(rows["_status"], rows["_region"]),
-            pd.crosstab(rows["_region"], rows["_status"]))
+            pd.crosstab(rows["_region"], rows["_status"]), legend)
 
 
 # --------------------------------------------------------------------------- #
@@ -283,19 +286,22 @@ def _pipeline_block(pop: pd.DataFrame, waves: kpi.WaveIndex, ss) -> list:
 
 
 def _regional_block(waves: kpi.WaveIndex, ss) -> list:
-    pivot, heat = region_status(waves.last)
+    pivot, heat, legend = region_status(waves.last)
     if pivot.empty:
         return []
+    key = ("Stages: " + "; ".join(f"{short} = {name}" for short, name in legend)
+           if legend else "")
     return [Paragraph("Regional breakdown", ss["H2"]),
-            Paragraph("Accounts at their latest wave, by region and migration "
+            Paragraph("Accounts at their latest wave, by WW Region and migration "
                       "status — one row per TPID, so this agrees with the state "
-                      "chart above rather than counting waves.", ss["Muted"]),
+                      "chart above rather than counting waves." +
+                      (f" {_esc(key)}" if key else ""), ss["Muted"]),
             kit.spacer(0.15),
-            KeepTogether([Paragraph("Migration status by region", ss["H3"]),
+            KeepTogether([Paragraph("Migration status by WW Region", ss["H3"]),
                           kit.image(pc.stacked_bar_png(pivot, height_px=280),
                                     width_cm=16.6)]),
             kit.spacer(0.2),
-            KeepTogether([Paragraph("Region × status heatmap", ss["H3"]),
+            KeepTogether([Paragraph("WW Region × status heatmap", ss["H3"]),
                           kit.image(pc.heatmap_png(heat, height_px=280),
                                     width_cm=16.6)])]
 
@@ -581,10 +587,10 @@ def _drilldown_section(fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
               kit.spacer(0.2)]
     story += _monthly_tables(pop, waves, start, end, spec, ss, width)
 
-    pivot, _ = region_status(waves.last)
+    pivot, _heat, _legend = region_status(waves.last)
     if not pivot.empty:
         story += [kit.spacer(0.3),
-                  Paragraph("Accounts by migration status and region", ss["H2"]),
+                  Paragraph("Accounts by migration status and WW Region", ss["H2"]),
                   Paragraph("Account counts (each TPID's latest wave) — the numbers "
                             "the regional charts are drawn from.", ss["Muted"]),
                   kit.spacer(0.2),
