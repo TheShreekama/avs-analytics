@@ -6,7 +6,7 @@ from datetime import datetime
 import streamlit as st
 
 from app import state
-from app.core import analytics, exporter, segments
+from app.core import analytics, exporter, html_report, segments
 from app.core.metrics import fmt_int
 from app.ui import components
 from app.ui.theme import page_header, section, subheading
@@ -18,8 +18,9 @@ def render() -> None:
     analytics.use_table(table)
     unit = state.unit_label().title()
     page_header("Reports & Export",
-                "A management report in two parts: the three migration reports up "
-                "front, the detail behind them after. Everything renders locally.",
+                "One management report, in two formats: a PDF to print or file, "
+                "and a single interactive HTML file to email. Everything renders "
+                "locally.",
                 help="The cover and contents are always included. Sidebar filters "
                      "and the reporting period below both apply to the report's "
                      "contents.")
@@ -86,27 +87,62 @@ def render() -> None:
     st.caption("Every figure is counted per account at its latest wave, exactly as "
                "the Status Report pages count it — the sidebar's "
                "counting mode does not change the report.")
-    g1, g2 = st.columns([1, 2])
-    with g1:
+    ready = bool(selected or appendices)
+    if not ready:
+        st.info("Tick at least one report above.")
+    kw = dict(title=title or "AVS Migration Analytics", subtitle=subtitle,
+              period_label=period_label, date_window=window, drilldown=drilldown,
+              appendices=appendices)
+    stamp = f"{datetime.now():%Y%m%d_%H%M}"
+
+    pdf_col, html_col = st.columns(2)
+    with pdf_col:
+        subheading("PDF", help="The printable record — fixed layout, page "
+                               "numbers, bookmarks and internal links.")
+        st.caption("Best for filing, printing and formal circulation.")
         if st.button("📄 Generate PDF", type="primary", width="stretch",
-                     disabled=not (selected or appendices)):
+                     disabled=not ready):
             with st.spinner("Rendering PDF…"):
                 st.session_state["_rep_pdf"] = exporter.build_report(
                     ctx, where, scope_label, selected,
-                    title=title or "AVS Migration Analytics",
-                    subtitle=subtitle, period_label=period_label,
-                    date_window=window, drilldown=drilldown,
-                    appendices=appendices, max_drilldown_rows=max_rows)
-                st.session_state["_rep_name"] = (
-                    f"AVS_Report_{datetime.now():%Y%m%d_%H%M}.pdf")
-            st.success("Report ready — download below.")
-    with g2:
+                    max_drilldown_rows=max_rows, **kw)
+                st.session_state["_rep_name"] = f"AVS_Report_{stamp}.pdf"
+            st.success("PDF ready — download below.")
         if st.session_state.get("_rep_pdf"):
-            st.download_button("⬇️ Download PDF", st.session_state["_rep_pdf"],
-                               file_name=st.session_state.get("_rep_name", "report.pdf"),
-                               mime="application/pdf", width="stretch")
-    if not (selected or appendices):
-        st.info("Tick at least one report above.")
+            st.download_button(
+                "⬇️ Download PDF", st.session_state["_rep_pdf"],
+                file_name=st.session_state.get("_rep_name", "report.pdf"),
+                mime="application/pdf", width="stretch")
+
+    with html_col:
+        subheading("Interactive HTML",
+                   help="The dashboard itself as one file — charts you can hover, "
+                        "zoom and filter, drill-downs as accordions, tables you "
+                        "can sort and search.")
+        st.caption("Best for emailing. **One self-contained file** — charts, "
+                   "styles and data are all inside it, so it opens with no "
+                   "network and nothing to install.")
+        html_rows = st.slider(
+            "Account rows per report", 100, 5000, html_report.MAX_ACCOUNT_ROWS, 100,
+            key="rep_html_rows", disabled=not drilldown,
+            help="An HTML table scrolls and searches, so it holds far more than "
+                 "the PDF can. More rows means a larger attachment.")
+        if st.button("🌐 Generate HTML", type="primary", width="stretch",
+                     disabled=not ready):
+            with st.spinner("Rendering interactive report…"):
+                st.session_state["_rep_html"] = html_report.build_html_report(
+                    ctx, where, scope_label, selected,
+                    max_account_rows=html_rows, **kw)
+                st.session_state["_rep_html_name"] = f"AVS_Report_{stamp}.html"
+            st.success("HTML ready — download below.")
+        if st.session_state.get("_rep_html"):
+            size_mb = len(st.session_state["_rep_html"]) / 1e6
+            st.download_button(
+                "⬇️ Download HTML", st.session_state["_rep_html"],
+                file_name=st.session_state.get("_rep_html_name", "report.html"),
+                mime="text/html", width="stretch")
+            st.caption(f"**{size_mb:.1f} MB** — most of it the charting library, "
+                       "which has to travel with the file for it to work offline.")
 
     # ------------------------------------------------------------ data export
     section("4 · Data exports (CSV)")

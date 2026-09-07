@@ -23,7 +23,7 @@ a bundled browser.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
 import pandas as pd
@@ -83,10 +83,11 @@ APPENDIX_KEYS = [k for k, _ in APPENDIX_LIBRARY]
 #: page is the right tool, and the truncation note says so.
 MAX_DRILLDOWN_ROWS = 300
 
+#: Shared with the HTML renderer, so both reports lay accounts out identically.
 #: Account-table layout as (source column, header, relative width).  Widths are
 #: scaled to the page, so adding the generation column for EOS narrows the rest
 #: rather than running off the edge.
-_ACCOUNT_COLUMNS = [
+ACCOUNT_COLUMNS = [
     ("tpid", "TPID", 1.9),
     ("customer_name", "Customer", 4.3),
     ("region_geo", "Region", 1.8),
@@ -98,7 +99,7 @@ _ACCOUNT_COLUMNS = [
     ("total_cores", "Cores", 1.4),
     ("total_acr", "ACR", 2.0),
 ]
-_GENERATION_COLUMN = ("generation", "Gen", 1.5)
+GENERATION_COLUMN = ("generation", "Gen", 1.5)
 
 
 # --------------------------------------------------------------------------- #
@@ -119,20 +120,20 @@ def _esc(value) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _clean(series: pd.Series) -> pd.Series:
+def clean(series: pd.Series) -> pd.Series:
     """Blank/missing values as "Unknown", so a chart axis never loses a bar."""
     return series.astype("string").replace({"": pd.NA}).fillna("Unknown")
 
 
-def _labelled(fact: pd.DataFrame, column: str) -> pd.DataFrame:
+def labelled(fact: pd.DataFrame, column: str) -> pd.DataFrame:
     """Value counts for one column, biggest first — the shape charts expect."""
     if column not in fact.columns or fact.empty:
         return pd.DataFrame(columns=["category", "count"])
-    return (_clean(fact[column]).value_counts()
+    return (clean(fact[column]).value_counts()
             .rename_axis("category").reset_index(name="count"))
 
 
-def _headline(pop: pd.DataFrame, waves: kpi.WaveIndex, start, end) -> dict:
+def headline(pop: pd.DataFrame, waves: kpi.WaveIndex, start, end) -> dict:
     """The five dashboard tiles, computed exactly as the dashboard computes them."""
     return {
         "engagements": kpi.new_engagements(pop, start, end, firsts=waves.first),
@@ -154,7 +155,7 @@ def _insight_lines(pop: pd.DataFrame, ss, limit: int = 6) -> list:
     return out
 
 
-def _trend_table(table: pd.DataFrame, value_col: str, currency: bool) -> pd.DataFrame:
+def trend_table(table: pd.DataFrame, value_col: str, currency: bool) -> pd.DataFrame:
     """A monthly trend as printable rows — Month, the measure, Cumulative last."""
     out = table.drop(columns=["month"]).rename(columns={"period": "Month"})
     values = [c for c in out.columns if c not in ("Month", "Cumulative")]
@@ -167,7 +168,7 @@ def _trend_table(table: pd.DataFrame, value_col: str, currency: bool) -> pd.Data
     return out
 
 
-def _region_status(lasts: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def region_status(lasts: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Status × region and region × status, at account grain (latest wave).
 
     Restricted to the stages the dashboards break down by — the four in-flight
@@ -178,8 +179,8 @@ def _region_status(lasts: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     lasts = lasts[kpi.reported_stages(lasts)]
     if lasts.empty:
         return pd.DataFrame(), pd.DataFrame()
-    rows = lasts.assign(_status=_clean(lasts["migration_status_label"]),
-                        _region=_clean(lasts["region_geo"]))
+    rows = lasts.assign(_status=clean(lasts["migration_status_label"]),
+                        _region=clean(lasts["region_geo"]))
     return (pd.crosstab(rows["_status"], rows["_region"]),
             pd.crosstab(rows["_region"], rows["_status"]))
 
@@ -282,7 +283,7 @@ def _pipeline_block(pop: pd.DataFrame, waves: kpi.WaveIndex, ss) -> list:
 
 
 def _regional_block(waves: kpi.WaveIndex, ss) -> list:
-    pivot, heat = _region_status(waves.last)
+    pivot, heat = region_status(waves.last)
     if pivot.empty:
         return []
     return [Paragraph("Regional breakdown", ss["H2"]),
@@ -301,8 +302,8 @@ def _regional_block(waves: kpi.WaveIndex, ss) -> list:
 
 def _offering_block(pop: pd.DataFrame, ss) -> list:
     """The AVS → Azure Native cut: which offering, which Azure-native service."""
-    paths = _labelled(pop, "migration_path")
-    targets = _labelled(pop, "azure_target")
+    paths = labelled(pop, "migration_path")
+    targets = labelled(pop, "azure_target")
     if paths.empty and targets.empty:
         return []
     out = [Paragraph("By offering & target", ss["H2"]),
@@ -345,7 +346,7 @@ def _generation_block(fact: pd.DataFrame, spec: ReportSpec, start, end, ss) -> l
             rows.append([label, "0", "0", "0", "0", "0", fmt_currency(0)])
             continue
         waves = kpi.wave_index(pop)
-        m = _headline(pop, waves, start, end)
+        m = headline(pop, waves, start, end)
         rows.append([
             label,
             fmt_int(segments.tpid_key(pop).nunique()),
@@ -431,7 +432,7 @@ def _report_section(fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
         return story
 
     waves = kpi.wave_index(pop)
-    blocks = [_summary_block(spec, _headline(pop, waves, start, end), ss, period_label),
+    blocks = [_summary_block(spec, headline(pop, waves, start, end), ss, period_label),
               _trend_block(pop, waves, start, end, spec, ss),
               _pipeline_block(pop, waves, ss)]
     if spec.key == "native":
@@ -454,7 +455,7 @@ def _report_section(fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
 # --------------------------------------------------------------------------- #
 # Drill-down
 # --------------------------------------------------------------------------- #
-def _account_rows(pop: pd.DataFrame, waves: kpi.WaveIndex,
+def account_rows(pop: pd.DataFrame, waves: kpi.WaveIndex,
                   include_generation: bool) -> tuple[pd.DataFrame, list, int]:
     """One printable row per account, plus the column layout and the total.
 
@@ -469,16 +470,18 @@ def _account_rows(pop: pd.DataFrame, waves: kpi.WaveIndex,
     wave_counts = pop.groupby("tpid_key").size()
     rows = detail.assign(_waves=detail["tpid_key"].map(wave_counts).fillna(1))
     rows["_acr_sort"] = pd.to_numeric(rows.get("total_acr"), errors="coerce").fillna(0)
-    rows["_region_sort"] = _clean(rows["region_geo"]) if "region_geo" in rows else "Unknown"
+    rows["_region_sort"] = clean(rows["region_geo"]) if "region_geo" in rows else "Unknown"
     rows = rows.sort_values(["_region_sort", "_acr_sort"], ascending=[True, False])
 
-    layout = list(_ACCOUNT_COLUMNS)
+    layout = list(ACCOUNT_COLUMNS)
     if include_generation:
-        layout.insert(3, _GENERATION_COLUMN)
+        layout.insert(3, GENERATION_COLUMN)
     return rows, layout, len(rows)
 
 
-def _format_accounts(rows: pd.DataFrame, layout: list) -> pd.DataFrame:
+def format_accounts(rows: pd.DataFrame, layout: list, escape=None) -> pd.DataFrame:
+    """Account rows as display strings, escaped for the target being rendered."""
+    escape = _esc if escape is None else escape
     out = {}
     for source, header, _ in layout:
         if source == "total_acr":
@@ -488,7 +491,7 @@ def _format_accounts(rows: pd.DataFrame, layout: list) -> pd.DataFrame:
             values = pd.to_numeric(rows.get(source), errors="coerce").map(
                 lambda v: "" if pd.isna(v) else fmt_int(v))
         elif source in rows.columns:
-            values = rows[source].map(_esc)
+            values = rows[source].map(escape)
         else:
             values = pd.Series([""] * len(rows), index=rows.index)
         out[header] = values
@@ -497,7 +500,7 @@ def _format_accounts(rows: pd.DataFrame, layout: list) -> pd.DataFrame:
 
 def _accounts_table(pop: pd.DataFrame, waves: kpi.WaveIndex, spec: ReportSpec,
                     ss, max_rows: int) -> list:
-    rows, layout, total = _account_rows(pop, waves, spec.key == "eos")
+    rows, layout, total = account_rows(pop, waves, spec.key == "eos")
     if rows.empty:
         return [Paragraph("Account records", ss["H2"]),
                 Paragraph("No accounts to list.", ss["Muted"])]
@@ -520,7 +523,7 @@ def _accounts_table(pop: pd.DataFrame, waves: kpi.WaveIndex, spec: ReportSpec,
     for region, group in shown.groupby("_region_sort", sort=True):
         block = [Paragraph(f"{_esc(region)} — {fmt_int(len(group))} account(s)",
                            ss["H3"]),
-                 kit.df_table(_format_accounts(group, layout), ss, col_widths=widths,
+                 kit.df_table(format_accounts(group, layout), ss, col_widths=widths,
                               align_right=[len(layout) - 3, len(layout) - 2,
                                            len(layout) - 1])]
         # Keep a region's heading with at least the head of its table.
@@ -578,7 +581,7 @@ def _drilldown_section(fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
               kit.spacer(0.2)]
     story += _monthly_tables(pop, waves, start, end, spec, ss, width)
 
-    pivot, _ = _region_status(waves.last)
+    pivot, _ = region_status(waves.last)
     if not pivot.empty:
         story += [kit.spacer(0.3),
                   Paragraph("Accounts by migration status and region", ss["H2"]),
@@ -609,7 +612,7 @@ def _monthly_tables(pop: pd.DataFrame, waves: kpi.WaveIndex, start, end,
         if table.empty:
             continue
         printed += 1
-        frame = _trend_table(table, value_col, currency)
+        frame = trend_table(table, value_col, currency)
         col = min(width / 3, 5.5 * cm)
         out.append(KeepTogether([
             Paragraph(title, ss["H3"]),

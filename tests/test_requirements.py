@@ -685,29 +685,41 @@ def test_a_single_file_dataset_is_unchanged_but_labelled():
 # --------------------------------------------------------------------------- #
 @pytest.fixture(scope="module")
 def matrix_fact():
-    """Two Gen-1 accounts and one Gen-2, with known months and core counts."""
+    """Three Gen-1 accounts and one Gen-2, with known months and core counts.
+
+    The start dates are written to exercise each rung of the migration-start
+    fallback: an actual start, a planned start, an approval date, and an account
+    that never started at all.
+    """
+    # (tpid, name, task, wave, gen, status, approved, actual start, planned
+    #  start, actual end, cores, current state)
     rows = [
-        # Gen-1 Acme: one wave, approved Jul-25, completed Nov-25 with 36 cores.
+        # Gen-1 Acme: approved Jul-25, actually started Sep-25, completed Nov-25.
         ("1001", "Acme", "a1", "Wave 1", "Gen1", "7 - Completed", "2025-07-08",
-         "2025-11-14", "36"),
-        # Gen-1 Beta: approved Sep-25.  Wave 1 completed Nov-25 (72 cores) but
-        # Wave 2 is still running, so Beta is NOT a completed migration.
+         "2025-09-03", "", "2025-11-14", "36", "Done"),
+        # Gen-1 Beta: approved Sep-25, no actual start — planned Oct-25.  Wave 1
+        # completed Nov-25 (72 cores) but Wave 2 is still running, so Beta is
+        # NOT a completed migration.
         ("1002", "Beta", "b1", "Wave 1", "Gen1", "7 - Completed", "2025-09-02",
-         "2025-11-20", "72"),
+         "", "2025-10-01", "2025-11-20", "72", "Done"),
         ("1002", "Beta", "b2", "Wave 2", "Gen1", "4 - Migration In Progress",
-         "2025-12-01", "", ""),
-        # Gen-2 Gamma: approved Aug-25, completed Feb-26 with 52 cores.
+         "2025-12-01", "", "", "", "", "On Track"),
+        # Gen-1 Delta: approved Oct-25 and blocked — never started.
+        ("1003", "Delta", "d1", "Wave 1", "Gen1", "2 - Executing Pre-Requisites",
+         "2025-10-05", "", "", "", "", "Blocked - Customer"),
+        # Gen-2 Gamma: approved Aug-25, no start dates at all, completed Feb-26.
         ("2001", "Gamma", "g1", "Wave 1", "Gen2", "7 - Completed", "2025-08-11",
-         "2026-02-03", "52"),
+         "", "", "2026-02-03", "52", "Done"),
     ]
     raw = pd.DataFrame([{
         "TPID": t, "Customer Name": n, "Task ID": k, "Phase": w,
         "Tags": f"Qualify and AccelerateAVS Migration - {g}",
         "Migration Status": s, "Nom. Approval Date": a, "Nom. Created Date": a,
-        "Actual End Date": e, "Total Cores": c,
+        "Actual Start Date": ast, "Planned Start Date": pst,
+        "Actual End Date": e, "Total Cores": c, "Current State": cs,
         "Primary Migration Path": "AV36/AV36P/AV52 - EOS",
         "WW Region": "Americas - Enterprise",
-    } for t, n, k, w, g, s, a, e, c in rows]).astype("string")
+    } for t, n, k, w, g, s, a, ast, pst, e, c, cs in rows]).astype("string")
     mp = mapping.resolve_mapping(list(raw.columns))
     built, _report = cleaning.build_fact_frame(raw, mp, pd.Timestamp("2026-03-01"))
     return built
@@ -722,11 +734,25 @@ def _matrix(fact_frame, generation, end="2026-03-01"):
 
 def test_matrix_shows_every_month_including_the_empty_ones(matrix_fact):
     grid = _matrix(matrix_fact, segments.GEN_1)
-    months = [c for c in grid.columns]
-    assert months == ["Jul-25", "Aug-25", "Sep-25", "Oct-25", "Nov-25", "Dec-25",
-                      "Jan-26", "Feb-26", "Mar-26"]
-    # Oct-25 has nothing in it and is still a column, reading zero.
-    assert grid.loc["Total number of new engagement", "Oct-25"] == "0"
+    assert list(grid.columns) == ["Jul-25", "Aug-25", "Sep-25", "Oct-25", "Nov-25",
+                                  "Dec-25", "Jan-26", "Feb-26", "Mar-26", "FY26 Total"]
+    # Dec-25 has nothing in it and is still a column, reading zero.
+    assert grid.loc["Total number of new engagement", "Dec-25"] == "0"
+
+
+def test_each_fiscal_year_closes_with_its_own_total_column(matrix_fact):
+    grid = _matrix(matrix_fact, segments.GEN_1, end="2026-09-01")
+    columns = list(grid.columns)
+    # FY26 (Jul-25 → Jun-26) closes right after Jun-26, before FY27 opens.
+    assert columns[columns.index("Jun-26") + 1] == "FY26 Total"
+    assert columns[columns.index("FY26 Total") + 1] == "Jul-26"
+    assert columns[-1] == "FY27 Total"
+    # Totals are the year's months summed: three Gen-1 accounts, all in FY26.
+    assert grid.loc["Total number of new engagement", "FY26 Total"] == "3"
+    assert grid.loc["Number of hosts migrated", "FY26 Total"] == "108"
+    assert grid.loc["Total number of new engagement", "FY27 Total"] == "0"
+    # A row with no answer has no year total either — never a spurious zero.
+    assert grid.loc["Total number of engagement end", "FY26 Total"] == ""
 
 
 def test_matrix_counts_match_the_documented_metric_rules(matrix_fact):
@@ -745,7 +771,49 @@ def test_matrix_counts_match_the_documented_metric_rules(matrix_fact):
     assert gen2.loc["Number of hosts migrated", "Feb-26"] == "52"
 
 
-def test_the_two_unavailable_rows_are_blank_not_zero(matrix_fact):
+def test_migration_start_walks_the_fallback_chain(matrix_fact):
+    starts = kpi.migration_start_dates(matrix_fact)
+    by_tpid = {t: (d, src) for t, d, src in zip(
+        starts["tpid"].astype(str), starts["migration_start_date"],
+        starts["start_date_source"])}
+
+    # Acme has an actual start; Beta's earliest started wave has only a planned
+    # one; Gamma has neither, so it falls back to the approval date.
+    assert by_tpid["1001"] == (pd.Timestamp("2025-09-03"), "Actual Start Date")
+    assert by_tpid["1002"] == (pd.Timestamp("2025-10-01"), "Planned Start Date")
+    assert by_tpid["2001"] == (pd.Timestamp("2025-08-11"), "Nom. Approval Date")
+    # Delta is blocked — no wave reads On Track or Done, so it never started.
+    assert "1003" not in by_tpid
+
+
+def test_migration_start_reads_the_earliest_started_wave_not_the_first_wave():
+    """Wave 1 sat blocked; the migration started with Wave 2."""
+    raw = pd.DataFrame([{
+        "TPID": "900", "Customer Name": "Late", "Task ID": t, "Phase": w,
+        "Tags": "AVS Migration - Gen1", "Migration Status": "4 - Migration In Progress",
+        "Nom. Approval Date": "2025-07-01", "Nom. Created Date": "2025-07-01",
+        "Actual Start Date": ast, "Current State": cs,
+        "Primary Migration Path": "AV36/AV36P/AV52 - EOS",
+    } for t, w, ast, cs in [("w1", "Wave 1", "2025-07-05", "Blocked - Customer"),
+                            ("w2", "Wave 2", "2025-11-09", "On Track"),
+                            ("w3", "Wave 3", "2026-01-04", "On Track")]]).astype("string")
+    mp = mapping.resolve_mapping(list(raw.columns))
+    built, _report = cleaning.build_fact_frame(raw, mp, pd.Timestamp("2026-03-01"))
+    starts = kpi.migration_start_dates(built)
+    # Not Wave 1's 2025-07-05: that wave never started.  Not Wave 3's either.
+    assert list(starts["migration_start_date"]) == [pd.Timestamp("2025-11-09")]
+
+
+def test_matrix_counts_migration_starts_in_their_own_month(matrix_fact):
+    gen1 = _matrix(matrix_fact, segments.GEN_1)
+    assert gen1.loc["Total number of migration start", "Sep-25"] == "1"   # Acme
+    assert gen1.loc["Total number of migration start", "Oct-25"] == "1"   # Beta
+    assert gen1.loc["Total number of migration start", "FY26 Total"] == "2"
+    gen2 = _matrix(matrix_fact, segments.GEN_2)
+    assert gen2.loc["Total number of migration start", "Aug-25"] == "1"   # Gamma
+
+
+def test_the_unanswerable_row_is_blank_not_zero(matrix_fact):
     grid = _matrix(matrix_fact, segments.GEN_1)
     for label in kpi.MATRIX_ROWS_UNAVAILABLE:
         assert set(grid.loc[label]) == {""}
@@ -765,7 +833,7 @@ def test_an_empty_generation_still_renders_the_whole_grid(matrix_fact):
     empty = matrix_fact[matrix_fact["generation"] == segments.GEN_UNCLASSIFIED]
     assert empty.empty
     grid = _matrix(matrix_fact, segments.GEN_UNCLASSIFIED)
-    assert len(grid.columns) == 9
+    assert list(grid.columns)[-1] == "FY26 Total"
     assert grid.loc["Number of hosts migrated", "Nov-25"] == "0"
 
 
@@ -785,3 +853,122 @@ def test_the_fiscal_year_grid_lists_all_twelve_months():
     assert row.loc["Jul", "FY25"] == "0"       # empty month, still a row
     assert row.loc["Aug", "FY26"] == "2"
     assert row.loc["Total", "FY25"] == "8"
+
+
+# --------------------------------------------------------------------------- #
+# The single-file interactive HTML report
+# --------------------------------------------------------------------------- #
+@pytest.fixture(scope="module")
+def html_ctx(matrix_fact):
+    """A minimal DataContext over the matrix fixture, enough to render a report."""
+    from app import state as state_mod
+    from app.core import loader as loader_mod, rollup as rollup_mod
+
+    report = {"as_of": pd.Timestamp("2026-03-01"), "dq": {}, "dq_rows": 0,
+              "n_rows": len(matrix_fact), "unmapped": [], "parse": {},
+              "scope": {"floor_fy": "FY25"}}
+    customer = rollup_mod.build_customer_rollup(matrix_fact, report["as_of"])
+    return state_mod.DataContext(
+        filename="matrix.csv", signature="sig", raw=pd.DataFrame(), mapping={},
+        fact=matrix_fact, customer=customer, report=report,
+        as_of=report["as_of"],
+        con=loader_mod.make_connection(matrix_fact, customer))
+
+
+@pytest.fixture(scope="module")
+def html_doc(html_ctx):
+    from app.core import html_report
+    return html_report.build_html_report(
+        html_ctx, title="AVS Migration Analytics", subtitle="Management Report",
+        period_label="01 Jul 2025 → 30 Jun 2026",
+        appendices=["inconsistency"]).decode("utf-8")
+
+
+def test_the_html_report_is_a_single_self_contained_file(html_doc):
+    """No stylesheet, font, script or image is fetched: it must open offline."""
+    assert html_doc.startswith("<!DOCTYPE html>")
+    assert "</html>" in html_doc
+    # Nothing is loaded from anywhere — no src=, no link rel=stylesheet, no http.
+    assert "<script src=" not in html_doc
+    assert '<link rel="stylesheet"' not in html_doc
+    assert "https://" not in html_doc.split("<script>")[0]   # head + cover markup
+    # …and the pieces that would otherwise be fetched are inlined.
+    assert "Plotly.newPlot(" in html_doc
+    assert "<style>" in html_doc
+
+
+def test_the_html_report_carries_every_selected_report(html_doc):
+    for anchor in ('id="rpt-avs"', 'id="rpt-eos"', 'id="rpt-native"', 'id="appendix"'):
+        assert anchor in html_doc
+    assert 'href="#rpt-eos"' in html_doc          # and each is in the contents
+
+
+def test_the_html_report_keeps_charts_accordions_and_sortable_tables(html_doc):
+    assert html_doc.count('<div class="chart"') >= 4      # interactive figures
+    # Matched on the div id, since the inlined Plotly bundle mentions newPlot too.
+    assert html_doc.count('Plotly.newPlot("fig') == html_doc.count('<div class="chart"')
+    assert '<details class="acc"' in html_doc             # drill-down accordions
+    assert 'table class="data"' in html_doc
+    assert "expand-all" in html_doc and "collapse-all" in html_doc
+
+
+def test_the_html_report_carries_the_eos_matrix(html_doc):
+    assert "Monthly programme matrix" in html_doc
+    assert "Gen1 to Gen1" in html_doc and "Gen1 to Gen2" in html_doc
+    assert "FY26 Total" in html_doc
+    assert "Total number of migration start" in html_doc
+
+
+def test_html_values_are_escaped_but_insight_bold_survives():
+    from app.core import html_report
+    assert html_report.esc('<script>alert("x")</script>') == (
+        "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;")
+    # The insight engine writes **bold**; it renders, and injection still cannot.
+    assert html_report.rich("**Americas** leads") == "<b>Americas</b> leads"
+    assert html_report.rich("**<b>x</b>** y") == "<b>&lt;b&gt;x&lt;/b&gt;</b> y"
+    assert html_report.esc(pd.NaT) == "" and html_report.esc(None) == ""
+
+
+def test_the_html_and_pdf_reports_count_the_same_things(html_ctx, matrix_fact):
+    """Both renderers read the same helpers, so the tiles must agree."""
+    from app.core import exporter as exp
+    pop = segments.population(matrix_fact, segments.CAT_EOS_ALL)
+    waves = kpi.wave_index(pop)
+    head = exp.headline(pop, waves, None, None)
+    from app.core import html_report
+    doc = html_report.build_html_report(html_ctx, reports=["eos"],
+                                        drilldown=False).decode("utf-8")
+    # Four Gen-tagged accounts, one of which never completes a latest wave.
+    assert f'<div class="value">{head["engagements"].value:,}</div>' in doc
+    assert f'<div class="value">{head["completed"].value:,}</div>' in doc
+
+
+def test_an_empty_report_renders_rather_than_raising(html_ctx):
+    """Filters that select nothing must still produce a readable file."""
+    from app.core import html_report
+    doc = html_report.build_html_report(
+        html_ctx, where="WHERE 1 = 0", scope_label="Filtered view").decode("utf-8")
+    assert doc.startswith("<!DOCTYPE html>")
+    assert "No nominations fall into this report" in doc
+
+
+def test_small_count_axes_get_whole_number_ticks():
+    """A count reaching 3 must not tick every 0.5 and print "3, 3, 2, 2, 1, 1"."""
+    from app.core import html_report
+    from app.ui import charts as charts_mod
+
+    table = pd.DataFrame({"period": ["2025-03", "2025-09", "2026-05"],
+                          "Nominations": [1, 1, 3], "Cumulative": [1, 2, 5]})
+    fig = charts_mod.trend_chart(table, "period", "Nominations", "Cumulative")
+    html_report._integer_ticks(fig)
+    assert fig.layout.yaxis.dtick == 1          # bars: 0..3
+    assert fig.layout.yaxis2.dtick == 1         # cumulative line: 0..5
+
+    # A big axis is left to Plotly, whose own ticks are already whole numbers —
+    # dtick=1 there would try to draw four hundred of them.
+    big = pd.DataFrame({"period": ["2025-03", "2025-09"],
+                        "Nominations": [1, 2], "Cumulative": [200, 428]})
+    fig = charts_mod.trend_chart(big, "period", "Nominations", "Cumulative")
+    html_report._integer_ticks(fig)
+    assert fig.layout.yaxis.dtick == 1
+    assert fig.layout.yaxis2.dtick is None

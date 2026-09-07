@@ -126,10 +126,12 @@ def _generation_matrix(ctx, fact: pd.DataFrame, key: str) -> None:
             period="Fixed — July onwards, every month shown")
     start = metrics.named_fiscal_year_start(EOS_MATRIX_START_FY, FY_START_MONTH)
     st.caption(f"From **{start:%b %Y}** to **{ctx.as_of:%b %Y}**, every month "
-               "included. Blocks are the generation each account is refreshing "
-               "on to — all EOS accounts are coming from Gen-1 hardware. "
-               "*Migration start* and *engagement end* are blank: the export "
-               "does not record either date.")
+               "included, each fiscal year closing with its own total column. "
+               "Blocks are the generation each account is refreshing on to — all "
+               "EOS accounts are coming from Gen-1 hardware. *Migration start* is "
+               "derived (earliest wave reading On Track or Done → Actual Start "
+               "Date, else Planned Start, else Nom. Approval); *engagement end* "
+               "is blank, as the export does not record it.")
     for generation, title in _MATRIX_BLOCKS:
         block = fact[fact["generation"] == generation]
         accounts = segments.tpid_key(block).nunique() if not block.empty else 0
@@ -138,7 +140,7 @@ def _generation_matrix(ctx, fact: pd.DataFrame, key: str) -> None:
                    f"**AVS Migration - {generation.replace('-', '')}** · "
                    f"**{fmt_int(len(block))}** nomination waves.")
         months = kpi.matrix_month_span(block, start, ctx.as_of)
-        grid = kpi.monthly_matrix(block, months)
+        grid = kpi.monthly_matrix(block, months, fy_start_month=FY_START_MONTH)
         components.show_table(grid)
         st.download_button(
             f"⬇️ Export {title} to CSV", grid.to_csv(index=False).encode("utf-8"),

@@ -29,8 +29,11 @@ Analysis and AVS → Azure Native Trends reports._
 Full deterministic insights engine, grouped by category.
 ![Insights](screenshots/09_insights.png)
 
-## Reports & PDF Export
-Build a comprehensive report or pick specific modules; one‑click local PDF + CSV exports.
+## Reports & Export
+Build a comprehensive report or pick specific modules, then take it as a **PDF** to
+print or file, or as a **single interactive HTML file** to email — the dashboard's
+charts, accordions and sortable tables in one self‑contained attachment that opens
+with no network. Plus one‑click CSV extracts.
 ![Reports & Export](screenshots/12_reports.png)
 
 ## Data & Upload

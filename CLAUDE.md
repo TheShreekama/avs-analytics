@@ -40,7 +40,8 @@ under Streamlit's AppTest in both counting modes.
   `segments` (migration category, source/target platform, Gen-1/Gen-2, EOS population),
   `kpi` (requirement-defined metrics in pandas, each returning its source records),
   `mapping`, `metrics` (periods, date presets, KPIs), `analytics` (**all SQL lives here**),
-  `insights` (deterministic rules), `exporter` (ReportLab PDF).
+  `insights` (deterministic rules), `exporter` (ReportLab PDF),
+  `html_report` + `html_style` (single-file interactive HTML report).
 - `app/ui/` — `theme`, `charts` (Plotly, interactive/browser), `pdf_charts` (matplotlib,
   PDF static images — no bundled browser), `components` (filter sidebar, date-range
   controls, KPI rows, tables), `drilldown` (selectable charts → underlying records).
@@ -135,10 +136,20 @@ under Streamlit's AppTest in both counting modes.
   (All)): **Gen1 to Gen1** / **Gen1 to Gen2** blocks — every EOS account comes *from*
   Gen-1 hardware, so the account's own tag names the generation it lands *on*. Rows
   reuse `monthly_unique_tpids` / `monthly_migrations_completed` / `monthly_hosts`;
-  *migration start* and *engagement end* stay **blank** (`MATRIX_ROWS_UNAVAILABLE`) —
-  the export has neither date. Columns run from `config.EOS_MATRIX_START_FY` (FY26 =
-  Jul 2025) to the as-of month or the latest completion, **every month shown**. The
-  Trend Analysis "Fiscal years side by side" grid likewise lists all twelve months.
+  *migration start* is **derived** (`kpi.migration_start_dates`: earliest wave whose
+  Current State reads On Track/Done → Actual Start, else Planned Start, else Nom.
+  Approval); only *engagement end* stays **blank** (`MATRIX_ROWS_UNAVAILABLE`) — the
+  export has no such date. Columns run from `config.EOS_MATRIX_START_FY` (FY26 =
+  Jul 2025) to the as-of month or the latest completion, **every month shown**, each
+  fiscal year closing with its own total column. The Trend Analysis "Fiscal years
+  side by side" grid likewise lists all twelve months.
+- **Two export formats, one report.** `exporter.build_report` (PDF) and
+  `html_report.build_html_report` (single-file interactive HTML) take the same
+  arguments and select the same populations through the shared public helpers in
+  `exporter` (`headline`, `region_status`, `trend_table`, `account_rows`,
+  `format_accounts`, `labelled`, `clean`, `REPORTS`) — add a measure in one place,
+  not two. The HTML inlines the Plotly bundle, the CSS and its script, so it opens
+  offline from an email attachment; that is what makes it ~5 MB.
 - **Drill-down.** Charts use a category x-axis and `drilldown.normalize_bucket` so a
   Plotly month label ("2026-06-01") matches the record's period ("2026-06"); summary
   tables are `st.dataframe(on_select=...)` rows that select the same bucket.
