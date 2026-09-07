@@ -168,8 +168,9 @@ so it opens from a mail client's download folder on a machine with no network. I
 cleanly too. Expect a few megabytes: the charting library has to travel with it for any
 of that to work offline.
 
-It follows the dashboard where it counts. **Every chart and every headline tile opens the
-accounts behind it, and clicking a chart filters them** — a bar on the nominations trend
+It follows the dashboard where it counts. **Every chart opens the accounts behind it and
+clicking the chart filters them; the headline tiles are clickable too**, driving a single
+accounts panel beneath the row — a bar on the nominations trend
 narrows the accounts to that month, a doughnut slice to that state, a stacked‑bar segment
 or heatmap cell to that WW Region *and* stage; clicking again clears. The tiles gain a
 **This FY** row whenever the reporting period is something else; money reads `$2M` /

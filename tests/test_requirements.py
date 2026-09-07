@@ -1152,10 +1152,41 @@ def test_chart_buckets_match_the_rows_they_filter(html_ctx, matrix_fact):
     assert set(html_report._by_month(month_rows)) <= set(table["period"])
 
 
-def test_each_headline_tile_opens_its_own_accounts(html_doc):
-    for tile in ("New engagements", "Migrations completed", "On-track accounts",
-                 "ACR claimed"):
-        assert f"Accounts behind {tile}" in html_doc
+def test_the_headline_tiles_select_one_shared_accounts_panel(html_doc):
+    """Five accordions was five clicks to compare two numbers; this is one panel.
+
+    Each metric is counted at its own grain — Wave-1 rows per TPID for
+    engagements, completed *wave* records for hosts — so the tiles switch
+    between separate lists rather than filtering one merged table.
+    """
+    import re
+    # Only the document body: the inlined script mentions these attribute names
+    # too, in string literals.
+    body = html_doc.split("<main>", 1)[1].split("</main>", 1)[0]
+    groups = set(re.findall(r'data-tile-group="([^"]+)"', body))
+    assert groups
+    for group in groups:
+        tiles = re.findall(rf'data-tile="([^"]+)" data-tile-group="{group}"', body)
+        assert len(tiles) == 5                      # the five headline metrics
+        assert f'id="acc-{group}"' in body          # …one accordion between them
+        for pane in tiles:
+            assert f'data-pane="{pane}" data-pane-group="{group}"' in body
+            assert f'<table class="data" id="{pane}"' in body
+        # Exactly one tile starts selected, and its pane is the visible one.
+        pressed = re.findall(rf'data-tile-group="{group}"[^>]*aria-pressed="true"',
+                             body)
+        assert len(pressed) == 1
+    assert "Accounts behind" in body                # the accordion still says so
+
+
+def test_tiles_are_reachable_by_keyboard(html_doc):
+    """A tile that acts as a control has to behave like one."""
+    import re
+    body = html_doc.split("<main>", 1)[1].split("</main>", 1)[0]
+    for attrs in re.findall(r'<div class="kpi"([^>]*data-tile=[^>]*)>', body):
+        assert 'role="button"' in attrs
+        assert 'tabindex="0"' in attrs
+        assert "aria-pressed=" in attrs
 
 
 def test_the_supporting_detail_block_is_gone(html_doc):

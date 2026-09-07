@@ -86,6 +86,16 @@ def _slug(*parts: str) -> str:
     return "-".join(str(p) for p in parts if p)
 
 
+@dataclass(frozen=True)
+class _Tile:
+    """One headline metric: what it reads, and the accounts it opens."""
+    label: str
+    value: str
+    unit: str
+    pane: str = ""
+    badge: str = ""
+
+
 @dataclass
 class _Builder:
     """Accumulates the document body, the figure scripts and the contents list."""
@@ -183,13 +193,27 @@ def _integer_ticks(fig: go.Figure) -> None:
 # --------------------------------------------------------------------------- #
 # Building blocks
 # --------------------------------------------------------------------------- #
-def _kpi_tiles(tiles: list[tuple[str, str, str]]) -> str:
-    cells = "".join(
-        f'<div class="kpi"><div class="label">{esc(label)}</div>'
-        f'<div class="value">{esc(value)}</div>'
-        f'<div class="unit">{esc(unit)}</div></div>'
-        for label, value, unit in tiles)
-    return f'<div class="kpis">{cells}</div>'
+def _kpi_tiles(tiles: list["_Tile"], group: str = "") -> str:
+    """The headline row.  With a ``group`` the tiles select the accounts below.
+
+    Each metric counts a different thing at a different grain — new engagements
+    are Wave-1 rows per TPID, hosts are completed *wave* records — so the tiles
+    switch between five tables rather than filtering one: a single merged table
+    would have to pretend they share a grain.
+    """
+    cells = []
+    for index, tile in enumerate(tiles):
+        attrs = ""
+        if group:
+            attrs = (f' data-tile="{tile.pane}" data-tile-group="{group}"'
+                     f' data-tile-label="{esc(tile.label)}"'
+                     f' data-tile-count="{esc(tile.badge)}"'
+                     f' role="button" tabindex="0"'
+                     f' aria-pressed="{"true" if index == 0 else "false"}"')
+        cells.append(f'<div class="kpi"{attrs}><div class="label">{esc(tile.label)}'
+                     f'</div><div class="value">{esc(tile.value)}</div>'
+                     f'<div class="unit">{esc(tile.unit)}</div></div>')
+    return f'<div class="kpis">{"".join(cells)}</div>'
 
 
 def _table(frame: pd.DataFrame, table_id: str, *, numeric: set[str] | None = None,
@@ -303,6 +327,55 @@ def _accounts_panel(title: str, rows: pd.DataFrame, table_id: str, *,
                       open_=open_, anchor=f"acc-{table_id}")
 
 
+def _accounts_body(rows: pd.DataFrame, table_id: str, limit: int = 800
+                   ) -> tuple[str, int]:
+    """The searchable accounts table on its own, plus how many rows it stands for."""
+    if rows is None or getattr(rows, "empty", True):
+        return '<p class="empty">No accounts behind this.</p>', 0
+    frame = kpi.drilldown_frame(rows)
+    if frame.empty:
+        return '<p class="empty">No accounts behind this.</p>', 0
+    total = len(frame)
+    shown = frame.head(limit).map(plain)
+    note = (f'<p class="note">Showing the first {fmt_int(limit)} of '
+            f"{fmt_int(total)} accounts.</p>" if total > limit else "")
+    tools = (f'<div class="tools">'
+             f'<input type="search" data-filters="{table_id}" '
+             f'placeholder="Search these {fmt_int(len(shown))} rows…" '
+             f'aria-label="Search accounts">'
+             f'<span class="count" data-count-for="{table_id}">'
+             f'{fmt_int(len(shown))} rows</span></div>')
+    return note + tools + _table(shown, table_id), total
+
+
+def _tile_accounts(group: str, panes: list[tuple[str, str, pd.DataFrame]]) -> str:
+    """One accordion holding every tile's accounts, the tiles choosing which shows.
+
+    Five accordions for five tiles was five clicks to compare two numbers; this
+    is one panel that follows whichever tile is selected.
+    """
+    blocks, first_label, first_badge = [], "", "0"
+    for index, (label, table_id, rows) in enumerate(panes):
+        body, total = _accounts_body(rows, table_id)
+        badge = f"{fmt_int(total)} accounts" if total else "0"
+        if index == 0:
+            first_label, first_badge = label, badge
+        blocks.append(
+            f'<div class="tile-pane" data-pane="{table_id}" '
+            f'data-pane-group="{group}"{"" if index == 0 else " hidden"}>'
+            f"{body}</div>")
+    # One flex child, or the summary's gap opens a hole mid-sentence.
+    summary = (f'<span>Accounts behind <b data-tile-title="{group}">'
+               f"{esc(first_label)}</b></span>")
+    return (f'<details class="acc tiles" id="acc-{group}"><summary>{summary}'
+            f'<span class="badge" data-tile-badge="{group}">{first_badge}</span>'
+            f'</summary><div class="acc-body">'
+            '<p class="note">Pick a tile above to switch this to that metric\'s '
+            "accounts — each one is counted at its own grain, so they are "
+            "separate lists rather than one merged table.</p>"
+            f'{"".join(blocks)}</div></details>')
+
+
 def _drillable(doc: _Builder, *, heading: str, fig, rows: pd.DataFrame,
                buckets, table_id: str, mode: str = "x", height: int = 300,
                currency: bool = False, label: str = "") -> str:
@@ -374,22 +447,29 @@ def _summary_row(doc: _Builder, spec, pop, waves, start, end,
     """
     head = exporter.headline(pop, waves, start, end)
     noun = _unit_noun(spec)
-    doc.write(_kpi_tiles([
-        ("New engagements", fmt_int(head["engagements"].value), period_label),
-        ("Migrations completed", fmt_int(head["completed"].value), period_label),
-        (spec.unit_label, fmt_int(head["hosts"].value), f"Total {noun} deployed"),
-        ("On-track accounts", fmt_int(head["on_track"].value), "at latest wave — now"),
-        ("ACR claimed", fmt_currency(head["acr"].value), period_label),
-    ]))
-    panels = [("New engagements", "engagements"),
-              ("Migrations completed", "completed"),
-              (spec.unit_label, "hosts"),
-              ("On-track accounts", "on_track"),
-              ("ACR claimed", "acr")]
-    doc.write("".join(
-        _accounts_panel(f"Accounts behind {title}", head[key].records,
-                        _slug("kpi", spec.key, slug, key))
-        for title, key in panels))
+    group = _slug("kpis", spec.key, slug)
+    metrics_shown = [
+        ("New engagements", "engagements", fmt_int(head["engagements"].value),
+         period_label),
+        ("Migrations completed", "completed", fmt_int(head["completed"].value),
+         period_label),
+        (spec.unit_label, "hosts", fmt_int(head["hosts"].value),
+         f"Total {noun} deployed"),
+        ("On-track accounts", "on_track", fmt_int(head["on_track"].value),
+         "at latest wave — now"),
+        ("ACR claimed", "acr", fmt_currency(head["acr"].value), period_label),
+    ]
+    panes, tiles = [], []
+    for label, key, value, unit in metrics_shown:
+        table_id = _slug("kpi", spec.key, slug, key)
+        records = head[key].records
+        count = len(kpi.drilldown_frame(records)) if not getattr(
+            records, "empty", True) else 0
+        panes.append((label, table_id, records))
+        tiles.append(_Tile(label, value, unit, pane=table_id,
+                           badge=f"{fmt_int(count)} accounts" if count else "0"))
+    doc.write(_kpi_tiles(tiles, group=group))
+    doc.write(_tile_accounts(group, panes))
 
 
 def _by_month(rows: pd.DataFrame) -> list[str]:

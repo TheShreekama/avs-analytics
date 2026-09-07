@@ -174,9 +174,15 @@ under Streamlit's AppTest in both counting modes.
   and shows only matching rows. Modes: `x` (month/category), `label` (pie), `y`
   (horizontal bar), `trace-x` (stacked bar: trace = region, x = stage), `y-x` (heatmap).
   Bucket strings are computed in Python so the browser only compares strings; the search
-  box and the chart selection go through one filter so neither undoes the other. Each
-  headline tile also gets an `_accounts_panel` from its `Metric.records`. There is no
-  "Supporting detail" block — it was the same rows twice.
+  box and the chart selection go through one filter so neither undoes the other. There is
+  no "Supporting detail" block — it was the same rows twice.
+- **The headline tiles are the selector for one accounts panel.** `_kpi_tiles(tiles,
+  group=...)` marks each tile `role="button"` + `data-tile`; `_tile_accounts` writes one
+  accordion holding a hidden pane per metric, and the script shows the pane whose tile is
+  pressed, updating the summary's name and count. Five panels would be five clicks to
+  compare two numbers. They are separate panes rather than one filtered table **because
+  the metrics do not share a grain** — engagements are Wave-1 rows per TPID, hosts are
+  completed *wave* records — so merging them would have to pretend they do.
 - **Nodes vs Cores.** `html_report._unit_noun`: the AVS motions deploy **Nodes**, only
   `(From AVS)` moves **Cores**. One noun per report, used by the tiles and the trend
   titles so the two cannot disagree.

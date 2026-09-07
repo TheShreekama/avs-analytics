@@ -139,6 +139,25 @@ h4.sub {{ font-size: .95rem; margin: 1rem 0 .4rem; color: var(--ink); }}
                line-height: 1.15; margin-top: .15rem; }}
 .kpi .unit {{ font-size: .8rem; color: var(--muted); }}
 
+/* A tile that selects the accounts below says so by behaving like a control. */
+.kpi[data-tile] {{ cursor: pointer; transition: box-shadow .12s, border-color .12s,
+                   transform .12s; }}
+.kpi[data-tile]:hover {{ border-color: var(--accent);
+                         box-shadow: 0 2px 4px rgba(16,24,40,.08),
+                                     0 8px 22px rgba(16,24,40,.08);
+                         transform: translateY(-1px); }}
+.kpi[data-tile]:focus-visible {{ outline: 2px solid var(--primary);
+                                 outline-offset: 2px; }}
+.kpi[data-tile][aria-pressed="true"] {{ border-color: var(--primary);
+                                        background: #F3F8FD; }}
+.kpi[data-tile][aria-pressed="true"] .label {{ color: var(--primary-dark); }}
+.kpi[data-tile][aria-pressed="true"]::after {{
+  content: "▾"; position: absolute; right: .7rem; top: .6rem;
+  color: var(--primary); font-size: .8rem;
+}}
+.kpi[data-tile] {{ position: relative; }}
+details.acc.tiles > summary {{ background: #F7FAFD; }}
+
 /* ---------------------------------------------------------------- tables -- */
 .table-wrap {{ overflow-x: auto; border: 1px solid var(--border);
                border-radius: 10px; background: var(--card); }}
@@ -298,6 +317,30 @@ def script() -> str:
         });
         rows.forEach(function (r) { body.appendChild(r); });
       });
+    });
+  });
+
+  // ---- headline tiles pick which accounts the panel below shows -----------
+  document.querySelectorAll('.kpi[data-tile]').forEach(function (tile) {
+    function pick() {
+      var group = tile.getAttribute('data-tile-group');
+      var pane = tile.getAttribute('data-tile');
+      document.querySelectorAll('.kpi[data-tile-group="' + group + '"]')
+        .forEach(function (t) {
+          t.setAttribute('aria-pressed', t === tile ? 'true' : 'false');
+        });
+      document.querySelectorAll('[data-pane-group="' + group + '"]')
+        .forEach(function (p) { p.hidden = p.getAttribute('data-pane') !== pane; });
+      var title = document.querySelector('[data-tile-title="' + group + '"]');
+      if (title) title.textContent = tile.getAttribute('data-tile-label');
+      var badge = document.querySelector('[data-tile-badge="' + group + '"]');
+      if (badge) badge.textContent = tile.getAttribute('data-tile-count');
+      var box = document.getElementById('acc-' + group);
+      if (box) box.open = true;
+    }
+    tile.addEventListener('click', pick);
+    tile.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); }
     });
   });
 
