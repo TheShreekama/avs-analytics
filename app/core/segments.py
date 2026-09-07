@@ -25,6 +25,8 @@ import re
 
 import pandas as pd
 
+from .nulls import is_blank
+
 # --------------------------------------------------------------------------- #
 # Migration categories
 # --------------------------------------------------------------------------- #
@@ -129,7 +131,7 @@ def generation_from_tags(tag_values) -> str | None:
     """
     found = set()
     for value in tag_values:
-        if value is None or (isinstance(value, float) and pd.isna(value)):
+        if is_blank(value):
             continue
         compact = _compact(value)
         for gen, marker in _GEN_TAG_MARKERS:
@@ -143,7 +145,7 @@ def generation_from_tags(tag_values) -> str | None:
 
 def sku_codes(value) -> set[str]:
     """Normalised SKU codes found in a raw SKU cell ("AV36P Node" -> {'av36p'})."""
-    if value is None or (isinstance(value, float) and pd.isna(value)):
+    if is_blank(value):
         return set()
     return {"av" + m.group(1).lower() for m in _SKU_TOKEN_RE.finditer(str(value))}
 

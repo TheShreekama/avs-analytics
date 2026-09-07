@@ -10,6 +10,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from .nulls import is_blank
+
 
 @dataclass
 class Period:
@@ -155,7 +157,9 @@ def prior_equivalent_count(dates: pd.Series, as_of: pd.Timestamp, kind: str) -> 
 
 
 def pct_delta(curr: float, prior: float) -> float | None:
-    if prior in (0, None) or pd.isna(prior):
+    # ``prior in (0, None)`` compares before it tests for missingness, and
+    # ``pd.NA == 0`` is ``pd.NA`` — so the blank check has to come first.
+    if is_blank(curr) or is_blank(prior) or prior == 0:
         return None
     return round(100.0 * (curr - prior) / prior, 1)
 
@@ -192,7 +196,7 @@ def headline_kpis(fact: pd.DataFrame) -> dict:
 
 
 def fmt_currency(v: float) -> str:
-    if v is None or pd.isna(v):
+    if is_blank(v):
         return "—"
     a = abs(v)
     if a >= 1e9:
@@ -205,6 +209,6 @@ def fmt_currency(v: float) -> str:
 
 
 def fmt_int(v) -> str:
-    if v is None or pd.isna(v):
+    if is_blank(v):
         return "—"
     return f"{int(v):,}"

@@ -54,6 +54,13 @@ def build_customer_rollup(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFra
     out["account_id"] = first["account_id"]
     out["task_id"] = first["task_id"]          # representative
     out["n_waves"] = g.size()
+    if "source_file" in df.columns:
+        # One value for the whole dataset in the common case; only when waves
+        # really do span files is it worth walking each account's group.
+        seen = df["source_file"].dropna().unique()
+        out["source_file"] = (seen[0] if len(seen) <= 1 else
+                              g["source_file"].agg(
+                                  lambda s: ", ".join(sorted({v for v in s if v}))))
     out["phase"] = last["phase"]               # current/last wave
 
     # First-wave dates.

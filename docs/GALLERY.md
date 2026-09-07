@@ -10,7 +10,9 @@ Portfolio KPIs, status & regional distribution, delivery‑health charts, and to
 One page per migration category — **All AVS Migrations**, **EOS Migrations (All / Gen‑1 /
 Gen‑2)** and **AVS → Azure Native** — each with headline metrics, the current pipeline, a
 regional breakdown whose stacked‑bar segments drill into that region *and* stage, and
-detailed data at **one row per account (TPID)**.
+detailed data at **one row per account (TPID)**. **EOS Migrations (All)** additionally
+carries the monthly programme matrix — *Gen1 to Gen1* and *Gen1 to Gen2*, every month
+from July 2025 onwards including the empty ones.
 ![Status Report](screenshots/02_accounts_status.png)
 
 ## 2 · Trend Analysis
@@ -32,7 +34,9 @@ Build a comprehensive report or pick specific modules; one‑click local PDF + C
 ![Reports & Export](screenshots/12_reports.png)
 
 ## Data & Upload
-File upload with a per‑column fill/quality profile of the source file.
+One or more files loaded as a single dataset (an AVS export and an Azure‑native export,
+say), with a per‑column fill/quality profile, a per‑file contribution table, and a
+full diagnosis — stage, cause, origin, traceback — whenever an upload fails.
 ![Data & Upload](screenshots/10_data_upload.png)
 
 ## Column Mapping

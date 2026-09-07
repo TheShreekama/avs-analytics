@@ -100,6 +100,11 @@ FY_START_MONTH = int(os.environ.get("AVS_FY_START_MONTH", "7"))
 #: them: "All time" means FY25 onwards everywhere.
 REPORTING_FLOOR_FY = int(os.environ.get("AVS_REPORTING_FLOOR_FY", "25"))
 
+#: First fiscal year of the EOS month-by-month matrix.  The programme reports it
+#: from July 2025 — FY26 — rather than from the dashboard's FY25 data floor, so
+#: it is named separately from ``REPORTING_FLOOR_FY``.
+EOS_MATRIX_START_FY = int(os.environ.get("AVS_EOS_MATRIX_START_FY", "26"))
+
 DATE_PRESETS = [
     "This week", "Last week", "This month", "Last month", "This quarter",
     "Last 3 months", "Last 6 months", "This FY", "Last FY", "All time", "Custom",

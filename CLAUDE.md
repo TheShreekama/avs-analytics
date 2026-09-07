@@ -34,7 +34,8 @@ under Streamlit's AppTest in both counting modes.
 
 `Home.py` (root entry) → `app/main.py:run()` → `st.navigation` over `app/views/*`.
 
-- `app/core/` — `schema` (canonical fields + auto_map), `loader` (ingest + DuckDB),
+- `app/core/` — `schema` (canonical fields + auto_map), `loader` (ingest, multi-file
+  combining, staged failure diagnostics, DuckDB), `nulls` (NA-safe blank/mask helpers),
   `cleaning` (parsing/derivations/DQ), `rollup` (wave dedup → `customer` table),
   `segments` (migration category, source/target platform, Gen-1/Gen-2, EOS population),
   `kpi` (requirement-defined metrics in pandas, each returning its source records),
@@ -118,6 +119,26 @@ under Streamlit's AppTest in both counting modes.
   content fingerprint, shown in the sidebar, on Data & Upload and printed to the console
   at startup — the app is distributed by copying a folder, so "am I running the new code"
   needs an answer that does not rely on someone bumping a number.
+- **Uploads.** A dataset is **one or more files**: `loader.read_files` +
+  `combine_raw` stack them on headers matched case/whitespace-insensitively (first
+  spelling wins), a column a file lacks is blank for its rows, and every row keeps
+  `schema.SOURCE_FILE_COLUMN` → `fact["source_file"]`. `state.build_dataset` is the
+  entry point (`build_context` is the one-file shorthand). Every step runs inside
+  `loader.ingest_stage(...)`, so a failure arrives as an `IngestError` carrying the
+  stage, a plain-English cause, the app frame that raised it and the traceback —
+  rendered in full on Data & Upload, never as one line.
+- **`pd.NA` has no truth value.** Never write `if not value`, `value in (...)` or
+  hand a nullable mask to numpy: an unmapped column makes every value `pd.NA` and
+  the whole upload dies with "boolean value of NA is ambiguous". Use
+  `nulls.is_blank(value)` (missingness tested first) and `nulls.as_bool_mask(mask)`.
+- **EOS monthly matrix** (`kpi.monthly_matrix`, on Status Report → EOS Migrations
+  (All)): **Gen1 to Gen1** / **Gen1 to Gen2** blocks — every EOS account comes *from*
+  Gen-1 hardware, so the account's own tag names the generation it lands *on*. Rows
+  reuse `monthly_unique_tpids` / `monthly_migrations_completed` / `monthly_hosts`;
+  *migration start* and *engagement end* stay **blank** (`MATRIX_ROWS_UNAVAILABLE`) —
+  the export has neither date. Columns run from `config.EOS_MATRIX_START_FY` (FY26 =
+  Jul 2025) to the as-of month or the latest completion, **every month shown**. The
+  Trend Analysis "Fiscal years side by side" grid likewise lists all twelve months.
 - **Drill-down.** Charts use a category x-axis and `drilldown.normalize_bucket` so a
   Plotly month label ("2026-06-01") matches the record's period ("2026-06"); summary
   tables are `st.dataframe(on_select=...)` rows that select the same bucket.
