@@ -177,6 +177,11 @@ table.data thead th.fytot {{ background: #DCEAF8; color: var(--primary-dark); }}
 .tools input[type=search]:focus {{ outline: 2px solid var(--accent);
                                    outline-offset: -1px; }}
 .count {{ color: var(--muted); font-size: .82rem; }}
+.drill-note {{ color: var(--muted); font-size: .82rem; flex: 1 1 100%; }}
+.drill-note.on {{ color: var(--primary-dark); font-weight: 600; }}
+/* A chart whose points filter a table below it says so by the cursor. */
+.chart[data-drill] .js-plotly-plot .plotly .cursor-pointer,
+.chart[data-drill] .point, .chart[data-drill] .slice {{ cursor: pointer; }}
 
 button.btn {{
   font: inherit; font-size: .82rem; padding: .34rem .7rem; cursor: pointer;
@@ -296,21 +301,101 @@ def script() -> str:
     });
   });
 
-  // ---- per-table search --------------------------------------------------
-  document.querySelectorAll('input[data-filters]').forEach(function (input) {
-    var table = document.getElementById(input.getAttribute('data-filters'));
-    var count = document.querySelector('[data-count-for="' + input.getAttribute('data-filters') + '"]');
+  // ---- chart click -> filter that chart's accounts ------------------------
+  // Plotly's own click event, not Streamlit's selection bridge: in a plain
+  // browser a pie slice reports its label like any other point, so every chart
+  // here can filter the records beneath it.
+  var JOIN = ' \u00b7 ';                       // "Americas - Enterprise · Stage 4"
+  var state = {};                              // tableId -> {bucket, query}
+
+  function slot(id) {
+    if (!state[id]) state[id] = { bucket: null, query: '' };
+    return state[id];
+  }
+
+  function apply(id) {
+    var table = document.getElementById(id);
     if (!table) return;
+    var body = table.tBodies[0];
+    if (!body) return;
+    var st = slot(id), shown = 0;
+    Array.prototype.forEach.call(body.rows, function (row) {
+      var okBucket = !st.bucket || row.getAttribute('data-bucket') === st.bucket;
+      var okQuery = !st.query || row.textContent.toLowerCase().indexOf(st.query) !== -1;
+      var hit = okBucket && okQuery;
+      row.style.display = hit ? '' : 'none';
+      if (hit) shown++;
+    });
+    var count = document.querySelector('[data-count-for="' + id + '"]');
+    if (count) count.textContent = shown + ' of ' + body.rows.length + ' rows';
+    var note = document.querySelector('[data-drill-note="' + id + '"]');
+    if (note) {
+      note.textContent = st.bucket
+        ? 'Filtered to ' + st.bucket + ' — click the same point again to clear.'
+        : 'Click a point on the chart above to filter these rows.';
+      note.classList.toggle('on', !!st.bucket);
+    }
+    var clear = document.querySelector('[data-drill-clear="' + id + '"]');
+    if (clear) clear.hidden = !st.bucket;
+  }
+
+  function bucketOf(point, mode) {
+    var trace = point.data || {};
+    if (mode === 'label') return point.label;
+    if (mode === 'y') return point.y;
+    if (mode === 'y-x') return String(point.y) + JOIN + String(point.x);
+    if (mode === 'trace-x') return String(trace.name || '') + JOIN + String(point.x);
+    return point.x;                             // the default: a category axis
+  }
+
+  function wire(div) {
+    var id = div.getAttribute('data-drill');
+    var mode = div.getAttribute('data-drill-mode') || 'x';
+    if (!id || typeof div.on !== 'function') return false;
+    div.on('plotly_click', function (ev) {
+      var point = (ev.points || [])[0];
+      if (!point) return;
+      var value = bucketOf(point, mode);
+      if (value === undefined || value === null) return;
+      value = String(value);
+      var st = slot(id);
+      st.bucket = st.bucket === value ? null : value;   // second click clears
+      var box = document.getElementById('acc-' + id);
+      if (box && st.bucket) box.open = true;
+      apply(id);
+    });
+    return true;
+  }
+
+  // Plotly fits the graph div with .on only once newPlot has resolved, so the
+  // wiring retries briefly rather than assuming it is ready.
+  (function wireAll(attempt) {
+    var pending = [];
+    document.querySelectorAll('.chart[data-drill]').forEach(function (div) {
+      if (!wire(div)) pending.push(div);
+    });
+    if (pending.length && attempt < 40) {
+      setTimeout(function () { wireAll(attempt + 1); }, 100);
+    }
+  })(0);
+
+  document.querySelectorAll('[data-drill-clear]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var id = btn.getAttribute('data-drill-clear');
+      slot(id).bucket = null;
+      apply(id);
+    });
+  });
+
+  // ---- per-table search --------------------------------------------------
+  // The search box and the chart selection narrow the same rows, so both go
+  // through one filter rather than each overwriting the other's work.
+  document.querySelectorAll('input[data-filters]').forEach(function (input) {
+    var id = input.getAttribute('data-filters');
+    if (!document.getElementById(id)) return;
     input.addEventListener('input', function () {
-      var needle = input.value.toLowerCase();
-      var body = table.tBodies[0], shown = 0;
-      if (!body) return;
-      Array.prototype.forEach.call(body.rows, function (row) {
-        var hit = !needle || row.textContent.toLowerCase().indexOf(needle) !== -1;
-        row.style.display = hit ? '' : 'none';
-        if (hit) shown++;
-      });
-      if (count) count.textContent = shown + ' of ' + body.rows.length + ' rows';
+      slot(id).query = input.value.toLowerCase();
+      apply(id);
     });
   });
 

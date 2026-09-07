@@ -168,10 +168,12 @@ so it opens from a mail client's download folder on a machine with no network. I
 cleanly too. Expect a few megabytes: the charting library has to travel with it for any
 of that to work offline.
 
-It follows the dashboard where it counts: every drill‑down opens the **accounts** behind
-the number, not a second copy of the chart; the tiles gain a **This FY** row whenever the
-reporting period is something else; money reads `$2M` / `$840K` on axes as well as tiles;
-and a **Wide** toggle sets the reading width.
+It follows the dashboard where it counts. **Every chart and every headline tile opens the
+accounts behind it, and clicking a chart filters them** — a bar on the nominations trend
+narrows the accounts to that month, a doughnut slice to that state, a stacked‑bar segment
+or heatmap cell to that WW Region *and* stage; clicking again clears. The tiles gain a
+**This FY** row whenever the reporting period is something else; money reads `$2M` /
+`$840K` on axes as well as tiles; and a **Wide** toggle sets the reading width.
 
 CSV exports of the cleaned data, the insights and the inconsistency review are available
 on the same page.

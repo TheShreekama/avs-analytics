@@ -96,6 +96,15 @@ def render() -> None:
         "reported separately and is unaffected.")
 
     # ------------------------------------------------------------------ #
+    section("Cores, nodes and hosts")
+    st.markdown(
+        "One column — **Total Cores** — reported under the noun that fits the motion. "
+        "The AVS motions deploy **nodes** onto AVS, so their reports say *Hosts "
+        "Migrated* and *Total Nodes deployed*. Only the **AVS → Azure Native** motion "
+        "moves **cores** to Azure-native services, and only it says *Cores Migrated* "
+        "and *Total Cores*. The number is identical either way; the noun is not.")
+
+    # ------------------------------------------------------------------ #
     section("Risk")
     st.markdown(
         "Internally, every nomination carries a derived delivery-health status "
@@ -505,12 +514,16 @@ def render() -> None:
         "opens from a mail client's download folder on a machine with no network, "
         "which is where it will be read. That is also why it is a few megabytes: "
         "the charting library has to travel with it.\n\n"
-        "It follows the dashboard in the ways that matter: every drill-down opens "
-        "the **accounts** the metric counted (the same `drilldown_frame` the screen "
-        "uses) alongside the chart's own monthly numbers; the headline tiles gain a "
-        "**This FY** row above them whenever the selected period is something else; "
-        "and money reads `$2M` / `$840K` on axes as well as tiles. A **Wide** toggle "
-        "sets the reading width, and the header carries one pill — the period.\n\n"
+        "It follows the dashboard in the ways that matter. **Every chart, and every "
+        "headline tile, opens the accounts behind it** — the same records the metric "
+        "counted — and **clicking a chart filters them**: a bar on the nominations "
+        "trend narrows the accounts to that month, a doughnut slice to that state, a "
+        "stacked-bar segment or heatmap cell to that WW Region *and* stage. Clicking "
+        "the same point again clears it, and the search box narrows whatever is "
+        "showing. The headline tiles gain a **This FY** row above them whenever the "
+        "selected period is something else; money reads `$2M` / `$840K` on axes as "
+        "well as tiles. A **Wide** toggle sets the reading width, and the header "
+        "carries one pill — the period.\n\n"
         "*The PDF* is built in two parts.\n\n"
         "*Part 1 — Executive reports.* One page-set per migration motion, each "
         "mirroring its Status Report page:\n\n"
