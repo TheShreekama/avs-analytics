@@ -4,8 +4,8 @@
 
 Upload your AVS nominations export — one file, or several that make up one dataset
 (CSV / XLSX / XLS) — and instantly get executive dashboards, trend analysis, a
-deterministic insights engine, and a one‑click executive PDF — all running entirely
-on your own machine.
+deterministic insights engine, and one‑click exports — a leadership PDF and a single
+interactive HTML file you can email — all running entirely on your own machine.
 
 ![Overview](docs/screenshots/01_overview.png)
 
@@ -80,7 +80,7 @@ troubleshooting: **[`docs/INSTALL.md`](docs/INSTALL.md)**.
 | 7 | **Trend Analysis → Cores Migrated** | The same measure for AVS → Azure Native, under the noun that motion uses |
 | 8 | **Trend Analysis → Migrations Completed** | Unique TPIDs whose latest wave completed, per month, in every category |
 | 💡 | **Insights** | Full deterministic insights engine, grouped by category |
-| 📄 | **Reports & Export** | A two‑part management **PDF** — three executive reports plus their drill‑downs, with contents, bookmarks and cross‑links; CSV exports |
+| 📄 | **Reports & Export** | One report, two formats: a two‑part management **PDF** (three executive reports plus drill‑downs, with contents, bookmarks and cross‑links) and a single self‑contained **interactive HTML** file to email; CSV exports |
 | 📖 | **Methodology & Logic** | Plain‑language reference for every metric, status, scope and insight rule |
 
 Every report has **Region / Status / path filters** and a **date‑range preset**
@@ -146,14 +146,30 @@ in the sidebar:
 This applies across all reports, so headline numbers reflect real accounts rather than
 inflated wave counts. The sidebar shows both totals (e.g. *Waves: 1,240 · Accounts: 815*).
 
-## 📄 Reports & PDF Export
+## 📄 Reports & Export
 
-The **Reports** page produces a leadership‑ready PDF. Choose a **comprehensive** report
-(all modules) or **select specific modules** (Overview, Approved, Closed, AV36 EOS, Trends,
-AVS→Azure, Insights, Tables). Every PDF includes a cover, executive summary, KPI grid,
-charts, ranked insights and a generation timestamp. Charts are rendered locally with
-**matplotlib** (no bundled browser) — no internet needed. CSV exports of the cleaned data
-and insights are available too.
+The **Reports & Export** page produces the same leadership‑ready report in two formats.
+Pick which of the three executive reports to include, whether to attach the drill‑down
+detail, and the cover text; both formats then select the same populations through the
+same code, so they cannot disagree.
+
+### PDF — to print, file and circulate
+A two‑part document: the three executive reports up front, the numbers and account
+records behind them after, with a cover, contents, bookmarks, page numbers and links
+both ways. Charts are rendered locally with **matplotlib** — no bundled browser, no
+internet.
+
+### Interactive HTML — to email
+**One self‑contained file.** The dashboard's own look and feel, with the charts still
+interactive (hover, zoom, click a legend to hide a series), the drill‑downs still
+accordions, the tables sortable and searchable, and a contents panel that follows you
+down the page. Charts, styles and data are all *inside* the file — nothing is fetched —
+so it opens from a mail client's download folder on a machine with no network. It prints
+cleanly too. Expect a few megabytes: the charting library has to travel with it for any
+of that to work offline.
+
+CSV exports of the cleaned data, the insights and the inconsistency review are available
+on the same page.
 
 ---
 
@@ -210,7 +226,8 @@ app/core/   loader → cleaning → DuckDB fact table
             ├─ analytics  (DuckDB SQL aggregations, filters, trends, Sankey)
             ├─ metrics    (WTD/MTD/QTD/YTD, KPIs)
             ├─ insights   (deterministic rules)
-            └─ exporter   (ReportLab PDF + local chart images)
+            ├─ exporter   (ReportLab PDF + local chart images)
+            └─ html_report(single-file interactive HTML, inlined Plotly)
 ```
 
 - **DuckDB** runs all aggregations in‑process for speed at the 500k‑row / 100‑column target.

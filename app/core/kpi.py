@@ -50,6 +50,12 @@ REPORTED_STATES = (STATE_ON_TRACK, STATE_COMPLETED)
 #: "On Track", "On-Track", "on  track" — the Current State column is free text.
 _ON_TRACK_PATTERN = r"on\s*-?\s*track"
 
+#: Current State values that mean the migration is under way or finished — the
+#: waves a *migration start* can be read from.  Matched against the raw column,
+#: not the derived state: a wave reading "Done" has started by definition,
+#: whatever its Migration Status code says.
+_STARTED_STATE_PATTERN = _ON_TRACK_PATTERN + r"|done|complete"
+
 #: Migration Status codes that describe a migration still in flight:
 #: 1 - Validating Commitment & Initial Scope, 2 - Executing Pre-Requisites,
 #: 3 - Finalize Scope, 4 - Executing Migration.  Everything else is deferred (5),
@@ -168,6 +174,65 @@ def migration_starts(fact: pd.DataFrame, start=None, end=None) -> Metric:
                 .groupby("tpid_key", as_index=False, sort=False).first())
     hit = starts[in_window(starts["actual_start_date"], start, end)]
     return Metric(len(hit), "customers", hit)
+
+
+def migration_start_dates(fact: pd.DataFrame) -> pd.DataFrame:
+    """One row per TPID: the date its migration started, and where that came from.
+
+    The export has no "migration started" field, so it is derived, per the
+    programme's rule: take the account's **earliest wave whose Current State
+    reads "On Track" or "Done"** — the first wave that was actually under way —
+    and read its **Actual Start Date**, falling back to **Planned Start Date**
+    and then to **Nom. Approval Date** when the earlier ones are blank.
+
+    An account with no such wave has not started and is not counted.  The
+    returned frame carries ``migration_start_date`` and ``start_date_source``
+    (which column the date came from), so a reader can see how firm the number
+    is rather than having to trust it.
+    """
+    if fact.empty:
+        return fact
+    started = _started_state(fact)
+    rows = _ordered(fact[started])
+    if rows.empty:
+        return rows
+    firsts = rows.groupby("tpid_key", as_index=False, sort=False).first()
+
+    out = firsts.copy()
+    out["migration_start_date"] = pd.NaT
+    out["start_date_source"] = pd.NA
+    for column, label in (("actual_start_date", "Actual Start Date"),
+                          ("planned_start_date", "Planned Start Date"),
+                          ("approval_date", "Nom. Approval Date")):
+        if column not in out.columns:
+            continue
+        value = pd.to_datetime(out[column], errors="coerce")
+        fill = out["migration_start_date"].isna() & value.notna()
+        out.loc[fill, "migration_start_date"] = value[fill]
+        out.loc[fill, "start_date_source"] = label
+    return out[out["migration_start_date"].notna()].reset_index(drop=True)
+
+
+def _started_state(df: pd.DataFrame) -> pd.Series:
+    """Waves whose Current State says the work is under way or finished."""
+    if df.empty or "current_state" not in df.columns:
+        return pd.Series(False, index=df.index)
+    return (df["current_state"].astype("string")
+            .str.contains(_STARTED_STATE_PATTERN, case=False, regex=True, na=False))
+
+
+def monthly_migration_starts(fact: pd.DataFrame, start=None, end=None
+                             ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Unique TPIDs per month by their derived migration start date."""
+    rows = migration_start_dates(fact)
+    if rows.empty:
+        return _empty_trend("Migration Starts"), rows
+    rows = rows[in_window(rows["migration_start_date"], start, end)].copy()
+    if rows.empty:
+        return _empty_trend("Migration Starts"), rows
+    rows["month"] = _month(rows["migration_start_date"])
+    summary = rows.groupby("month", as_index=False).agg(value=("tpid_key", "nunique"))
+    return _finish_trend(summary, "Migration Starts"), rows
 
 
 def hosts_migrated(fact: pd.DataFrame, start=None, end=None) -> Metric:
@@ -297,12 +362,11 @@ MATRIX_ROWS: tuple[str, ...] = (
 )
 
 #: Rows the source export cannot answer, kept in place and left blank rather
-#: than filled with a number that would be a guess.  A nomination records when
-#: an account was approved and when a wave *ended*; nothing in the file marks
-#: the day migration work began, nor the day an engagement was closed out as
-#: distinct from its last wave completing.
+#: than filled with a number that would be a guess.  Nothing in the file marks
+#: the day an engagement was closed out as distinct from its last wave
+#: completing.  (*Migration start* used to be here too; it is now derived — see
+#: ``migration_start_dates``.)
 MATRIX_ROWS_UNAVAILABLE: frozenset[str] = frozenset({
-    "Total number of migration start",
     "Total number of engagement end",
 })
 
@@ -342,13 +406,16 @@ def matrix_month_span(fact: pd.DataFrame, start, as_of=None) -> list[pd.Period]:
 
 def monthly_matrix(fact: pd.DataFrame, months: list[pd.Period],
                    firsts: pd.DataFrame | None = None,
-                   lasts: pd.DataFrame | None = None) -> pd.DataFrame:
-    """The five programme measures as rows, one column per month.
+                   lasts: pd.DataFrame | None = None,
+                   fy_start_month: int = 7) -> pd.DataFrame:
+    """The five programme measures as rows, one column per month plus FY totals.
 
     Every number comes from the same functions the dashboards and trends use —
-    new engagements from Wave-1 approval dates, migration ends from an account's
-    latest wave completing, hosts from Total Cores over completed records — so
-    the grid reconciles with the rest of the report by construction.
+    new engagements from Wave-1 approval dates, starts from the derived
+    migration start date, migration ends from an account's latest wave
+    completing, hosts from Total Cores over completed records — so the grid
+    reconciles with the rest of the report by construction.  Each fiscal year
+    closes with its own total column.
     """
     if firsts is None or lasts is None:
         waves = wave_index(fact)
@@ -356,25 +423,63 @@ def monthly_matrix(fact: pd.DataFrame, months: list[pd.Period],
         lasts = waves.last if lasts is None else lasts
 
     engagements, _ = monthly_unique_tpids(fact, "approval_date", firsts=firsts)
+    starts, _ = monthly_migration_starts(fact)
     ends, _ = monthly_migrations_completed(fact, lasts=lasts)
     hosts, _ = monthly_hosts(fact)
     by_row = {
         "Total number of new engagement": _by_period(engagements, "Nominations"),
+        "Total number of migration start": _by_period(starts, "Migration Starts"),
         "Total number of migration end": _by_period(ends, "Migrations Completed"),
         "Number of hosts migrated": _by_period(hosts, "Hosts"),
     }
 
-    columns = [m.strftime(MATRIX_MONTH_FORMAT) for m in months]
-    data = []
+    data = {}
     for label in MATRIX_ROWS:
         if label in MATRIX_ROWS_UNAVAILABLE:
-            data.append([""] * len(months))
+            data[label] = [None] * len(months)
             continue
         counts = by_row.get(label, {})
-        data.append([f"{int(counts.get(str(m), 0)):,}" for m in months])
-    out = pd.DataFrame(data, columns=columns)
-    out.insert(0, "Measure", list(MATRIX_ROWS))
+        data[label] = [float(counts.get(str(m), 0)) for m in months]
+    return _matrix_frame(data, months, fy_start_month)
+
+
+def _matrix_frame(data: dict[str, list], months: list[pd.Period],
+                  fy_start_month: int) -> pd.DataFrame:
+    """Lay the measures out as rows, with a total column closing each fiscal year.
+
+    The totals sit *inside* the month sequence rather than all at the end, so
+    each fiscal year reads as its own block: Jul → Jun, then that year's total,
+    then the next year.  Every measure is a per-month count of distinct things
+    (a TPID lands in exactly one month; cores are summed), so a year's total is
+    simply the sum of its months.
+    """
+    labels = [m.strftime(MATRIX_MONTH_FORMAT) for m in months]
+    fy = [metrics.fiscal_year_label(m.to_timestamp(), fy_start_month) for m in months]
+
+    columns: list[str] = []
+    values: dict[str, list] = {label: [] for label in data}
+    for index, (month_label, year) in enumerate(zip(labels, fy)):
+        columns.append(month_label)
+        for label, series in data.items():
+            values[label].append(series[index])
+        closes_year = index == len(months) - 1 or fy[index + 1] != year
+        if not closes_year:
+            continue
+        columns.append(f"{year} Total")
+        for label, series in data.items():
+            spans = [series[i] for i, y in enumerate(fy) if y == year]
+            total = None if any(v is None for v in spans) else sum(spans)
+            values[label].append(total)
+
+    out = pd.DataFrame(
+        [[_matrix_cell(v) for v in values[label]] for label in data], columns=columns)
+    out.insert(0, "Measure", list(data))
     return out
+
+
+def _matrix_cell(value) -> str:
+    """A matrix cell: a thousands-separated integer, or blank for "not known"."""
+    return "" if value is None else f"{int(round(value)):,}"
 
 
 def _by_period(table: pd.DataFrame, value_col: str) -> dict[str, float]:
