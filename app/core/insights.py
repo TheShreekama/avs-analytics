@@ -97,11 +97,16 @@ def generate_insights(fact: pd.DataFrame, region_dim: str = "region_geo") -> lis
         med = closed_fact.groupby(region_dim)["cycle_time_days"].median()
         med = med[closed_fact.groupby(region_dim).size() >= 2]
         if not med.empty:
+            # ``med`` is one median per region, so the comparison figure is the
+            # median *of those regional medians* — not the median across every
+            # nomination, which is a different number.  Say which it is.
             fastest = med.idxmin()
             out.append(Insight(
                 "Closures", "Fastest-closing region",
-                f"**{fastest}** closes nominations fastest "
-                f"(median {med.min():.0f} days vs {med.median():.0f} overall).",
+                f"**{fastest}** closes nominations fastest — a median cycle time "
+                f"of {med.min():.0f} days, against {med.median():.0f} days for "
+                f"the typical region. Regions with fewer than two closed "
+                f"nominations are not ranked.",
                 POSITIVE, f"{med.min():.0f}d"))
 
     # ---- Approval velocity ------------------------------------------------ #

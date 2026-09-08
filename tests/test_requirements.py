@@ -1097,7 +1097,7 @@ def test_underlying_data_shows_the_accounts_not_just_the_chart_numbers(html_doc)
     """Same as the app's drill-down: the records the metric counted."""
     assert "Underlying accounts —" in html_doc
     assert "Monthly numbers —" in html_doc             # the counts are kept too
-    assert "records</span>" in html_doc                # badged by record count
+    assert "accounts</span>" in html_doc               # badged by account count
     assert "Accounts by state" in html_doc
 
 
@@ -1113,3 +1113,105 @@ def test_money_axes_are_written_in_k_and_m(html_ctx):
 def test_the_report_offers_a_wide_reading_mode(html_doc):
     assert 'id="toggle-width"' in html_doc
     assert "--page-w" in html_doc and "body.wide" in html_doc
+
+
+# --------------------------------------------------------------------------- #
+# Every chart carries the accounts it was drawn from, and filters them
+# --------------------------------------------------------------------------- #
+def test_every_chart_is_wired_to_an_accounts_table(html_doc):
+    """A chart with no drill target is a number the reader cannot open."""
+    import re
+    charts = re.findall(r'<div class="chart" id="(fig\d+)"([^>]*)>', html_doc)
+    assert charts
+    undrilled = [c for c, attrs in charts if "data-drill=" not in attrs]
+    # Only the EOS matrix and the generation table are chartless; every figure
+    # the report draws opens its own accounts.
+    assert not undrilled, f"charts with no accounts table: {undrilled}"
+    for _fig, attrs in charts:
+        table = re.search(r'data-drill="([^"]+)"', attrs).group(1)
+        assert f'<table class="data" id="{table}"' in html_doc
+        assert f'id="acc-{table}"' in html_doc          # the click can open it
+
+
+def test_chart_buckets_match_the_rows_they_filter(html_ctx, matrix_fact):
+    """The bucket written on a row is the value a click on the chart reports."""
+    from app.core import html_report
+
+    waves = kpi.wave_index(matrix_fact)
+    rows = html_report._region_stage_rows(waves.last)
+    buckets = html_report._by_region_stage(rows)
+    # "Americas - Enterprise · Stage 7" — WW Region, the separator the script
+    # uses, then the stage code the axis carries.
+    assert all(html_report._REGION_STAGE_JOIN in b for b in buckets)
+    region, stage = buckets[0].split(html_report._REGION_STAGE_JOIN)
+    assert region == "Americas - Enterprise"
+    assert stage.startswith("Stage ")
+
+    # …and a monthly chart buckets by the period string its x-axis is drawn from.
+    table, month_rows = kpi.monthly_unique_tpids(matrix_fact, "approval_date")
+    assert set(html_report._by_month(month_rows)) <= set(table["period"])
+
+
+def test_the_headline_tiles_select_one_shared_accounts_panel(html_doc):
+    """Five accordions was five clicks to compare two numbers; this is one panel.
+
+    Each metric is counted at its own grain — Wave-1 rows per TPID for
+    engagements, completed *wave* records for hosts — so the tiles switch
+    between separate lists rather than filtering one merged table.
+    """
+    import re
+    # Only the document body: the inlined script mentions these attribute names
+    # too, in string literals.
+    body = html_doc.split("<main>", 1)[1].split("</main>", 1)[0]
+    groups = set(re.findall(r'data-tile-group="([^"]+)"', body))
+    assert groups
+    for group in groups:
+        tiles = re.findall(rf'data-tile="([^"]+)" data-tile-group="{group}"', body)
+        assert len(tiles) == 5                      # the five headline metrics
+        assert f'id="acc-{group}"' in body          # …one accordion between them
+        for pane in tiles:
+            assert f'data-pane="{pane}" data-pane-group="{group}"' in body
+            assert f'<table class="data" id="{pane}"' in body
+        # Exactly one tile starts selected, and its pane is the visible one.
+        pressed = re.findall(rf'data-tile-group="{group}"[^>]*aria-pressed="true"',
+                             body)
+        assert len(pressed) == 1
+    assert "Accounts behind" in body                # the accordion still says so
+
+
+def test_tiles_are_reachable_by_keyboard(html_doc):
+    """A tile that acts as a control has to behave like one."""
+    import re
+    body = html_doc.split("<main>", 1)[1].split("</main>", 1)[0]
+    for attrs in re.findall(r'<div class="kpi"([^>]*data-tile=[^>]*)>', body):
+        assert 'role="button"' in attrs
+        assert 'tabindex="0"' in attrs
+        assert "aria-pressed=" in attrs
+
+
+def test_the_supporting_detail_block_is_gone(html_doc):
+    """Superseded: every chart now carries its own accounts."""
+    assert "Supporting detail" not in html_doc
+
+
+def test_avs_reports_call_the_cores_column_nodes(html_ctx):
+    """Only the "(From AVS)" motion moves cores; the AVS motions deploy nodes."""
+    from app.core import exporter as exp, html_report
+    assert html_report._unit_noun(exp._BY_KEY["eos"]) == "Nodes"
+    assert html_report._unit_noun(exp._BY_KEY["avs"]) == "Nodes"
+    assert html_report._unit_noun(exp._BY_KEY["native"]) == "Cores"
+
+    doc = html_report.build_html_report(html_ctx, reports=["eos"],
+                                        drilldown=False).decode("utf-8")
+    assert "Total Nodes deployed" in doc
+    assert "(Total Nodes)" in doc
+    assert "Total Cores, completed" not in doc
+
+
+def test_the_fastest_closing_insight_says_what_it_compares_against(html_ctx):
+    """It ranks regional medians, so the comparison is the typical region."""
+    from app.core import insights as ins
+    text = " ".join(i.detail for i in ins.generate_insights(html_ctx.fact))
+    if "closes nominations fastest" in text:
+        assert "for the typical region" in text
+        assert "fewer than two closed" in text
