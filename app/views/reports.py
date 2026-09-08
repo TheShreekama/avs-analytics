@@ -31,6 +31,10 @@ def render() -> None:
     date_filter = components.page_date_filter(ctx, "rep", "created_date", table=table)
     filters, where = components.filter_sidebar(
         ctx, ["region_geo"], table=table, date_filter=date_filter)
+    # The same filters without the period: the programme matrix spans the whole
+    # programme whatever window the rest of the report is cut to.
+    all_time_where = analytics.build_where(
+        {k: v for k, v in filters.items() if k != "_date"})
     scope_label = "Filtered view" if where else "All data"
     n = analytics.total_rows(ctx.con, where)
     window = ((date_filter["start"], date_filter["end"]) if date_filter else (None, None))
@@ -49,7 +53,7 @@ def render() -> None:
                 selected.append(spec.key)
             st.caption(spec.source)
 
-    subheading("Supporting detail")
+    subheading("Supporting detail (PDF)")
     d1, d2 = st.columns([2, 3])
     with d1:
         drilldown = st.checkbox(
@@ -91,8 +95,7 @@ def render() -> None:
     if not ready:
         st.info("Tick at least one report above.")
     kw = dict(title=title or "AVS Migration Analytics", subtitle=subtitle,
-              period_label=period_label, date_window=window, drilldown=drilldown,
-              appendices=appendices)
+              period_label=period_label, date_window=window, appendices=appendices)
     stamp = f"{datetime.now():%Y%m%d_%H%M}"
 
     pdf_col, html_col = st.columns(2)
@@ -104,7 +107,7 @@ def render() -> None:
                      disabled=not ready):
             with st.spinner("Rendering PDF…"):
                 st.session_state["_rep_pdf"] = exporter.build_report(
-                    ctx, where, scope_label, selected,
+                    ctx, where, scope_label, selected, drilldown=drilldown,
                     max_drilldown_rows=max_rows, **kw)
                 st.session_state["_rep_name"] = f"AVS_Report_{stamp}.pdf"
             st.success("PDF ready — download below.")
@@ -122,17 +125,12 @@ def render() -> None:
         st.caption("Best for emailing. **One self-contained file** — charts, "
                    "styles and data are all inside it, so it opens with no "
                    "network and nothing to install.")
-        html_rows = st.slider(
-            "Account rows per report", 100, 5000, html_report.MAX_ACCOUNT_ROWS, 100,
-            key="rep_html_rows", disabled=not drilldown,
-            help="An HTML table scrolls and searches, so it holds far more than "
-                 "the PDF can. More rows means a larger attachment.")
         if st.button("🌐 Generate HTML", type="primary", width="stretch",
                      disabled=not ready):
             with st.spinner("Rendering interactive report…"):
                 st.session_state["_rep_html"] = html_report.build_html_report(
                     ctx, where, scope_label, selected,
-                    max_account_rows=html_rows, **kw)
+                    all_time_where=all_time_where, **kw)
                 st.session_state["_rep_html_name"] = f"AVS_Report_{stamp}.html"
             st.success("HTML ready — download below.")
         if st.session_state.get("_rep_html"):
