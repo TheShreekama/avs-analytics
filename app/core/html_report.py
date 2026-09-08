@@ -38,11 +38,6 @@ from .metrics import fmt_currency, fmt_int
 _PLOT_CONFIG = {"displaylogo": False, "responsive": True,
                 "modeBarButtonsToRemove": ["lasso2d", "select2d"]}
 
-#: Account rows written per report.  Far larger than the PDF's 300: an HTML
-#: table scrolls and searches, so the limit is file size, not readability.
-MAX_ACCOUNT_ROWS = 2000
-
-
 # --------------------------------------------------------------------------- #
 # Small helpers
 # --------------------------------------------------------------------------- #
@@ -644,7 +639,13 @@ def _offerings(doc: _Builder, spec, pop) -> None:
 
 
 def _eos_matrix(doc: _Builder, ctx, pop) -> None:
-    """The programme's month-by-month grid, exactly as the EOS dashboard shows it."""
+    """The programme's month-by-month grid, exactly as the EOS dashboard shows it.
+
+    ``pop`` is deliberately the population the reporting period never narrowed:
+    like the dashboard's grid, this one runs from a fixed July start to the
+    as-of date whatever period the rest of the report covers, because a month
+    with no nominations is itself the number being reported.
+    """
     start = metrics.named_fiscal_year_start(EOS_MATRIX_START_FY, FY_START_MONTH)
     blocks = []
     for generation, title in ((segments.GEN_1, "Gen1 to Gen1"),
@@ -664,11 +665,13 @@ def _eos_matrix(doc: _Builder, ctx, pop) -> None:
     doc.write(_card(
         "Monthly programme matrix",
         f"From {start:%b %Y} to {ctx.as_of:%b %Y}, every month included, each "
-        "fiscal year closing with its own total column. Blocks are the generation "
-        "each account is refreshing on to — all EOS accounts are coming from "
-        "Gen-1 hardware. Migration start is derived (earliest wave reading On "
-        "Track or Done → Actual Start Date, else Planned Start, else Nom. "
-        "Approval); engagement end is blank, as the export does not record it.",
+        "fiscal year closing with its own total column — the whole programme, "
+        "not narrowed by the reporting period the rest of this report uses. "
+        "Blocks are the generation each account is refreshing on to — all EOS "
+        "accounts are coming from Gen-1 hardware. Migration start is derived "
+        "(earliest wave reading On Track or Done → Actual Start Date, else "
+        "Planned Start, else Nom. Approval); engagement end repeats migration "
+        "end, the closest the export comes to it.",
         "".join(blocks)))
 
 
@@ -716,28 +719,6 @@ def _insights(doc: _Builder, spec, pop) -> None:
         "the Insights page uses.", f'<ul class="insights">{entries}</ul>'))
 
 
-def _accounts(doc: _Builder, spec, pop, waves, max_rows: int) -> None:
-    """The account records, at the grain every unique-TPID metric is counted at."""
-    rows, layout, total = exporter.account_rows(pop, waves, spec.key == "eos")
-    if rows.empty:
-        doc.write(_card("Account records", "",
-                        '<p class="empty">No accounts to list.</p>'))
-        return
-    shown = rows.head(max_rows)
-    # ``plain`` not ``esc``: ``_table`` escapes every cell, and escaping twice
-    # renders "Ação & Café" as "Ação &amp; Café".
-    frame = exporter.format_accounts(shown, layout, escape=plain)
-    note = ("One row per account at its latest wave — the grain every unique-TPID "
-            "metric in this report is counted at. Sorted by region, largest ACR "
-            "first; click any column header to re-sort.")
-    if total > max_rows:
-        note += (f" Showing the {fmt_int(max_rows)} largest of {fmt_int(total)} "
-                 "accounts by ACR — export the full set as CSV from the app.")
-    doc.write(_card("Account records", note, _searchable_table(
-        frame, _slug("acct", spec.key),
-        numeric={"Cores", "ACR", "Waves"})))
-
-
 # --------------------------------------------------------------------------- #
 # Assembly
 # --------------------------------------------------------------------------- #
@@ -762,8 +743,8 @@ def _this_fy(ctx, start, end) -> tuple[tuple | None, str]:
     return (fy_start, fy_end), label
 
 
-def _report(doc: _Builder, ctx, fact: pd.DataFrame, spec, start, end,
-            period_label: str, drilldown: bool, max_rows: int,
+def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec,
+            start, end, period_label: str,
             fy_window=None, fy_label: str = "") -> None:
     pop = segments.population(fact, spec.category)
     anchor = f"rpt-{spec.key}"
@@ -781,7 +762,9 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, spec, start, end,
     waves = kpi.wave_index(pop)
     _summary(doc, spec, pop, waves, start, end, period_label, fy_window, fy_label)
     if spec.key == "eos":
-        _eos_matrix(doc, ctx, pop)
+        # The matrix is the programme's own grid, so it is drawn from rows the
+        # reporting period never touched — see :func:`_eos_matrix`.
+        _eos_matrix(doc, ctx, segments.population(all_time, spec.category))
     _trends(doc, spec, pop, waves, start, end)
     _pipeline(doc, spec, pop, waves)
     if spec.key == "native":
@@ -790,11 +773,9 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, spec, start, end,
     if spec.breakdown:
         _generations(doc, fact, spec, start, end)
     _insights(doc, spec, pop)
-    if drilldown:
-        # No "Supporting detail" block any more: every chart above carries the
-        # accounts it was drawn from, so the only thing left to add is the
-        # complete account list for the report.
-        _accounts(doc, spec, pop, waves, max_rows)
+    # No account list closes the report: every chart above already opens the
+    # accounts it was drawn from, so a final table of all of them was the same
+    # rows once more — and the bulk of the file.
     doc.write('<p class="toplink"><a href="#top">↑ Back to contents</a></p>'
               "</section>")
 
@@ -830,14 +811,19 @@ def build_html_report(ctx, where: str = "", scope_label: str = "All data",
                       subtitle: str = "Management Report",
                       period_label: str = "All dates in the dataset",
                       date_window: tuple | None = None,
-                      drilldown: bool = True,
-                      appendices: list[str] | None = None,
-                      max_account_rows: int = MAX_ACCOUNT_ROWS) -> bytes:
+                      all_time_where: str | None = None,
+                      appendices: list[str] | None = None) -> bytes:
     """Render the whole report as one self-contained HTML file.
 
     Takes the same arguments as :func:`app.core.exporter.build_report` and
     selects the same populations through the same helpers, so the HTML and the
     PDF are two renderings of one report rather than two reports.
+
+    ``all_time_where`` is the same filter clause with the reporting-period
+    condition dropped.  Only the programme matrix reads it — that grid spans the
+    whole programme by definition, so a period narrows every other number in the
+    report but never it.  Defaults to ``where``, which is right when the caller
+    has no period filter to drop.
     """
     specs = [exporter._BY_KEY[k]
              for k in (reports if reports is not None else exporter.REPORT_KEYS)
@@ -846,11 +832,13 @@ def build_html_report(ctx, where: str = "", scope_label: str = "All data",
     start, end = date_window or (None, None)
     fy_window, fy_label = _this_fy(ctx, start, end)
     fact = analytics.select_all(ctx.con, where, table="fact")
+    all_time = (fact if all_time_where is None or all_time_where == where
+                else analytics.select_all(ctx.con, all_time_where, table="fact"))
 
     doc = _Builder(body=[], scripts=[], toc=[])
     for spec in specs:
-        _report(doc, ctx, fact, spec, start, end, period_label, drilldown,
-                max_account_rows, fy_window, fy_label)
+        _report(doc, ctx, fact, all_time, spec, start, end, period_label,
+                fy_window, fy_label)
     if "inconsistency" in chosen:
         _inconsistency(doc, ctx)
     if not specs and not chosen:

@@ -145,7 +145,11 @@ under Streamlit's AppTest in both counting modes.
   carry identical values by construction. Columns run from `config.EOS_MATRIX_START_FY` (FY26 =
   Jul 2025) to the as-of month or the latest completion, **every month shown**, each
   fiscal year closing with its own total column. The Trend Analysis "Fiscal years
-  side by side" grid likewise lists all twelve months.
+  side by side" grid likewise lists all twelve months. **The reporting period never
+  narrows it**, on the dashboard (which draws it from the unfiltered category) or in
+  the HTML report (`build_html_report(..., all_time_where=...)` — the sidebar filters
+  with the `_date` key dropped, so a region still binds and a window does not): a
+  month with no nominations is itself the number being reported.
 - **Two export formats, one report.** `exporter.build_report` (PDF) and
   `html_report.build_html_report` (single-file interactive HTML) take the same
   arguments and select the same populations through the shared public helpers in
@@ -174,8 +178,10 @@ under Streamlit's AppTest in both counting modes.
   and shows only matching rows. Modes: `x` (month/category), `label` (pie), `y`
   (horizontal bar), `trace-x` (stacked bar: trace = region, x = stage), `y-x` (heatmap).
   Bucket strings are computed in Python so the browser only compares strings; the search
-  box and the chart selection go through one filter so neither undoes the other. There is
-  no "Supporting detail" block — it was the same rows twice.
+  box and the chart selection go through one filter so neither undoes the other. Neither
+  the "Supporting detail" block nor the closing "Account records" table survives — with
+  every chart carrying its own rows, both were the same accounts once more (and most of
+  the file's weight).
 - **The headline tiles are the selector for one accounts panel.** `_kpi_tiles(tiles,
   group=...)` marks each tile `role="button"` + `data-tile`; `_tile_accounts` writes one
   accordion holding a hidden pane per metric, and the script shows the pane whose tile is

@@ -8,6 +8,7 @@ Run with:  python -m pytest tests/test_requirements.py -v
 """
 import os
 import sys
+from html.parser import HTMLParser
 
 import pandas as pd
 import pytest
@@ -942,8 +943,8 @@ def test_the_html_and_pdf_reports_count_the_same_things(html_ctx, matrix_fact):
     waves = kpi.wave_index(pop)
     head = exp.headline(pop, waves, None, None)
     from app.core import html_report
-    doc = html_report.build_html_report(html_ctx, reports=["eos"],
-                                        drilldown=False).decode("utf-8")
+    doc = html_report.build_html_report(html_ctx,
+                                        reports=["eos"]).decode("utf-8")
     # Four Gen-tagged accounts, one of which never completes a latest wave.
     assert f'<div class="value">{head["engagements"].value:,}</div>' in doc
     assert f'<div class="value">{head["completed"].value:,}</div>' in doc
@@ -1077,7 +1078,7 @@ def test_a_this_fy_row_is_added_when_the_period_is_something_else(html_ctx):
     from app.core import html_report
 
     month = html_report.build_html_report(
-        html_ctx, reports=["eos"], drilldown=False,
+        html_ctx, reports=["eos"],
         period_label="01 Nov 2025 -> 30 Nov 2025",
         date_window=(pd.Timestamp("2025-11-01"),
                      pd.Timestamp("2025-11-30"))).decode("utf-8")
@@ -1087,7 +1088,7 @@ def test_a_this_fy_row_is_added_when_the_period_is_something_else(html_ctx):
 
     fy_span = metrics.date_preset_range(html_ctx.as_of, "This FY", 7)
     same = html_report.build_html_report(
-        html_ctx, reports=["eos"], drilldown=False, period_label="This FY",
+        html_ctx, reports=["eos"], period_label="This FY",
         date_window=(fy_span[0], fy_span[1])).decode("utf-8")
     assert "Two periods:" not in same                  # nothing to compare against
     assert same.count('<div class="kpis">') == 1
@@ -1103,8 +1104,8 @@ def test_underlying_data_shows_the_accounts_not_just_the_chart_numbers(html_doc)
 
 def test_money_axes_are_written_in_k_and_m(html_ctx):
     from app.core import html_report
-    doc = html_report.build_html_report(html_ctx, reports=["eos"],
-                                        drilldown=False).decode("utf-8")
+    doc = html_report.build_html_report(html_ctx,
+                                        reports=["eos"]).decode("utf-8")
     # The ACR chart's axis is $-prefixed and SI-formatted ($2M, $840k) rather
     # than a raw 2,000,000.
     assert '"tickprefix": "$"' in doc or '"tickprefix":"$"' in doc
@@ -1201,8 +1202,8 @@ def test_avs_reports_call_the_cores_column_nodes(html_ctx):
     assert html_report._unit_noun(exp._BY_KEY["avs"]) == "Nodes"
     assert html_report._unit_noun(exp._BY_KEY["native"]) == "Cores"
 
-    doc = html_report.build_html_report(html_ctx, reports=["eos"],
-                                        drilldown=False).decode("utf-8")
+    doc = html_report.build_html_report(html_ctx,
+                                        reports=["eos"]).decode("utf-8")
     assert "Total Nodes deployed" in doc
     assert "(Total Nodes)" in doc
     assert "Total Cores, completed" not in doc
@@ -1215,3 +1216,90 @@ def test_the_fastest_closing_insight_says_what_it_compares_against(html_ctx):
     if "closes nominations fastest" in text:
         assert "for the typical region" in text
         assert "fewer than two closed" in text
+
+
+# --------------------------------------------------------------------------- #
+# The programme matrix ignores the reporting period; the account list is gone
+# --------------------------------------------------------------------------- #
+class _Cells(HTMLParser):
+    """The cell text of one HTML table, row by row (no lxml in requirements)."""
+
+    def __init__(self):
+        super().__init__()
+        self.rows: list[list[str]] = []
+        self._cell: list[str] | None = None
+
+    def handle_starttag(self, tag, _attrs):
+        if tag == "tr":
+            self.rows.append([])
+        elif tag in ("th", "td"):
+            self._cell = []
+
+    def handle_endtag(self, tag):
+        if tag in ("th", "td") and self._cell is not None:
+            self.rows[-1].append("".join(self._cell).strip())
+            self._cell = None
+
+    def handle_data(self, data):
+        if self._cell is not None:
+            self._cell.append(data)
+
+
+def _matrix_grid(doc: str, table_id: str) -> pd.DataFrame:
+    """Read one matrix table back out of the rendered report, measures indexed."""
+    markup = doc.split(f'id="{table_id}"', 1)[1].split("</table>", 1)[0]
+    parser = _Cells()
+    parser.feed(markup)
+    header, *body = [r for r in parser.rows if r]
+    return pd.DataFrame(body, columns=header).set_index("Measure")
+
+
+#: December onwards — drops Acme's, Beta Wave-1's and Gamma's approval months.
+_LATE = "WHERE \"created_date\" >= '2025-12-01'"
+
+
+def test_the_programme_matrix_ignores_the_reporting_period(html_ctx):
+    """The grid spans the whole programme however narrow the report's window."""
+    from app.core import html_report
+
+    narrowed = html_report.build_html_report(
+        html_ctx, _LATE, reports=["eos"], all_time_where="",
+        date_window=(pd.Timestamp("2025-12-01"), pd.Timestamp("2026-03-01")),
+    ).decode("utf-8")
+    grid = _matrix_grid(narrowed, "mx-gen1")
+
+    # Jul-25 is outside the window and still carries Acme's approval.
+    assert str(grid.loc["Total number of new engagement", "Jul-25"]) == "1"
+    assert str(grid.loc["Total number of migration end", "Nov-25"]) == "1"
+    # ...and the block counts every Gen-1 account, not just the late one.
+    assert "<b>3</b> accounts tagged" in narrowed
+
+    # The rest of the report *is* narrowed: only Beta's Wave 2 survives.
+    assert "<b>1</b> accounts (TPIDs)" in narrowed
+    assert "<b>1</b> nomination waves" in narrowed
+
+
+def test_the_matrix_still_honours_filters_that_are_not_the_period(html_ctx):
+    """Only the period is dropped: whatever else the clause selects still binds.
+
+    Read the other way round from the test above — the report sees everything,
+    the matrix only the late rows — which is what proves the grid is drawn from
+    ``all_time_where`` rather than simply ignoring the filters.
+    """
+    from app.core import html_report
+
+    doc = html_report.build_html_report(
+        html_ctx, "", reports=["eos"], all_time_where=_LATE).decode("utf-8")
+    grid = _matrix_grid(doc, "mx-gen1")
+
+    assert str(grid.loc["Total number of new engagement", "Jul-25"]) == "0"
+    assert str(grid.loc["Total number of new engagement", "Dec-25"]) == "1"
+    assert "<b>4</b> accounts (TPIDs)" in doc      # the report itself is whole
+
+
+def test_the_report_does_not_end_with_a_list_of_every_account(html_doc):
+    """Superseded by the per-chart panels: it was the same rows once more."""
+    assert "Account records" not in html_doc
+    # The accounts each chart opens are still there.
+    assert "data-drill=" in html_doc
+    assert "Accounts behind" in html_doc
