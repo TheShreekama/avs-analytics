@@ -124,7 +124,11 @@ def render() -> None:
         st.info("Tick at least one report above.")
     kw = dict(title=title or exporter.DEFAULT_TITLE, subtitle=subtitle,
               period_label=period_label, date_window=window,
-              appendices=appendices, sections=sections)
+              appendices=appendices, sections=sections,
+              # ACR Pipeline and Nodes Deployment Planned are read over the
+              # whole dataset; the period is dropped for them (and for the EOS
+              # matrix), while every other filter still binds.
+              all_time_where=all_time_where)
     stamp = f"{datetime.now():%Y%m%d_%H%M}"
 
     pdf_col, html_col = st.columns(2)
@@ -158,8 +162,7 @@ def render() -> None:
                      disabled=not ready):
             with st.spinner("Rendering interactive report…"):
                 st.session_state["_rep_html"] = html_report.build_html_report(
-                    ctx, where, scope_label, selected,
-                    all_time_where=all_time_where, **kw)
+                    ctx, where, scope_label, selected, **kw)
                 st.session_state["_rep_html_name"] = f"AVS_Report_{stamp}.html"
             st.success("HTML ready — download below.")
         if st.session_state.get("_rep_html"):

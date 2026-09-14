@@ -118,15 +118,33 @@ under Streamlit's AppTest in both counting modes.
   nodes whatever the account's state is now); Cumulative is the final column and runs over
   the displayed months only.
 - **Account state** (`kpi.account_state`, read across **all** of an account's waves, first
-  match wins): **On-Track** = ANY wave in flight (status 1-4) whose Current State is exactly
-  `On Track` (`kpi.is_on_track_wave`; matched through `_state_key`, so "On-Track" is the
-  same state and **a blank Current State is not on track — there is no fallback**);
+  match wins): **On-Track** = ANY wave where `Nomination Status = "Approved"` **and** the
+  status is in flight (1-4) **and** Current State is exactly `On Track`
+  (`kpi.is_on_track_wave`; matched through `_state_key`, so "On-Track" is the same state,
+  while **an unapproved nomination and a blank Current State are not on track — there is no
+  fallback**);
   **Completed** = latest wave `7 - Completed` AND
   no wave on track; then Cancelled → Blocked → Deferred → Other from the latest wave. So
   "latest wave completed + earlier wave on track" is **On-Track**, not Completed. Every
   account resolves to exactly one state, so `by_state` (the reported cut) and
   `excluded_accounts` (`EXCLUDED_STATES`) partition the population — nothing double-counted,
   nothing lost. `on_track_by_stage` groups by the stage of the **on-track wave itself**.
+- **Where every account sits** (`exporter.reconciliation`, under the pipeline on every
+  dashboard and in both exports): each account state, its account count and ACR, and
+  **where that state is reported** — including the three reported nowhere (cancelled,
+  deferred, and accounts with no stated Current State). Rows sum to the report's own
+  account count, because `account_state` puts each account in exactly one. It exists
+  because "the chart shows 32 of my 36 accounts, where are the other four?" is a fair
+  question that a report should answer itself; it also surfaces a state *outside*
+  `kpi.BLOCKED_STATES` (say "Blocked by legal") as "Blocked & waiting accounts (1 of 2)"
+  rather than letting it vanish.
+- **Accounts by generation and state** (`exporter.generation_status`, EOS reports only):
+  generation down the side, state across the top — On-Track, Completed and Blocked first,
+  then any other state present, so **every** row totals that generation's accounts and the
+  grid reconciles with New Engagements over all time. A heatmap cell opens its own accounts
+  (`_by_generation_state`, mode `y-x`). Careful in `_generations`: the per-generation wave
+  index is `sub_waves`, because shadowing the report's `waves` silently dropped a whole row
+  from the grid.
 - **Blocked & waiting accounts** (`kpi.blocked_accounts` + `wave_profile`, assembled by
   `exporter.blocked_tables`, titled `exporter.BLOCKED_TITLE`): accounts whose latest wave's
   **Current State** is one of `kpi.BLOCKED_STATES` — Blocked, Blocked - Account team,
@@ -152,9 +170,15 @@ under Streamlit's AppTest in both counting modes.
   (3) `Current State = "On Track"` and nothing else;
   (4) `Migration Status NOT IN ("5 - Deferred By Customer", "6 - Cancelled / Archived")`.
   `acr_pipeline` sums Total ACR over them (every report); `nodes_planned` sums Total Cores
-  (**EOS reports only**, `exporter.shows_nodes_planned`). Neither is period-bound. Note the
-  rule excludes 5 and 6 only — a completed wave is kept out by condition 3, since a
-  finished wave reads *Done*, not *On Track*.
+  (**EOS reports only**, `exporter.shows_nodes_planned`). Note the rule excludes 5 and 6
+  only — a completed wave is kept out by condition 3, since a finished wave reads *Done*,
+  not *On Track*.
+  **Both are read over the whole dataset, never the reporting period**: work nominated
+  before the window is still work still to do. Both renderers take `all_time_where` (the
+  sidebar filters with the `_date` key dropped — the same clause the EOS matrix uses) and
+  pass that population to `exporter.headline(..., all_time=…)`; every other filter still
+  binds, so a region-filtered report reports that region's pipeline. The dashboards need no
+  such argument — they read the whole category already.
 - **Terminology.** "AV36 EOS" is called **EOS Migration** everywhere in the UI. The
   AVS → Azure Native page labels the Total Cores metric **Cores Migrated**; the AVS
   categories call it **Hosts Migrated** (same column, different noun).
@@ -242,6 +266,13 @@ under Streamlit's AppTest in both counting modes.
 - **Nodes vs Cores.** `html_report._unit_noun`: the AVS motions deploy **Nodes**, only
   `(From AVS)` moves **Cores**. One noun per report, used by the tiles and the trend
   titles so the two cannot disagree.
+- **Money is formatted by column, in one place.** `metrics.MONEY_COLUMNS` /
+  `metrics.format_money_frame` decide which columns are money and render them;
+  `components.format_money` (dashboards, `fmt_currency`) and `html_report._accounts_frame`
+  (exported tables, `fmt_compact_currency`) both defer to it, so no table is the one place
+  showing a raw `2400000`. A column already formatted is left alone rather than written
+  twice, and Total Cores is rendered as a whole number — a node count reading "36.0" is the
+  float leaking.
 - **Money reads in K/M everywhere, tooltips included.** `metrics.fmt_compact_currency`
   ($12.5K / $125K / $1.25M) is computed in Python and carried on the trace as
   `customdata`, because Plotly's own SI format writes a lowercase "k" and no symbol —
@@ -266,9 +297,13 @@ under Streamlit's AppTest in both counting modes.
   `glossary.REPORT_METHODOLOGY` is the single source rendered by the PDF
   (`pdf_kit.rule_block`), the HTML report (`.rule` / `<pre>`) and the Methodology page
   (`st.code`), so one rule cannot be documented three ways. An item is either a paragraph
-  or a `glossary.Rule(title, lines)` whose lines are **monospaced and aligned as written** —
-  alignment carries the meaning, and a test asserts every rule's trailing comments line up
-  and every line still fits the PDF column.
+  or a `glossary.Rule(title, lines, plain)` whose lines are **monospaced and aligned as
+  written** — alignment carries the meaning, and a test asserts every rule's trailing
+  comments line up and every line still fits the PDF column. `plain` is the same rule in
+  one ordinary sentence, printed under the block as **"In plain words —"**: the sections
+  lead in plain language and define their vocabulary (account, wave, ACR) first, so the
+  methodology can be read by whoever picks the report up and checked by whoever doubts a
+  number.
 - **A generated report names neither the app nor the file it read.** No `Source:` line, no
   dataset on the cover, no app name in the PDF furniture or the HTML footer; the default
   title is `exporter.DEFAULT_TITLE` ("Migration Programme Report").

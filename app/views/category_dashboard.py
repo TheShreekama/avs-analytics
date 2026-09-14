@@ -335,6 +335,8 @@ def _pipeline(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
         drilldown.drilldown(state_rows.assign(bucket=state_rows["state"]), "bucket",
                             picked, key=f"{key}_state", what="accounts")
 
+    _reconciliation(fact, waves, key)
+
     subheading("On-track nominations by stage", help=glossary.BY_STAGE,
                period="All On-Track accounts — not filtered by the reporting period")
     if stages.empty:
@@ -347,6 +349,24 @@ def _pipeline(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
             summary=stages.rename(columns={"category": "Stage", "count": "Accounts",
                                            "acr": "ACR"}),
             summary_bucket="Stage")
+
+
+def _reconciliation(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
+    """Where every account sits — the chart above plus everything it leaves out.
+
+    "The doughnut shows 32 of my 36 accounts, where are the other four?" is a
+    fair question, and this is the answer: every account resolves to exactly one
+    state, so these rows add up, and the last column says where each is
+    reported — including the states reported nowhere, and why.
+    """
+    rows, accounts = exporter.reconciliation(fact, waves)
+    if rows.empty:
+        return
+    with st.expander(f"🔎 Where every account sits ({fmt_int(accounts)} accounts)"):
+        st.caption("Each account is in exactly one row, so these add up. The "
+                   "doughnut above shows the first two rows; the rest are "
+                   "reported where this says.")
+        components.show_table(rows)
 
 
 def _regional_breakdown(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:

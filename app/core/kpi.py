@@ -640,25 +640,28 @@ def reported_stages(df: pd.DataFrame) -> pd.Series:
 def is_on_track_wave(df: pd.DataFrame) -> pd.Series:
     """Per **wave**: is this wave on track right now?
 
-    Both halves have to hold::
+    All three have to hold::
 
-        Migration Status IN (1, 2, 3, 4)        -- in flight
-        Current State    =  "On Track"          -- and nothing else
+        Nomination Status  =   "Approved"
+        Migration Status   IN  (1, 2, 3, 4)        -- in flight
+        Current State      =   "On Track"          -- and nothing else
 
-    A completed, deferred or cancelled wave can never be on track whatever its
-    Current State says.  **A blank Current State is not on track either**: the
-    column is how the programme says an engagement is moving, and a wave nobody
-    has said that about is not evidence that it is — such a wave is ignored
-    rather than counted, so it lands in *Other* and no On-Track number rests on
-    an empty cell.
+    An unapproved nomination is not on track however it is progressing: nothing
+    has been committed to yet.  A completed, deferred or cancelled wave is not
+    on track whatever its Current State says.  **A blank Current State is not
+    on track either**: the column is how the programme says an engagement is
+    moving, and a wave nobody has said that about is ignored rather than
+    counted — it lands in *Other*, so no On-Track number rests on an empty cell.
 
-    The match is exact once punctuation and case are normalised, so "On Track",
-    "On-Track" and "on  track" are the same state and "On Track - at risk" is
-    not.
+    The state match is exact once punctuation and case are normalised, so "On
+    Track", "On-Track" and "on  track" are the same state and "On Track - at
+    risk" is not.
     """
     if df.empty:
         return pd.Series(dtype=bool)
-    return (in_flight(df) & _is_state(df, ON_TRACK_STATE)).fillna(False)
+    return (is_nomination_approved(df)
+            & in_flight(df)
+            & _is_state(df, ON_TRACK_STATE)).fillna(False)
 
 
 def _current_state(df: pd.DataFrame) -> pd.Series:

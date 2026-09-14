@@ -157,23 +157,32 @@ def labelled(fact: pd.DataFrame, column: str) -> pd.DataFrame:
             .rename_axis("category").reset_index(name="count"))
 
 
-def headline(pop: pd.DataFrame, waves: kpi.WaveIndex, start, end) -> dict:
+def headline(pop: pd.DataFrame, waves: kpi.WaveIndex, start, end,
+             all_time: pd.DataFrame | None = None) -> dict:
     """The dashboard tiles, computed exactly as the dashboard computes them.
 
     ``acr_pipeline`` and ``nodes_planned`` are the two forward-looking ones and
-    are deliberately *not* period-bound: they answer what the approved,
-    unblocked, unfinished work is worth and how many nodes it still has to
-    deploy, which no historical window narrows.  ``nodes_planned`` is computed
-    for every report but only shown on the EOS ones.
+    are read over the **whole dataset**, never the reporting period: they answer
+    what the approved, on-track work is worth and how many nodes it still has
+    to deploy, and work nominated before the window is still work still to do.
+    Pass ``all_time`` — the same population with the period dropped — and they
+    are computed from it; without it they fall back to ``pop``, which is right
+    when the caller has no period filter to drop (the dashboards read the whole
+    category already).  Every other filter still binds: a report cut to one
+    region reports that region's pipeline, not the portfolio's.
+
+    ``nodes_planned`` is computed for every report but only shown on the EOS
+    ones.
     """
+    ahead = pop if all_time is None else all_time
     return {
         "engagements": kpi.new_engagements(pop, start, end, firsts=waves.first),
         "completed": kpi.migrations_completed(pop, start, end, lasts=waves.last),
         "hosts": kpi.hosts_migrated(pop, start, end),
         "on_track": kpi.on_track_accounts(pop, lasts=waves.last),
         "acr": kpi.acr_claimed(pop, start, end),
-        "acr_pipeline": kpi.acr_pipeline(pop),
-        "nodes_planned": kpi.nodes_planned(pop),
+        "acr_pipeline": kpi.acr_pipeline(ahead),
+        "nodes_planned": kpi.nodes_planned(ahead),
     }
 
 
@@ -206,6 +215,90 @@ BLOCKED_NOTE = (
     "metrics is in here. Status Summary carries the programme's own note on "
     "why each one has stopped."
 )
+
+
+#: Where an account in each state is reported, so the reconciliation says what
+#: to do about a row rather than only naming it.
+_STATE_HOME = {
+    kpi.STATE_ON_TRACK: "Current pipeline (charted above)",
+    kpi.STATE_COMPLETED: "Current pipeline (charted above)",
+    kpi.STATE_DEFERRED: "Not reported — deferred by the customer",
+    kpi.STATE_CANCELLED: "Not reported — cancelled / archived",
+    kpi.STATE_BLOCKED: "Not reported — Current State is not a stated blocking state",
+    kpi.STATE_OTHER: "Not reported — no stated state (see Data Inconsistency)",
+}
+
+
+#: The order states read across the generation grid: the three a review asks
+#: about first, then whatever else the file contains.
+GENERATION_STATE_ORDER = (kpi.STATE_ON_TRACK, kpi.STATE_COMPLETED,
+                          kpi.STATE_BLOCKED, kpi.STATE_DEFERRED,
+                          kpi.STATE_CANCELLED, kpi.STATE_OTHER)
+
+
+def generation_status(pop: pd.DataFrame, waves: kpi.WaveIndex
+                      ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Accounts by generation and state, at account grain.
+
+    Generation down the side, state across the top — On-Track, Completed and
+    Blocked first, because those are the three a review asks about, then any
+    other state the file contains.  **Every** state is here on purpose: each
+    account holds exactly one, so a generation's row adds up to the accounts in
+    that generation and the grid reconciles with the report's own count rather
+    than leaving a reader to wonder where the rest went.
+
+    Returns ``(grid, rows)`` — the crosstab and the accounts behind it, each
+    carrying ``_generation`` and ``state`` so a cell can open its own records.
+    """
+    _summary, rows = kpi.by_state(pop, lasts=waves.last, only=None)
+    if rows.empty or "generation" not in rows.columns:
+        return pd.DataFrame(), rows
+    rows = rows.assign(_generation=clean(rows["generation"]))
+    grid = pd.crosstab(rows["_generation"], rows["state"])
+    order = ([s for s in GENERATION_STATE_ORDER if s in grid.columns]
+             + [s for s in grid.columns if s not in GENERATION_STATE_ORDER])
+    return grid[order], rows
+
+
+def reconciliation(pop: pd.DataFrame, waves: kpi.WaveIndex) -> tuple[pd.DataFrame, int]:
+    """Every account in the report, by state, with where each one is reported.
+
+    The answer to "the charts show 32 of my 36 accounts — where are the other
+    four?".  Each account resolves to exactly one state, so these rows sum to
+    the report's own account count; what varies is **where** a state is
+    reported, and three of them are reported nowhere: a cancelled or deferred
+    engagement is a decision already taken, and an account with no stated
+    Current State cannot be said to be moving.
+
+    Returns ``(rows, accounts)`` — the table, and the total it sums to.
+    """
+    lasts = waves.last
+    if pop.empty or lasts.empty:
+        return pd.DataFrame(columns=["State", "Accounts", "ACR", "Reported in"]), 0
+    states = kpi.account_state(pop, lasts)
+    frame = lasts.assign(_state=states,
+                         _acr=pd.to_numeric(lasts.get("total_acr"), errors="coerce"))
+    _summary, blocked = kpi.blocked_accounts(pop, lasts=lasts)
+    in_section = set(blocked["tpid_key"]) if not blocked.empty else set()
+
+    rows = []
+    order = (kpi.STATE_ON_TRACK, kpi.STATE_COMPLETED, kpi.STATE_BLOCKED,
+             kpi.STATE_OTHER, kpi.STATE_DEFERRED, kpi.STATE_CANCELLED)
+    for state in order:
+        part = frame[frame["_state"] == state]
+        if part.empty:
+            continue
+        shown = int(part["tpid_key"].isin(in_section).sum())
+        where = _STATE_HOME.get(state, "Not reported")
+        if shown == len(part):
+            where = BLOCKED_TITLE
+        elif shown:
+            where = f"{BLOCKED_TITLE} ({fmt_int(shown)} of {fmt_int(len(part))})"
+        rows.append({"State": state,
+                     "Accounts": int(part["tpid_key"].nunique()),
+                     "ACR": float(part["_acr"].sum()),
+                     "Reported in": where})
+    return pd.DataFrame(rows), int(frame["tpid_key"].nunique())
 
 
 def blocked_tables(pop: pd.DataFrame, waves: kpi.WaveIndex) -> dict:
@@ -311,16 +404,18 @@ def _summary_block(spec: ReportSpec, metrics_: dict, ss, period_label: str) -> l
         ("ACR Claimed", fmt_currency(metrics_["acr"].value),
          "waves ended in the period"),
         ("ACR Pipeline", fmt_currency(metrics_["acr_pipeline"].value),
-         "approved, unblocked, unfinished waves"),
+         "eligible waves, all time"),
     ]
     if shows_nodes_planned(spec):
         tiles.append(("Nodes Deployment Planned",
                       fmt_int(metrics_["nodes_planned"].value),
-                      "Total Cores on those same waves"))
+                      "Total Cores, eligible waves, all time"))
     return [Paragraph("Executive summary", ss["H2"]),
-            Paragraph(f"Reporting period: {_esc(period_label)}. On-Track, ACR "
-                      "Pipeline and any planned deployment are snapshots of where "
-                      "things stand now — no date window narrows them.", ss["Muted"]),
+            Paragraph(f"Reporting period: {_esc(period_label)}. On-Track is a "
+                      "snapshot of where things stand now; <b>ACR Pipeline and "
+                      "Nodes Deployment Planned are read over the whole dataset</b> "
+                      "— work nominated before the window is still work still to "
+                      "do. No date window narrows any of the three.", ss["Muted"]),
             kit.spacer(0.2),
             kit.kpi_cards(tiles, ss, per_row=3)]
 
@@ -385,7 +480,29 @@ def _pipeline_block(pop: pd.DataFrame, waves: kpi.WaveIndex, ss) -> list:
             Paragraph("On-track accounts by stage", ss["H3"]),
             kit.image(pc.bar_png(stages, "category", "count", horizontal=True,
                                  height_px=250), width_cm=16.6)]))
+    out += _reconciliation_block(pop, waves, ss)
     return out
+
+
+def _reconciliation_block(pop: pd.DataFrame, waves: kpi.WaveIndex, ss) -> list:
+    """Where every account sits — so the charts above can be reconciled."""
+    rows, accounts = reconciliation(pop, waves)
+    if rows.empty:
+        return []
+    printable = rows.copy()
+    printable["ACR"] = printable["ACR"].map(fmt_currency)
+    printable["Accounts"] = printable["Accounts"].map(fmt_int)
+    return [kit.spacer(0.25),
+            KeepTogether([
+                Paragraph("Where every account sits", ss["H3"]),
+                Paragraph(f"All <b>{fmt_int(accounts)}</b> accounts in this report, "
+                          "by state. Each account is in exactly one row, so these "
+                          "add up — the charts above show the first two rows, and "
+                          "the rest are reported where this says.", ss["Muted"]),
+                kit.spacer(0.12),
+                kit.df_table(printable, ss,
+                             col_widths=[3.2 * cm, 2.0 * cm, 2.4 * cm, 9.0 * cm],
+                             align_right=[1, 2], font_size=8)])]
 
 
 def _regional_block(waves: kpi.WaveIndex, ss) -> list:
@@ -604,6 +721,24 @@ def _generation_block(fact: pd.DataFrame, spec: ReportSpec, start, end, ss) -> l
                                1.8 * cm, 2.6 * cm],
         align_right=[1, 2, 3, 4, 5, 6], font_size=8))
 
+    # The report's own population, not the loop's: the grid cuts every account
+    # in the report by generation, which is what makes its rows add up.
+    whole = segments.population(fact, spec.category)
+    grid, _rows = generation_status(whole, kpi.wave_index(whole))
+    if not grid.empty:
+        out += [kit.spacer(0.3),
+                KeepTogether([
+                    Paragraph("Accounts by generation and state", ss["H3"]),
+                    Paragraph("One row per account, every state included — so a "
+                              "generation's row adds up to its accounts and "
+                              "nothing goes missing between the two.",
+                              ss["Muted"]),
+                    kit.spacer(0.12),
+                    kit.image(pc.heatmap_png(grid, height_px=220), width_cm=16.6)]),
+                kit.spacer(0.2),
+                *_matrix_table(grid, "Generation", ss,
+                               kit.CONTENT_WIDTH[kit.PORTRAIT])]
+
     if len(monthly) > 1:
         wide = pd.DataFrame(monthly).fillna(0).reset_index()
         wide = wide.rename(columns={"period": "month"})
@@ -649,8 +784,11 @@ def _generation_pipeline(fact: pd.DataFrame, category: str, ss) -> list:
 
 def _report_section(fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
                     period_label: str, with_drilldown: bool,
-                    sections: ReportSections) -> list:
+                    sections: ReportSections,
+                    all_time: pd.DataFrame | None = None) -> list:
     pop = segments.population(fact, spec.category)
+    # The forward-looking tiles read the whole programme, not the window.
+    ahead = None if all_time is None else segments.population(all_time, spec.category)
     links = [("View drill-down →", f"dd_{spec.key}")] if with_drilldown else []
     links.append(("Contents", "toc"))
 
@@ -679,7 +817,8 @@ def _report_section(fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
         return story
 
     waves = kpi.wave_index(pop)
-    blocks = [_summary_block(spec, headline(pop, waves, start, end), ss, period_label),
+    blocks = [_summary_block(spec, headline(pop, waves, start, end, ahead), ss,
+                             period_label),
               _trend_block(pop, waves, start, end, spec, ss),
               _pipeline_block(pop, waves, ss)]
     if spec.key == "native":
@@ -961,7 +1100,9 @@ def _methodology(ss) -> list:
         block = [Paragraph(_esc(heading), ss["H2"])]
         for item in items:
             if isinstance(item, glossary.Rule):
-                block += [kit.spacer(0.05), *kit.rule_block(item.title, item.lines, ss),
+                block += [kit.spacer(0.05),
+                          *kit.rule_block(item.title, item.lines, ss,
+                                          plain=_strip(item.plain)),
                           kit.spacer(0.12)]
             else:
                 block += [Paragraph(_strip(item), ss["Body2"]), kit.spacer(0.08)]
@@ -1031,6 +1172,7 @@ def build_story(ctx, where: str = "", scope_label: str = "All data",
                 drilldown: bool = True,
                 appendices: list[str] | None = None,
                 sections: ReportSections | None = None,
+                all_time_where: str | None = None,
                 max_drilldown_rows: int = MAX_DRILLDOWN_ROWS) -> list:
     """Assemble the report as ReportLab flowables — cover, contents, both parts.
 
@@ -1044,6 +1186,10 @@ def build_story(ctx, where: str = "", scope_label: str = "All data",
     start, end = date_window or (None, None)
     ss = kit.styles()
     fact = analytics.select_all(ctx.con, where, table="fact")
+    # The same filters with the reporting period dropped — what ACR Pipeline and
+    # Nodes Deployment Planned are read over, so a window narrows neither.
+    all_time = (fact if all_time_where is None or all_time_where == where
+                else analytics.select_all(ctx.con, all_time_where, table="fact"))
 
     story = _cover(ctx, ss, title, subtitle, scope_label, period_label, specs,
                    drilldown and bool(specs))
@@ -1055,7 +1201,7 @@ def build_story(ctx, where: str = "", scope_label: str = "All data",
                        "trends, current pipeline, regional cut and insights.", ss)
         for spec in specs:
             story += _report_section(fact, spec, ss, start, end, period_label,
-                                     drilldown, sections)
+                                     drilldown, sections, all_time)
 
     if specs and drilldown:
         story += _part("part_detail", "Part 2 — Supporting Detail",

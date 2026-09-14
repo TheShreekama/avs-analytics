@@ -1765,7 +1765,8 @@ def test_the_report_states_its_own_methodology(state_doc):
                 assert esc(line) in body, line
 
     # …and the rules a reader would go looking for say what the code does.
-    for phrase in ('Current State      =  "On Track"',
+    for phrase in ('Current State      =   "On Track"',
+                   'Nomination Status  =   "Approved"',
                    'Nomination Status       =        "Approved"',
                    'Factory Offering        =        "AVS Migration Nominations"',
                    'Primary Migration Path  CONTAINS "From AVS"',
@@ -1962,3 +1963,293 @@ def test_the_pipeline_rule_is_documented_exactly_as_implemented():
         assert status in text, status
     # …and nothing the rule does not exclude is listed as an exclusion.
     assert "7 - Completed" not in text.split("NOT IN")[-1]
+
+
+def test_an_unapproved_nomination_is_never_on_track():
+    """On Track needs the nomination approved as well as moving and stated."""
+    rows = [  # (tpid, Nomination Status, Current State, Migration Status, on track?)
+        ("1", "Approved", "On Track", "4 - Executing Migration", True),
+        ("2", "Pending", "On Track", "4 - Executing Migration", False),
+        ("3", "On Hold", "On Track", "2 - Executing Pre-Requisites", False),
+        ("4", "Declined", "On Track", "4 - Executing Migration", False),
+        ("5", "Approved", "", "4 - Executing Migration", False),   # blank state
+        ("6", "Approved", "Done", "7 - Completed", False),
+    ]
+    raw = pd.DataFrame([{
+        "TPID": t, "Customer Name": f"Acct {t}", "Task ID": f"k{t}",
+        "Phase": "Wave 1", "Factory Offering": "AVS Migration Nominations",
+        "Primary Migration Path": "Onprem to AVS", "Nomination Status": ns,
+        "Current State": cs, "Migration Status": ms,
+        "Nom. Approval Date": "2026-01-05", "Nom. Created Date": "2026-01-05",
+        "Total Cores": "10", "Total ACR": "$100,000", "WW Region": "EMEA",
+        "Tags": "x",
+    } for t, ns, cs, ms, _ok in rows]).astype("string")
+    mp = mapping.resolve_mapping(list(raw.columns))
+    frame, _ = cleaning.build_fact_frame(raw, mp, pd.Timestamp("2026-09-01"))
+
+    assert list(kpi.is_on_track_wave(frame)) == [r[4] for r in rows]
+    assert _tpids(kpi.on_track_accounts(frame).records) == ["1"]
+    lasts = kpi.latest_wave(frame)
+    states = dict(zip(lasts["tpid"].astype(str), kpi.account_state(frame, lasts)))
+    assert states["1"] == kpi.STATE_ON_TRACK
+    # An unapproved nomination is not on track — and not blocked or deferred
+    # either, so it falls to Other rather than being reported anywhere.
+    assert {states[t] for t in ("2", "3", "4", "5")} == {kpi.STATE_OTHER}
+    assert states["6"] == kpi.STATE_COMPLETED
+
+
+# --------------------------------------------------------------------------- #
+# The forward-looking tiles read the whole dataset, never the window
+# --------------------------------------------------------------------------- #
+#: September onwards — drops Acme's July nomination from the reporting period.
+_FROM_SEP = "WHERE \"created_date\" >= '2025-09-01'"
+_SEP_WINDOW = (pd.Timestamp("2025-09-01"), pd.Timestamp("2026-06-30"))
+
+
+def _tile_values(doc: str, group: str) -> dict:
+    import re
+    body = _main(doc)
+    return dict(re.findall(
+        r'data-tile="kpi-\w+-(\w+)" data-tile-group="' + group +
+        r'"[^>]*>.*?<div class="value">([^<]*)</div>', body, re.S))
+
+
+def test_the_period_never_narrows_acr_pipeline_or_planned_nodes(state_ctx):
+    """Work nominated before the window is still work still to do."""
+    from app.core import html_report
+
+    whole = _tile_values(html_report.build_html_report(
+        state_ctx, "", reports=["eos"]).decode(), "kpis-eos")
+    narrowed = _tile_values(html_report.build_html_report(
+        state_ctx, _FROM_SEP, reports=["eos"], all_time_where="",
+        date_window=_SEP_WINDOW, period_label="Sep 25 → Jun 26").decode(),
+        "kpis-eos")
+
+    # The period-bound tiles move…
+    assert whole["engagements"] != narrowed["engagements"]
+    # …and the two forward-looking ones do not.
+    assert narrowed["acr_pipeline"] == whole["acr_pipeline"]
+    assert narrowed["nodes_planned"] == whole["nodes_planned"]
+
+
+def test_the_pdf_reads_the_pipeline_over_the_whole_dataset_too(state_ctx):
+    from app.core import exporter as exp
+
+    def pipeline(where, all_time_where, window):
+        text = _flowable_text(exp.build_story(
+            state_ctx, where, reports=["eos"], date_window=window,
+            all_time_where=all_time_where))
+        import re
+        return re.search(r"ACR PIPELINE\s*(\S+?)eligible", text).group(1)
+
+    assert pipeline(_FROM_SEP, "", _SEP_WINDOW) == pipeline("", None, None)
+
+
+def test_a_filter_that_is_not_the_period_still_binds_on_the_pipeline(state_ctx):
+    """Only the window is dropped: a report cut to one region reports that region.
+
+    Read the other way round from the test above — the report sees everything,
+    the pipeline only EMEA — which is what proves the figure is drawn from
+    ``all_time_where`` rather than simply ignoring the filters.
+    """
+    from app.core import html_report
+
+    emea = "WHERE \"region_geo\" = 'EMEA'"
+    doc = html_report.build_html_report(
+        state_ctx, "", reports=["eos"], all_time_where=emea).decode()
+    everything = html_report.build_html_report(
+        state_ctx, "", reports=["eos"]).decode()
+    assert (_tile_values(doc, "kpis-eos")["acr_pipeline"]
+            != _tile_values(everything, "kpis-eos")["acr_pipeline"])
+
+
+def test_money_in_the_underlying_tables_reads_in_k_and_m(state_doc):
+    """The account tables are not the one place a raw 2400000 survives."""
+    import re
+    body = _main(state_doc)
+    # Every account table heads an ACR column…
+    assert "<th>Total ACR</th>" in body
+    # …and no cell under it is a raw number.
+    for table in re.findall(r'<table class="data"[^>]*>(.*?)</table>', body, re.S):
+        headers = re.findall(r"<th[^>]*>([^<]*)</th>", table)
+        if "Total ACR" not in headers:
+            continue
+        acr = headers.index("Total ACR")
+        for row in re.findall(r"<tr[^>]*>(.*?)</tr>", table.split("<tbody>")[-1], re.S):
+            cells = re.findall(r"<td[^>]*>([^<]*)</td>", row)
+            if len(cells) > acr and cells[acr]:
+                assert re.fullmatch(r"\$[\d.]+[KMB]?", cells[acr]), cells[acr]
+        # Cores are whole things, not floats.
+        if "Total Cores" in headers:
+            cores = headers.index("Total Cores")
+            for row in re.findall(r"<tr[^>]*>(.*?)</tr>",
+                                  table.split("<tbody>")[-1], re.S):
+                cells = re.findall(r"<td[^>]*>([^<]*)</td>", row)
+                if len(cells) > cores and cells[cores]:
+                    assert "." not in cells[cores], cells[cores]
+
+
+def test_one_rule_decides_which_columns_hold_money():
+    """The dashboards and the reports read the same list, so neither forgets."""
+    from app.ui import components
+    frame = pd.DataFrame({"total_acr": [1_200_000.0], "acr": [840_000.0],
+                          "total_cores": [10], "customer_name": ["A"]})
+    on_screen = components.format_money(frame)
+    in_report = metrics.format_money_frame(frame, metrics.fmt_compact_currency)
+    assert list(on_screen["total_acr"]) == ["$1.20M"]
+    assert list(in_report["total_acr"]) == ["$1.2M"]
+    for out in (on_screen, in_report):
+        assert list(out["total_cores"]) == [10]          # counts are not money
+    # A column already formatted is left alone rather than written twice.
+    assert list(metrics.format_money_frame(in_report)["total_acr"]) == ["$1.2M"]
+
+
+# --------------------------------------------------------------------------- #
+# Nothing can go missing: every account is accounted for somewhere
+# --------------------------------------------------------------------------- #
+#: One account for every way it can sit, including the two that used to vanish:
+#: a state nobody stated, and a "Blocked …" wording outside the stated list.
+_EVERY_STATE = [
+    ("1", "Approved", "On Track", "4 - Executing Migration"),
+    ("2", "Approved", "Done", "7 - Completed"),
+    ("3", "Approved", "Blocked - Customer", "2 - Executing Pre-Requisites"),
+    ("4", "Approved", "Waiting action on follow up date", "3 - Finalize Scope"),
+    ("5", "Approved", "On Track", "6 - Cancelled / Archived"),
+    ("6", "Approved", "On Track", "5 - Deferred By Customer"),
+    ("7", "Approved", "", "4 - Executing Migration"),
+    ("8", "Pending", "On Track", "4 - Executing Migration"),
+    ("9", "Approved", "Done", "4 - Executing Migration"),
+    ("10", "Approved", "Blocked by legal", "2 - Executing Pre-Requisites"),
+]
+
+
+@pytest.fixture(scope="module")
+def every_state_fact():
+    raw = pd.DataFrame([{
+        "TPID": t, "Customer Name": f"Acct {t}", "Task ID": f"k{t}",
+        "Phase": "Wave 1", "Factory Offering": "AVS Migration Nominations",
+        "Primary Migration Path": "AV36/AV36P/AV52 - EOS",
+        "Tags": "Qualify and AccelerateAVS Migration - Gen1",
+        "Nomination Status": ns, "Current State": cs, "Migration Status": ms,
+        "Nom. Approval Date": "2026-01-05", "Nom. Created Date": "2026-01-05",
+        "Total Cores": "10", "Total ACR": "$100,000", "WW Region": "EMEA",
+    } for t, ns, cs, ms in _EVERY_STATE]).astype("string")
+    mp = mapping.resolve_mapping(list(raw.columns))
+    built, _report = cleaning.build_fact_frame(raw, mp, pd.Timestamp("2026-09-01"))
+    return built
+
+
+def test_the_reconciliation_accounts_for_every_account(every_state_fact):
+    """The charts show a subset; this says where the rest are, and adds up."""
+    from app.core import exporter as exp
+
+    pop = segments.population(every_state_fact, segments.CAT_EOS_ALL)
+    waves = kpi.wave_index(pop)
+    rows, accounts = exp.reconciliation(pop, waves)
+
+    assert accounts == pop["tpid_key"].nunique() == 10
+    assert int(rows["Accounts"].sum()) == accounts     # nothing lost, nothing twice
+    assert list(rows["State"])[:2] == [kpi.STATE_ON_TRACK, kpi.STATE_COMPLETED]
+
+    home = dict(zip(rows["State"], rows["Reported in"]))
+    assert "charted above" in home[kpi.STATE_ON_TRACK]
+    assert "cancelled" in home[kpi.STATE_CANCELLED].lower()
+    assert "deferred" in home[kpi.STATE_DEFERRED].lower()
+    # A "Blocked …" wording outside the stated five is visible as a shortfall
+    # rather than silently absent from the blocked section.
+    assert "1 of 2" in home[kpi.STATE_BLOCKED]
+
+
+def test_the_reports_carry_the_reconciliation(every_state_fact):
+    from app import state as state_mod
+    from app.core import exporter as exp, html_report, loader as loader_mod, \
+        rollup as rollup_mod
+
+    report = {"as_of": pd.Timestamp("2026-09-01"), "dq": {}, "dq_rows": 0,
+              "n_rows": len(every_state_fact), "unmapped": [], "parse": {},
+              "scope": {"floor_fy": "FY25"}}
+    customer = rollup_mod.build_customer_rollup(every_state_fact, report["as_of"])
+    ctx = state_mod.DataContext(
+        filename="x.csv", signature="sig", raw=pd.DataFrame(), mapping={},
+        fact=every_state_fact, customer=customer, report=report,
+        as_of=report["as_of"],
+        con=loader_mod.make_connection(every_state_fact, customer))
+
+    body = _main(html_report.build_html_report(ctx, reports=["eos"]).decode())
+    assert "Where every account sits" in body
+    assert "10</b> accounts in this report" in body
+
+    text = _flowable_text(exp.build_story(ctx, reports=["eos"]))
+    assert "Where every account sits" in text
+    assert "Not reported — cancelled / archived" in text
+
+
+def test_the_eos_report_cuts_accounts_by_generation_and_state(every_state_fact):
+    """A heatmap per generation that reconciles with the accounts it covers."""
+    from app.core import exporter as exp
+
+    # Two generations, so the grid has something to compare.
+    fact = every_state_fact.copy()
+    second = fact["tpid"].astype(str).isin(("5", "6", "7", "8", "9", "10"))
+    fact.loc[second, "tags"] = "InternalAVS Migration - Gen2"
+    fact["generation"] = fact["tpid_key"].map(segments.generation_by_tpid(fact))
+    pop = segments.population(fact, segments.CAT_EOS_ALL)
+    waves = kpi.wave_index(pop)
+
+    grid, rows = exp.generation_status(pop, waves)
+    assert list(grid.index) == [segments.GEN_1, segments.GEN_2]
+    # The three states a review asks about lead, in that order.
+    assert list(grid.columns)[:3] == [kpi.STATE_ON_TRACK, kpi.STATE_COMPLETED,
+                                      kpi.STATE_BLOCKED]
+    # Every state is a column, so each row totals that generation's accounts…
+    per_generation = (pop.drop_duplicates("tpid_key")["generation"]
+                      .value_counts().to_dict())
+    assert grid.sum(axis=1).to_dict() == per_generation
+    # …and the whole grid totals the report's accounts, which over all time is
+    # what New Engagements counts.
+    assert int(grid.to_numpy().sum()) == pop["tpid_key"].nunique()
+    assert int(grid.to_numpy().sum()) == kpi.new_engagements(
+        pop, None, None, firsts=waves.first).count
+    # Each cell can open its own accounts.
+    buckets = set(html_report_module()._by_generation_state(rows))
+    assert f"{segments.GEN_1} · {kpi.STATE_BLOCKED}" in buckets
+
+
+def html_report_module():
+    from app.core import html_report
+    return html_report
+
+
+def test_the_generation_heatmap_is_in_the_eos_report_only(every_state_fact):
+    from app import state as state_mod
+    from app.core import html_report, loader as loader_mod, rollup as rollup_mod
+
+    report = {"as_of": pd.Timestamp("2026-09-01"), "dq": {}, "dq_rows": 0,
+              "n_rows": len(every_state_fact), "unmapped": [], "parse": {},
+              "scope": {"floor_fy": "FY25"}}
+    customer = rollup_mod.build_customer_rollup(every_state_fact, report["as_of"])
+    ctx = state_mod.DataContext(
+        filename="x.csv", signature="sig", raw=pd.DataFrame(), mapping={},
+        fact=every_state_fact, customer=customer, report=report,
+        as_of=report["as_of"],
+        con=loader_mod.make_connection(every_state_fact, customer))
+
+    eos = _main(html_report.build_html_report(ctx, reports=["eos"]).decode())
+    assert "Accounts by generation and state" in eos
+    assert 'data-drill="gs-eos" data-drill-mode="y-x"' in eos      # a cell opens rows
+    assert "The counts — generation × state" in eos
+
+    # The rendered grid covers EVERY account in the report — a regression on a
+    # generation's wave index leaking into it, which silently dropped a whole
+    # row from the heatmap while the table above it still read correctly.
+    parser = _Cells()
+    parser.feed(eos.split('id="gt-eos"', 1)[1].split("</table>", 1)[0])
+    header, *body_rows = [r for r in parser.rows if r]
+    total = header.index("Total")
+    accounts = sum(int(row[total]) for row in body_rows)
+    pop = segments.population(every_state_fact, segments.CAT_EOS_ALL)
+    assert accounts == pop["tpid_key"].nunique()
+    assert len(body_rows) == pop.drop_duplicates("tpid_key")["generation"].nunique()
+
+    avs = _main(html_report.build_html_report(ctx, reports=["avs"]).decode())
+    assert "Accounts by generation and state" not in avs

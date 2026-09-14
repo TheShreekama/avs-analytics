@@ -210,17 +210,19 @@ def render() -> None:
         "| Hosts / Cores Migrated | **Sum of Total Cores** over `7 - Completed` wave "
         "records — *not* a TPID count; each source record counted once | Hosts (Cores "
         "on AVS → Azure Native) | Actual End Date |\n"
-        "| On-Track Accounts | Accounts **any** of whose waves reads *On Track* in "
-        "the **Current State** column while in flight | Customers | *snapshot — not "
-        "period-bound* |\n"
+        "| On-Track Accounts | Accounts **any** of whose waves is approved, in "
+        "flight and reads *On Track* in the **Current State** column | Customers | "
+        "*snapshot — not period-bound* |\n"
         "| ACR Claimed | **Sum of Total ACR over every wave** whose Actual End Date "
         "falls in the period | Currency | Actual End Date |\n"
-        "| ACR Pipeline | **Sum of Total ACR over every eligible wave**: status not "
-        "`7 - Completed` / `5 - Deferred by Customer` / `6 - Cancelled / Archived`, "
-        "nomination **approved**, Current State **not** containing *Blocked* — all "
-        "three, per wave | Currency | *snapshot — not period-bound* |\n"
+        "| ACR Pipeline | **Sum of Total ACR over every eligible wave** — Factory "
+        "Offering = *AVS Migration Nominations* (or a *(From AVS)* path), Nomination "
+        "Status = *Approved*, Current State = *On Track*, Migration Status not "
+        "`5 - Deferred By Customer` / `6 - Cancelled / Archived`; all four, per wave "
+        "| Currency | *whole dataset — the period does not narrow it* |\n"
         "| Nodes Deployment Planned (EOS only) | **Sum of Total Cores** over those "
-        "same eligible waves | Nodes | *snapshot — not period-bound* |\n"
+        "same eligible waves | Nodes | *whole dataset — the period does not narrow "
+        "it* |\n"
         "| Nomination Count (MoM) | Unique TPIDs per month, each counted once, placed "
         "in the month of its Wave-1 date | Customers | Wave-1 approval or created "
         "date (your choice) |\n"
@@ -309,6 +311,8 @@ def render() -> None:
             if isinstance(item, glossary.Rule):
                 st.caption(item.title)
                 st.code("\n".join(item.lines), language="text")
+                if item.plain:
+                    st.markdown(f"**In plain words** — {item.plain}")
             else:
                 st.markdown(item)
 
@@ -329,7 +333,8 @@ def render() -> None:
         "the reported pipeline — no metric counts them — but a cancelled or "
         "deferred engagement is a decision already taken rather than work that "
         "has stopped.\n\n"
-        "**A blank Current State is not On-Track.** There is no fallback: the "
+        "**An unapproved nomination is not On-Track**, and neither is a blank "
+        "Current State. There is no fallback: the "
         "column is how the programme says an engagement is moving, and a wave "
         "nobody has said that about is ignored rather than counted — it lands "
         "in *Other* and appears in neither slice. (A file whose Current State "
@@ -421,7 +426,11 @@ def render() -> None:
         "- **Points are keyed `FY27 Sep`**, not `Sep`: every year has a September, "
         "so the line a point sits on is part of its identity. Click-through works "
         "the same as anywhere else.\n\n"
-        "**The pipeline ignores the period.** *Current pipeline* — nominations by "
+        "**ACR Pipeline and Nodes Deployment Planned ignore the period entirely.** "
+        "They are read over the whole dataset — work nominated before the window is "
+        "still work still to do — so they read the same on the This-FY row and the "
+        "selected period's row. Every other sidebar filter still binds.\n\n"
+        "**The pipeline section ignores the period.** *Current pipeline* — nominations by "
         "state and on-track by stage — is a snapshot of where accounts stand now. "
         "It shows **every** account in the category at its latest wave, whatever "
         "its nomination date and whichever window is selected, and says so under "

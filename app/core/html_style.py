@@ -121,6 +121,10 @@ h4.sub {{ font-size: .95rem; margin: 1rem 0 .4rem; color: var(--ink); }}
 .rule-title {{ font-size: .82rem; font-weight: 600; color: var(--ink);
                padding: .45rem .7rem; border-bottom: 1px solid var(--border);
                background: var(--bg); }}
+.rule-plain {{ padding: .5rem .7rem; border-top: 1px solid var(--border);
+               font-size: .84rem; line-height: 1.5; color: var(--muted);
+               background: var(--card); }}
+.rule-plain b {{ color: var(--ink); }}
 .rule pre {{ margin: 0; padding: .7rem; overflow-x: auto; font-size: .78rem;
              line-height: 1.5; color: var(--ink);
              font-family: "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace; }}
