@@ -748,6 +748,8 @@ def matrix_fact():
         "Actual Start Date": ast, "Planned Start Date": pst,
         "Actual End Date": e, "Total Cores": c, "Current State": cs,
         "Primary Migration Path": "AV36/AV36P/AV52 - EOS",
+        "Factory Offering": "AVS Migration Nominations",
+        "Nomination Status": "Approved",
         "WW Region": "Americas - Enterprise",
     } for t, n, k, w, g, s, a, ast, pst, e, c, cs in rows]).astype("string")
     mp = mapping.resolve_mapping(list(raw.columns))
@@ -1379,6 +1381,9 @@ def state_fact():
         "Actual End Date": e, "Planned End Date": pe, "Total Cores": c,
         "Total ACR": acr, "Current State": cs, "WW Region": r,
         "Status Summary": f"Latest note on {n}", "Nomination Status": "Approved",
+        # The offering the AVS motion is delivered under — what the pipeline
+        # rule scopes on, and a different column from the migration path.
+        "Factory Offering": "AVS Migration Nominations",
         "Primary Migration Path": "AV36/AV36P/AV52 - EOS",
     } for t, n, k, w, g, s, a, e, pe, c, acr, cs, r in _STATE_ROWS]).astype("string")
     mp = mapping.resolve_mapping(list(raw.columns))
@@ -1539,48 +1544,97 @@ def test_blocked_accounts_are_in_none_of_the_delivery_metrics(state_fact):
 # --------------------------------------------------------------------------- #
 # ACR Pipeline / Nodes Deployment Planned — the eligible-wave rule
 # --------------------------------------------------------------------------- #
-def test_a_pipeline_wave_must_satisfy_all_three_conditions(state_fact):
+def test_a_pipeline_wave_must_satisfy_all_four_conditions(state_fact):
+    """Scope by offering, approved, On Track, and not deferred or cancelled."""
     eligible = state_fact[kpi.eligible_pipeline_waves(state_fact)]
-    # Only the two in-flight, approved, unblocked waves survive: Beta's Wave 1
-    # and Zeta's.  Completed (a1, b2), deferred (d1), cancelled (e1) and blocked
-    # (g1) waves are all dropped — any one exclusion is enough.
+    # Only Beta's Wave 1 qualifies: it is the one approved, On Track wave on the
+    # AVS Migration Nominations offering whose status is neither 5 nor 6.
+    # Acme and Beta's Wave 2 read "Done", Gamma is blocked, Delta is deferred,
+    # Epsilon cancelled, Zeta is On Track and counts too.
     assert sorted(eligible["task_id"]) == ["b1", "z1"]
     assert kpi.acr_pipeline(state_fact).value == 125_000 + 400_000
     assert kpi.nodes_planned(state_fact).value == 72 + 16
     assert kpi.nodes_planned(state_fact).unit == "nodes"
 
 
-@pytest.mark.parametrize("column,value", [
-    ("Migration Status", "7 - Completed"),
-    ("Migration Status", "5 - Deferred By Customer"),
-    ("Migration Status", "6 - Cancelled / Archived"),
-    ("Nomination Status", "Pending"),
-    ("Current State", "Blocked - Account team"),
+def test_the_pipeline_is_scoped_by_the_column_that_defines_each_motion():
+    """AVS motions by Factory Offering; AVS → Azure Native by the path.
+
+    The two are different columns, and each motion is scoped by the one that
+    defines it — an AVS population holds no "(From AVS)" waves and a native
+    population holds nothing else, so one rule serves both.
+    """
+    rows = [
+        # offering,                    path,                                  in?
+        ("AVS Migration Nominations",  "Onprem to AVS",                       True),
+        ("SQL Migration Nominations",  "Onprem to AVS",                       False),
+        ("SQL Migration Nominations",  "SQL Server MI Migration (From AVS)",  True),
+        ("AVS Migration Nominations",  "SQL Server MI Migration (From AVS)",  True),
+        ("Windows Migration Nominations", "Windows Server Migration",         False),
+    ]
+    raw = pd.DataFrame([{
+        "TPID": str(i), "Customer Name": f"Acct {i}", "Task ID": f"k{i}",
+        "Phase": "Wave 1", "Factory Offering": offering,
+        "Primary Migration Path": path, "Nomination Status": "Approved",
+        "Current State": "On Track", "Migration Status": "4 - Executing Migration",
+        "Nom. Approval Date": "2026-01-05", "Nom. Created Date": "2026-01-05",
+        "Total Cores": "10", "Total ACR": "$1,000", "WW Region": "EMEA", "Tags": "x",
+    } for i, (offering, path, _in) in enumerate(rows)]).astype("string")
+    mp = mapping.resolve_mapping(list(raw.columns))
+    frame, _ = cleaning.build_fact_frame(raw, mp, pd.Timestamp("2026-03-01"))
+    assert list(kpi.in_pipeline_scope(frame)) == [r[2] for r in rows]
+    assert list(kpi.eligible_pipeline_waves(frame)) == [r[2] for r in rows]
+
+
+@pytest.mark.parametrize("column,value,eligible", [
+    ("Factory Offering", "AVS Migration Nominations", True),      # the control
+    ("Factory Offering", "SQL Migration Nominations", False),     # 1. scope
+    ("Nomination Status", "Pending", False),                      # 2. approval
+    ("Current State", "Done", False),                             # 3. state
+    ("Current State", "Blocked - Account team", False),
+    ("Current State", "Waiting action on follow up date", False),
+    ("Current State", "", False),                                 # blank is ignored
+    ("Current State", "On-Track", True),                          # a spelling, not a state
+    ("Migration Status", "5 - Deferred By Customer", False),      # 4. exclusions
+    ("Migration Status", "6 - Cancelled / Archived", False),
+    ("Migration Status", "2 - Executing Pre-Requisites", True),
 ])
-def test_each_exclusion_alone_removes_a_wave_from_the_pipeline(column, value):
-    """One failed condition is enough, whatever the other two say."""
+def test_each_condition_alone_decides_a_pipeline_wave(column, value, eligible):
+    """One failed condition is enough, whatever the other three say."""
     base = {"TPID": "9", "Customer Name": "Solo", "Task ID": "s1",
             "Phase": "Wave 1", "Tags": "AVS Migration - Gen1",
+            "Factory Offering": "AVS Migration Nominations",
+            "Primary Migration Path": "Onprem to AVS",
             "Migration Status": "4 - Executing Migration",
-            "Nomination Status": "Approved", "Nom. Approval Date": "2025-09-01",
-            "Nom. Created Date": "2025-09-01", "Current State": "On Track",
-            "Total Cores": "10", "Total ACR": "$1,000",
-            "WW Region": "EMEA", "Primary Migration Path": "AV36/AV36P/AV52 - EOS"}
-    mp = mapping.resolve_mapping(list(base))
-    eligible, _ = cleaning.build_fact_frame(pd.DataFrame([base]).astype("string"),
-                                           mp, pd.Timestamp("2026-03-01"))
-    assert kpi.eligible_pipeline_waves(eligible).all()          # the control
-
-    # A nomination with no approval date and a non-approving status is not
-    # approved; every other case is a value swap on one column.
-    dropped = dict(base, **{column: value})
+            "Nomination Status": "Approved", "Nom. Approval Date": "2026-09-01",
+            "Nom. Created Date": "2026-09-01", "Current State": "On Track",
+            "Total Cores": "10", "Total ACR": "$1,000", "WW Region": "EMEA"}
+    row = dict(base, **{column: value})
     if column == "Nomination Status":
-        dropped["Nom. Approval Date"] = ""
-    frame, _ = cleaning.build_fact_frame(pd.DataFrame([dropped]).astype("string"),
-                                        mp, pd.Timestamp("2026-03-01"))
-    assert not kpi.eligible_pipeline_waves(frame).any(), (column, value)
+        # Approval is read from the status column, so the date must not stand in.
+        row["Nom. Approval Date"] = ""
+    mp = mapping.resolve_mapping(list(row))
+    frame, _ = cleaning.build_fact_frame(pd.DataFrame([row]).astype("string"), mp,
+                                        pd.Timestamp("2026-03-01"))
+    assert bool(kpi.eligible_pipeline_waves(frame).any()) is eligible, (column, value)
+    assert (kpi.acr_pipeline(frame).value == 1_000) is eligible
+    assert (kpi.nodes_planned(frame).value == 10) is eligible
+
+
+def test_an_approval_date_alone_is_not_an_approved_nomination():
+    """The rule names the Nomination Status column, so that is what it reads."""
+    row = {"TPID": "9", "Customer Name": "Solo", "Task ID": "s1", "Phase": "Wave 1",
+           "Factory Offering": "AVS Migration Nominations",
+           "Primary Migration Path": "Onprem to AVS", "Nomination Status": "On Hold",
+           "Nom. Approval Date": "2026-09-01", "Nom. Created Date": "2026-09-01",
+           "Current State": "On Track", "Migration Status": "4 - Executing Migration",
+           "Total Cores": "10", "Total ACR": "$1,000", "WW Region": "EMEA", "Tags": "x"}
+    mp = mapping.resolve_mapping(list(row))
+    frame, _ = cleaning.build_fact_frame(pd.DataFrame([row]).astype("string"), mp,
+                                        pd.Timestamp("2026-03-01"))
+    assert bool(frame["is_approved"].all())            # the general flag says yes…
+    assert not kpi.is_nomination_approved(frame).any()  # …the pipeline's rule does not
     assert kpi.acr_pipeline(frame).value == 0
-    assert kpi.nodes_planned(frame).value == 0
 
 
 def test_only_eos_reports_carry_the_planned_deployment_card():
@@ -1693,14 +1747,33 @@ def test_methodology_is_opt_in_and_out_of_the_contents(state_doc):
 
 
 def test_the_report_states_its_own_methodology(state_doc):
-    """Requirement 10: the rules travel with the report."""
+    """The rules travel with the report — as rules, not as sentences."""
     body = _main(state_doc)
     assert 'id="methodology"' in body
-    for heading, _paragraphs in glossary.REPORT_METHODOLOGY:
+    for heading, _items in glossary.REPORT_METHODOLOGY:
         assert esc(heading) in body, heading
-    for rule in ("none of its waves is on track", "Nodes Deployment Planned",
-                 "ACR Pipeline", "EOS reports cover Gen-1 and Gen-2 only"):
-        assert rule in body, rule
+
+    # Every rule block is printed, aligned as written, in its own frame.
+    rules = [item for _h, items in glossary.REPORT_METHODOLOGY for item in items
+             if isinstance(item, glossary.Rule)]
+    assert len(rules) >= 6
+    assert body.count('<div class="rule">') == len(rules)
+    for rule in rules:
+        assert esc(rule.title) in body, rule.title
+        for line in rule.lines:
+            if line.strip():
+                assert esc(line) in body, line
+
+    # …and the rules a reader would go looking for say what the code does.
+    for phrase in ('Current State      =  "On Track"',
+                   'Nomination Status       =        "Approved"',
+                   'Factory Offering        =        "AVS Migration Nominations"',
+                   'Primary Migration Path  CONTAINS "From AVS"',
+                   '"5 - Deferred By Customer"',
+                   "AND no wave of the account is On Track",
+                   "ACR Pipeline             = SUM(Total ACR)",
+                   "Nodes Deployment Planned = SUM(Total Cores)"):
+        assert esc(phrase) in body, phrase
 
 
 def test_no_generated_report_names_the_application_or_the_file(state_ctx, state_doc):
@@ -1841,3 +1914,51 @@ def test_each_optional_section_is_included_only_when_asked_for(
                                           sections=sections))
     assert ("Accounts stopped on a stated blocking state" in text) is blocked
     assert ("Derived from this report's own population" in text) is insights
+
+
+# --------------------------------------------------------------------------- #
+# The methodology is written as the rules, and stays legible where it prints
+# --------------------------------------------------------------------------- #
+def _rules():
+    return [item for _h, items in glossary.REPORT_METHODOLOGY for item in items
+            if isinstance(item, glossary.Rule)]
+
+
+def test_the_methodology_states_rules_not_only_sentences():
+    """Every section that has logic to state, states it as logic."""
+    rules = {rule.title for rule in _rules()}
+    assert len(rules) >= 6, rules
+    # The rules a reader comes looking for.
+    assert any("On Track" in t for t in rules)
+    assert any("eligible" in t for t in rules)
+    assert any("state, first match wins" in t for t in rules)
+    for rule in _rules():
+        assert rule.lines and all(isinstance(line, str) for line in rule.lines)
+
+
+def test_rule_blocks_stay_aligned_and_fit_the_printed_page():
+    """Alignment carries the meaning, so it must survive the PDF's column."""
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+    from app.core import pdf_kit as kit
+
+    available = kit.CONTENT_WIDTH[kit.PORTRAIT] - 14      # the cell's padding
+    for rule in _rules():
+        # A trailing comment lines up down the block, or it is not a column.
+        comments = {line.index("--") for line in rule.lines if "--" in line}
+        assert len(comments) <= 1, (rule.title, comments)
+        for line in rule.lines:
+            width = stringWidth(line, "Courier", 7)
+            assert width <= available, (rule.title, line, round(width))
+
+
+def test_the_pipeline_rule_is_documented_exactly_as_implemented():
+    """The printed rule and the code must name the same columns and values."""
+    rule = next(r for r in _rules() if "eligible" in r.title)
+    text = "\n".join(rule.lines)
+    assert kpi.PIPELINE_OFFERING in text
+    assert "From AVS" in text
+    assert '"Approved"' in text and '"On Track"' in text
+    for status in kpi.PIPELINE_EXCLUDED_STATUSES:
+        assert status in text, status
+    # …and nothing the rule does not exclude is listed as an exclusion.
+    assert "7 - Completed" not in text.split("NOT IN")[-1]

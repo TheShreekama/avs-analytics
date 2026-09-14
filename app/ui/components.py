@@ -275,7 +275,7 @@ _NICE.update({
     "aging_days": "Age (days)", "cycle_time_days": "Cycle Time (days)",
     "migration_status_label": "Migration Status", "dq_flags": "Data Quality Notes",
     "approval_latency_days": "Approval Latency (days)", "is_open": "Open", "is_closed": "Closed",
-    "region_geo": "WW Region", "migration_path": "Migration Path (offering)",
+    "region_geo": "WW Region",
 })
 
 

@@ -671,15 +671,29 @@ def _by_region_stage(rows: pd.DataFrame) -> list[str]:
 
 
 def _offerings(doc: _Builder, spec, pop) -> None:
-    """The AVS → Azure Native cut: which offering, which Azure-native service."""
+    """The AVS → Azure Native cut, on all three of its own columns.
+
+    **Factory Offering and Primary Migration Path are different columns** and
+    are charted separately: the offering says which factory delivers the work
+    (SQL, Windows, Linux, OSS DB Nominations), the path says what moves where
+    ("SQL Server MI Migration (From AVS)").  One does not stand in for the
+    other, and the Azure-native target is read from the path.
+    """
+    offerings = exporter.labelled(pop, "factory_offering")
     paths = exporter.labelled(pop, "migration_path")
     targets = exporter.labelled(pop, "azure_target")
-    if paths.empty and targets.empty:
+    if offerings.empty and paths.empty and targets.empty:
         return
     body = ""
+    if not offerings.empty:
+        body += _drillable(
+            doc, heading="Nominations by Factory Offering",
+            fig=charts.bar(offerings.head(12), "category", "count", horizontal=True),
+            rows=pop, buckets=lambda r: list(exporter.clean(r["factory_offering"])),
+            table_id=_slug("of", spec.key), mode="y", height=300)
     if not paths.empty:
         body += _drillable(
-            doc, heading="Nominations by migration path (offering)",
+            doc, heading="Nominations by Primary Migration Path",
             fig=charts.bar(paths.head(12), "category", "count", horizontal=True),
             rows=pop, buckets=lambda r: list(exporter.clean(r["migration_path"])),
             table_id=_slug("op", spec.key), mode="y", height=340)
@@ -690,11 +704,12 @@ def _offerings(doc: _Builder, spec, pop) -> None:
             rows=pop, buckets=lambda r: list(exporter.clean(r["azure_target"])),
             table_id=_slug("ot", spec.key), mode="label", height=340)
     doc.write(_card(
-        "By offering & target",
-        "Full offering names (the migration path) and the Azure-native service "
-        "each lands on. Wave-level counts over every nomination in the report — "
-        "not narrowed by the reporting period. Click a bar or slice to narrow "
-        "the records beneath it.", body))
+        "By offering, path & target",
+        "Three separate columns: the **Factory Offering** that delivers the "
+        "work, the **Primary Migration Path** that says what moves where, and "
+        "the Azure-native service the path lands on. Wave-level counts over "
+        "every nomination in the report — not narrowed by the reporting "
+        "period. Click a bar or slice to narrow the records beneath it.", body))
 
 
 def _eos_matrix(doc: _Builder, ctx, pop) -> None:
@@ -940,6 +955,14 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec
               "</section>")
 
 
+def _method_item(item) -> str:
+    """One methodology item: a paragraph, or a rule shown as the rule itself."""
+    if isinstance(item, glossary.Rule):
+        return (f'<div class="rule"><div class="rule-title">{esc(item.title)}'
+                f'</div><pre>{esc(chr(10).join(item.lines))}</pre></div>')
+    return f"<p>{rich(item)}</p>"
+
+
 def _methodology(doc: _Builder) -> None:
     """How every figure above was calculated — behind a checkbox, like the rest.
 
@@ -952,8 +975,8 @@ def _methodology(doc: _Builder) -> None:
     """
     blocks = "".join(
         f'<h4 class="sub">{esc(heading)}</h4><div class="prose">'
-        + "".join(f"<p>{rich(text)}</p>" for text in paragraphs) + "</div>"
-        for heading, paragraphs in glossary.REPORT_METHODOLOGY)
+        + "".join(_method_item(item) for item in items) + "</div>"
+        for heading, items in glossary.REPORT_METHODOLOGY)
     doc.write('<section class="report" id="methodology">'
               + _optional_card(
                   "opt-methodology", "Methodology & logic",

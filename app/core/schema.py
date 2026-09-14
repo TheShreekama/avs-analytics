@@ -61,17 +61,21 @@ CANONICAL_FIELDS: list[CanonicalField] = [
                    DTYPE_ID, "Identity", ("opportunity id", "msx opp")),
 
     # --- Migration track ------------------------------------------------- #
-    CanonicalField("factory_offering", "Factory Offering (Track)", "Factory Offering",
+    CanonicalField("factory_offering", "Factory Offering", "Factory Offering",
                    DTYPE_CATEGORY, "Migration Track",
                    ("offering", "factory", "nomination type", "workload track"),
                    required=True,
-                   description="Migration track, e.g. AVS / SQL / OSSDB / Windows / Linux."),
+                   description="The offering — which factory delivers the work: AVS "
+                               "Migration Nominations, SQL / OSSDB / Windows / Linux "
+                               "Nominations. Distinct from the migration path."),
     CanonicalField("phase", "Phase / Wave", "Phase", DTYPE_CATEGORY, "Migration Track",
                    ("wave", "sprint", "batch")),
     CanonicalField("migration_path", "Primary Migration Path", "Primary Migration Path",
                    DTYPE_CATEGORY, "Migration Track",
                    ("migration path", "path", "scenario", "primary path"),
-                   description="Source→target path; '(From AVS)' implies AVS→Azure-Native."),
+                   description="The migration path — what moves where ('Onprem to AVS', "
+                               "'SQL Server MI Migration (From AVS)'); '(From AVS)' "
+                               "implies AVS→Azure-Native. Distinct from the offering."),
     CanonicalField("linked_task_id", "Linked Task ID", "Linked Task ID", DTYPE_ID,
                    "Migration Track", ("linked task",)),
     CanonicalField("linked_offering", "Linked Offering", "Linked Offering Name",

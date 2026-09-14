@@ -300,38 +300,23 @@ def render() -> None:
     section("The rules every report applies",
             help="Exactly the text the generated PDF and HTML reports carry in "
                  "their own Methodology & logic section.")
-    st.caption("This block is rendered from the same source the exported reports "
-               "print, so the page and the report cannot disagree.")
-    for heading, paragraphs in glossary.REPORT_METHODOLOGY:
-        st.markdown(f"**{heading}**")
-        st.markdown("\n\n".join(paragraphs))
+    st.caption("Rendered from the same source the exported reports print, so the "
+               "page and the report cannot disagree. Each rule is shown as the "
+               "rule — the columns, values and exclusions the code applies.")
+    for heading, items in glossary.REPORT_METHODOLOGY:
+        st.markdown(f"##### {heading}")
+        for item in items:
+            if isinstance(item, glossary.Rule):
+                st.caption(item.title)
+                st.code("\n".join(item.lines), language="text")
+            else:
+                st.markdown(item)
 
     # ------------------------------------------------------------------ #
     section("Current state & the pipeline chart")
     st.markdown(
-        "**On-Track is read from the Current State column** — it is not inferred "
-        "from \"not finished yet\" — and it is read across **every wave the "
-        "account owns**, not only its latest one.\n\n"
-        "A **wave** is on track when **both** hold:\n"
-        "- Migration Status is one of the four **in-flight** codes: "
-        "`1 - Validating Commitment & Initial Scope`, `2 - Executing "
-        "Pre-Requisites`, `3 - Finalize Scope`, `4 - Executing Migration`; and\n"
-        "- Current State reads *On Track* / *On-Track*.\n\n"
-        "The **account** is then classified, first match winning:\n\n"
-        "1. **On-Track** — **any** wave of the account is on track. Work still "
-        "running on an earlier wave is work still running.\n"
-        "2. **Completed** — the **latest** wave is `7 - Completed` **and none** "
-        "of the account's waves is on track. Both conditions, never one: an "
-        "account whose latest wave has completed while another wave is on track "
-        "is **On-Track**, not Completed.\n"
-        "3. **Cancelled** — the latest wave resolved to cancelled / archived.\n"
-        "4. **Blocked** — the latest wave's Current State contains *Blocked*.\n"
-        "5. **Deferred** — the latest wave is `5 - Deferred by Customer`.\n"
-        "6. **Other** — everything else, e.g. *Waiting action on follow up "
-        "date*.\n\n"
-        "Every account resolves to **exactly one** state, so the reported states "
-        "(1-2) and the excluded ones (3-6) partition the category: nothing is "
-        "counted twice, nothing is dropped.\n\n"
+        "The account-state rule itself is stated above, under **The rules every "
+        "report applies** — this section is what the *charts* then do with it.\n\n"
         "**Nominations by state shows only On-Track and Completed.** Blocked, "
         "deferred, cancelled and waiting accounts are deliberately left out, so "
         "the slices will **not** add up to every account in the category — the "
@@ -339,26 +324,21 @@ def render() -> None:
         "everything\".\n\n"
         "**Blocked & waiting accounts** is the section that reports what has "
         "stopped, on every dashboard and in both export formats (in the HTML "
-        "report it sits behind a checkbox and is hidden until ticked). It "
-        "covers the accounts whose latest wave's **Current State** is one of "
-        "**Blocked**, **Blocked - Account team**, **Blocked - Customer**, "
-        "**Blocked - Partner / ISD** or **Waiting action on follow up date** — "
-        "and *only* those. It reports their count, the ACR they hold up, the "
-        "state each is stopped on, their WW Region distribution, how many waves "
-        "sit behind them, and the programme's own **Status Summary** against "
-        "every account, which is the sentence explaining what it is waiting "
-        "for.\n\n"
-        "**Cancelled and deferred accounts are in no section.** They are out of "
-        "the reported pipeline — no metric above counts them — but a cancelled "
-        "or deferred engagement is a decision already taken rather than work "
-        "that has stopped, so the blocked section leaves them out too. A wave "
-        "cancelled while its Current State still reads *Blocked* is reported as "
-        "the cancellation it is.\n\n"
-        "*Fallback:* where Current State is blank, an in-flight wave still "
-        "counts as on track, so an unmapped column cannot silently empty the "
-        "pipeline. **On-track by stage** groups on-track accounts by the "
-        "Migration Status of the **on-track wave itself** — the wave the work is "
-        "on — not of a later wave the account has already finished.\n\n"
+        "report it sits behind a checkbox and is hidden until ticked). "
+        "**Cancelled and deferred accounts are in no section**: they are out of "
+        "the reported pipeline — no metric counts them — but a cancelled or "
+        "deferred engagement is a decision already taken rather than work that "
+        "has stopped.\n\n"
+        "**A blank Current State is not On-Track.** There is no fallback: the "
+        "column is how the programme says an engagement is moving, and a wave "
+        "nobody has said that about is ignored rather than counted — it lands "
+        "in *Other* and appears in neither slice. (A file whose Current State "
+        "column was never mapped therefore reports no on-track accounts at all, "
+        "which is the honest answer; **Data → Column Mapping** is where to fix "
+        "it.)\n\n"
+        "**On-track by stage** groups on-track accounts by the Migration Status "
+        "of the **on-track wave itself** — the wave the work is on — not of a "
+        "later wave the account has already finished.\n\n"
         "*When the two columns disagree* — Current State says *Done* but Migration "
         "Status is not `7 - Completed` — the account is neither Completed nor "
         "On-Track and appears in neither slice. That is not a silent loss: those "

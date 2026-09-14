@@ -522,19 +522,33 @@ def _blocked_accounts_table(rows: pd.DataFrame, ss, max_rows: int) -> list:
 
 
 def _offering_block(pop: pd.DataFrame, ss) -> list:
-    """The AVS → Azure Native cut: which offering, which Azure-native service."""
+    """The AVS → Azure Native cut, on all three of its own columns.
+
+    Factory Offering and Primary Migration Path are different columns and are
+    charted separately — the offering is which factory delivers the work, the
+    path is what moves where.
+    """
+    offerings = labelled(pop, "factory_offering")
     paths = labelled(pop, "migration_path")
     targets = labelled(pop, "azure_target")
-    if paths.empty and targets.empty:
+    if offerings.empty and paths.empty and targets.empty:
         return []
-    out = [Paragraph("By offering & target", ss["H2"]),
-           Paragraph("Full offering names (the migration path) and the "
-                     "Azure-native service each lands on. Wave-level counts over "
-                     "every nomination in the report — not narrowed by the "
-                     "reporting period.", ss["Muted"]), kit.spacer(0.15)]
+    out = [Paragraph("By offering, path & target", ss["H2"]),
+           Paragraph("Three separate columns: the <b>Factory Offering</b> that "
+                     "delivers the work, the <b>Primary Migration Path</b> that "
+                     "says what moves where, and the Azure-native service the "
+                     "path lands on. Wave-level counts over every nomination in "
+                     "the report — not narrowed by the reporting period.",
+                     ss["Muted"]), kit.spacer(0.15)]
+    if not offerings.empty:
+        out.append(KeepTogether([
+            Paragraph("Nominations by Factory Offering", ss["H3"]),
+            kit.image(pc.bar_png(offerings.head(12), "category", "count",
+                                 horizontal=True, height_px=240), width_cm=16.6)]))
+        out.append(kit.spacer(0.2))
     if not paths.empty:
         out.append(KeepTogether([
-            Paragraph("Nominations by migration path (offering)", ss["H3"]),
+            Paragraph("Nominations by Primary Migration Path", ss["H3"]),
             kit.image(pc.bar_png(paths.head(12), "category", "count",
                                  horizontal=True, height_px=270), width_cm=16.6)]))
         out.append(kit.spacer(0.2))
@@ -943,10 +957,14 @@ def _methodology(ss) -> list:
              Paragraph("How every figure in this report is calculated — the "
                        "rules as implemented, not as intended.", ss["Body2"]),
              kit.spacer(0.3)]
-    for heading, paragraphs in glossary.REPORT_METHODOLOGY:
+    for heading, items in glossary.REPORT_METHODOLOGY:
         block = [Paragraph(_esc(heading), ss["H2"])]
-        for text in paragraphs:
-            block += [Paragraph(_strip(text), ss["Body2"]), kit.spacer(0.08)]
+        for item in items:
+            if isinstance(item, glossary.Rule):
+                block += [kit.spacer(0.05), *kit.rule_block(item.title, item.lines, ss),
+                          kit.spacer(0.12)]
+            else:
+                block += [Paragraph(_strip(item), ss["Body2"]), kit.spacer(0.08)]
         story += [KeepTogether(block), kit.spacer(0.25)]
     return story
 

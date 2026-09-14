@@ -487,31 +487,46 @@ def _blocked_accounts(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> Non
 
 
 def _offering_and_target(fact: pd.DataFrame, key: str) -> None:
-    """The AVS → Azure Native cut: which offering, which Azure service.
+    """The AVS → Azure Native cut, on all three of its own columns.
+
+    **Factory Offering and Primary Migration Path are different columns.** The
+    offering says which factory delivers the work (SQL, Windows, Linux, OSS DB
+    Nominations); the path says what moves where ("SQL Server MI Migration
+    (From AVS)"), and the Azure-native target is read from it.  Each gets its
+    own chart, because one never stood for the other.
 
     Lives here rather than on the status report because this is the page that
     owns the motion — one place to read it, not two.
     """
-    section("By offering & target", help=glossary.OFFERING_AND_TARGET,
+    section("By offering, path & target", help=glossary.OFFERING_AND_TARGET,
             period="Every nomination in this category — not filtered by the "
                    "reporting period")
-    st.caption("Full offering names (the migration path), and the Azure-native "
-               "service each one lands on. Click a bar or slice to open the "
-               "nominations behind it.")
+    st.caption("The **Factory Offering** that delivers the work, the **Primary "
+               "Migration Path** that says what moves where, and the "
+               "Azure-native service the path lands on. Click a bar or slice to "
+               "open the nominations behind it.")
+    offerings = _count_by(fact, "factory_offering")
     paths = _count_by(fact, "migration_path")
     targets = _count_by(fact, "azure_target")
     c1, c2 = st.columns(2)
     with c1:
-        picked_path = drilldown.selectable_chart(
-            charts.bar(paths, "category", "count", horizontal=True,
-                       title="Nominations by migration path (offering)"),
+        picked_offering = drilldown.selectable_chart(
+            charts.bar(offerings, "category", "count", horizontal=True,
+                       title="Nominations by Factory Offering"),
             key=f"{key}_offering")
     with c2:
         picked_target = drilldown.selectable_chart(
             charts.donut(targets, "category", "count", title="Azure-native targets"),
             key=f"{key}_target")
-    drilldown.drilldown(fact, "migration_path", picked_path,
+    picked_path = drilldown.selectable_chart(
+        charts.bar(paths, "category", "count", horizontal=True,
+                   title="Nominations by Primary Migration Path"),
+        key=f"{key}_path")
+    drilldown.drilldown(fact, "factory_offering", picked_offering,
                         key=f"{key}_offering_rows", what="nominations by offering",
+                        max_rows=500)
+    drilldown.drilldown(fact, "migration_path", picked_path,
+                        key=f"{key}_path_rows", what="nominations by migration path",
                         max_rows=500)
     drilldown.drilldown(fact, "azure_target", picked_target,
                         key=f"{key}_target_rows", what="nominations by target",

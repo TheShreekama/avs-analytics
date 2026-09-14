@@ -36,12 +36,18 @@ import pandas as pd
 from . import metrics, segments
 
 # Columns offered in every drill-down table, in this order (missing ones are skipped).
+#: ``factory_offering`` and ``migration_path`` are **two different columns** and
+#: both are carried: the Factory Offering names which factory delivers the work
+#: ("AVS Migration Nominations", "SQL Migration Nominations"), the Primary
+#: Migration Path names what is moving where ("Onprem to AVS", "SQL Server MI
+#: Migration (From AVS)").  Reporting one as if it were the other loses the
+#: distinction every scope rule in this module turns on.
 DRILLDOWN_COLUMNS = [
     "tpid", "customer_name", "solution_architect", "assigned_pm",
     "migration_category", "generation", "source_platform",
     "target_platform", "phase", "avs_sku", "migration_status_label", "approval_date",
     "actual_start_date", "actual_end_date", "total_cores", "total_acr",
-    "current_state", "region_geo", "migration_path",
+    "current_state", "region_geo", "factory_offering", "migration_path",
 ]
 
 COMPLETED_CODE = 7
@@ -634,23 +640,25 @@ def reported_stages(df: pd.DataFrame) -> pd.Series:
 def is_on_track_wave(df: pd.DataFrame) -> pd.Series:
     """Per **wave**: is this wave on track right now?
 
-    Both halves have to hold, exactly as the pipeline has always read them:
+    Both halves have to hold::
 
-    * the wave's Migration Status is one of the four in-flight codes (1-4) — a
-      completed, deferred or cancelled wave can never be on track; and
-    * its Current State reads *On Track* / *On-Track*.
+        Migration Status IN (1, 2, 3, 4)        -- in flight
+        Current State    =  "On Track"          -- and nothing else
 
-    A wave whose Current State is blank falls back to the status alone, so a
-    file that never got that column mapped still reports a pipeline rather than
-    an empty one.
+    A completed, deferred or cancelled wave can never be on track whatever its
+    Current State says.  **A blank Current State is not on track either**: the
+    column is how the programme says an engagement is moving, and a wave nobody
+    has said that about is not evidence that it is — such a wave is ignored
+    rather than counted, so it lands in *Other* and no On-Track number rests on
+    an empty cell.
+
+    The match is exact once punctuation and case are normalised, so "On Track",
+    "On-Track" and "on  track" are the same state and "On Track - at risk" is
+    not.
     """
     if df.empty:
         return pd.Series(dtype=bool)
-    raw = _current_state(df)
-    unstated = raw.isna() | raw.eq("")
-    reads_on_track = raw.str.contains(_ON_TRACK_PATTERN, case=False, na=False,
-                                      regex=True)
-    return (in_flight(df) & (reads_on_track | unstated)).fillna(False)
+    return (in_flight(df) & _is_state(df, ON_TRACK_STATE)).fillna(False)
 
 
 def _current_state(df: pd.DataFrame) -> pd.Series:
@@ -680,6 +688,18 @@ def _state_key(values: pd.Series) -> pd.Series:
 #: The blocking vocabulary, keyed for matching.
 _BLOCKED_KEYS = {k: label for k, label in
                  zip(_state_key(pd.Series(list(BLOCKED_STATES))), BLOCKED_STATES)}
+
+
+#: The one Current State that means "this wave is moving".
+ON_TRACK_STATE = "On Track"
+
+
+def _is_state(df: pd.DataFrame, *states: str) -> pd.Series:
+    """Rows whose Current State is exactly one of *states*, punctuation aside."""
+    if df.empty:
+        return pd.Series(dtype=bool)
+    wanted = {_state_key(pd.Series([s]))[0] for s in states}
+    return _state_key(_current_state(df)).isin(wanted).fillna(False)
 
 
 def is_blocking_state(df: pd.DataFrame) -> pd.Series:
@@ -988,33 +1008,86 @@ def wave_profile(fact: pd.DataFrame, rows: pd.DataFrame) -> pd.DataFrame:
 # --------------------------------------------------------------------------- #
 # Pipeline ahead: the waves still to deliver
 # --------------------------------------------------------------------------- #
-#: Migration Statuses that take a wave out of the forward pipeline: the work is
-#: done, the customer deferred it, or it was cancelled/archived.
-PIPELINE_EXCLUDED_CODES = (COMPLETED_CODE, DEFERRED_CODE, CANCELLED_CODE)
+#: The Factory Offering that *is* the AVS onboarding motion.  Pipeline is
+#: counted over that offering's waves only — the other offerings on an AVS
+#: account (SQL, Windows, Linux, OSS DB) are different factories' work.
+PIPELINE_OFFERING = "AVS Migration Nominations"
+
+#: What a migration path says when the wave is leaving AVS for Azure-native
+#: services — the AVS → Azure Native motion's own pipeline scope.
+PIPELINE_FROM_AVS = "from avs"
+
+#: Migration Statuses that take a wave out of the forward pipeline.
+PIPELINE_EXCLUDED_STATUSES = ("5 - Deferred By Customer", "6 - Cancelled / Archived")
+PIPELINE_EXCLUDED_CODES = (DEFERRED_CODE, CANCELLED_CODE)
+
+
+def in_pipeline_scope(fact: pd.DataFrame) -> pd.Series:
+    """Waves the pipeline is counted over, by motion::
+
+        Factory Offering       =        "AVS Migration Nominations"   -- AVS motions
+        Primary Migration Path CONTAINS "From AVS"                    -- AVS → Azure Native
+
+    Either qualifies, which is what makes one rule serve both reports: an AVS
+    or EOS population holds no "(From AVS)" waves, so the test reduces to the
+    offering; the AVS → Azure Native population is nothing but those waves, so
+    it reduces to the path.  Run over a mixed frame it is the union — each
+    motion counted the way it is defined.
+    """
+    if fact.empty:
+        return pd.Series(dtype=bool)
+    offering = (fact["factory_offering"].astype("string").str.strip()
+                if "factory_offering" in fact.columns
+                else pd.Series(pd.NA, index=fact.index, dtype="string"))
+    path = (fact["migration_path"].astype("string")
+            if "migration_path" in fact.columns
+            else pd.Series(pd.NA, index=fact.index, dtype="string"))
+    is_avs_motion = offering.str.casefold().eq(PIPELINE_OFFERING.casefold())
+    leaves_avs = path.str.contains(PIPELINE_FROM_AVS, case=False, na=False)
+    return (is_avs_motion | leaves_avs).fillna(False)
+
+
+def is_nomination_approved(df: pd.DataFrame) -> pd.Series:
+    """``Nomination Status = "Approved"`` — the column, not an inference.
+
+    Deliberately stricter than ``is_approved`` (which also accepts an approval
+    *date* on a nomination whose status never said so): the pipeline is defined
+    on the status column, so that is what it reads.
+    """
+    if df.empty:
+        return pd.Series(dtype=bool)
+    status = (df["nomination_status"].astype("string").str.strip()
+              if "nomination_status" in df.columns
+              else pd.Series(pd.NA, index=df.index, dtype="string"))
+    return status.str.casefold().eq("approved").fillna(False)
 
 
 def eligible_pipeline_waves(fact: pd.DataFrame) -> pd.Series:
-    """Waves still ahead of the programme — the pipeline's eligibility rule.
+    """The waves the forward pipeline is counted over.
 
-    A wave counts only when **all three** hold, judged on the wave itself:
+    A wave counts when **all four** hold::
 
-    1. its (latest) Migration Status is **not** ``7 - Completed``,
-       ``5 - Deferred by Customer`` or ``6 - Cancelled / Archived``;
-    2. the nomination is **approved**; and
-    3. its Current State does **not** contain *Blocked*.
+        1. Factory Offering       =        "AVS Migration Nominations"   -- AVS + EOS reports
+           Primary Migration Path CONTAINS "From AVS"                    -- AVS → Azure Native
+        2. Nomination Status      =        "Approved"
+        3. Current State          =        "On Track"                    -- and nothing else
+        4. Migration Status       NOT IN   ("5 - Deferred By Customer",
+                                            "6 - Cancelled / Archived")
 
-    Any one exclusion drops the wave, so nothing blocked, deferred, cancelled,
-    delivered or unapproved is ever counted as pipeline.
+    Judged **per wave**, on the wave's own columns.  Any one failure drops it,
+    so nothing blocked, waiting, deferred, cancelled or unapproved is ever
+    counted as pipeline — and neither is a wave on an offering this motion does
+    not deliver.
     """
     if fact.empty:
         return pd.Series(dtype=bool)
     code = pd.to_numeric(fact.get("migration_status_code"), errors="coerce")
-    resolved = (code.isin(PIPELINE_EXCLUDED_CODES).fillna(False)
-                | is_completed(fact) | is_deferred(fact) | is_cancelled(fact))
-    approved = fact.get("is_approved")
-    approved = (pd.Series(False, index=fact.index) if approved is None
-                else approved.fillna(False).astype(bool))
-    return (~resolved & approved & ~is_blocked(fact)).fillna(False)
+    excluded = (code.isin(PIPELINE_EXCLUDED_CODES).fillna(False)
+                | is_deferred(fact) | is_cancelled(fact))
+    return (in_pipeline_scope(fact)
+            & is_nomination_approved(fact)
+            & _is_state(fact, ON_TRACK_STATE)
+            & ~excluded).fillna(False)
 
 
 def acr_pipeline(fact: pd.DataFrame) -> Metric:
@@ -1059,8 +1132,9 @@ LATEST_WAVE_COLUMN = "Most Recent / Latest Wave"
 #: table and would otherwise sit twenty columns to the right.
 BLOCKED_DRILLDOWN_COLUMNS = [
     "tpid", "customer_name", "region_geo", "blocked_state",
-    "migration_status_label", "phase", "solution_architect", "assigned_pm",
-    "total_cores", "total_acr", "status_summary",
+    "migration_status_label", "factory_offering", "migration_path", "phase",
+    "solution_architect", "assigned_pm", "total_cores", "total_acr",
+    "status_summary",
 ]
 
 
