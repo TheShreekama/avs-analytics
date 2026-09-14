@@ -22,8 +22,8 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.platypus import (BaseDocTemplate, Flowable, Frame, Image, NextPageTemplate,
-                                PageBreak, PageTemplate, Paragraph, Spacer, Table,
-                                TableStyle)
+                                PageBreak, PageTemplate, Paragraph, Preformatted,
+                                Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
 from ..config import PALETTE
@@ -316,6 +316,34 @@ def image(png: bytes, width_cm: float = 17.0):
     img.drawHeight = width_cm * cm * ratio
     img.hAlign = "LEFT"
     return img
+
+
+def rule_block(title: str, lines, ss) -> list:
+    """A rule printed as the rule: a title strip over monospaced, aligned text.
+
+    Alignment carries meaning here — the column, the operator and the value line
+    up down the block — so the lines are laid out preformatted rather than
+    reflowed as prose.
+    """
+    mono = ParagraphStyle("Rule", parent=ss["BodyText"], fontName="Courier",
+                          fontSize=7, leading=9.6, textColor=INK,
+                          spaceBefore=0, spaceAfter=0)
+    head = ParagraphStyle("RuleHead", parent=ss["BodyText"], fontSize=8,
+                          leading=10, textColor=INK, spaceBefore=0, spaceAfter=0)
+    body = Preformatted("\n".join(lines), mono)
+    table = Table([[Paragraph(f"<b>{title}</b>", head)], [body]],
+                  colWidths=[CONTENT_WIDTH[PORTRAIT]])
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (0, 0), BAND),
+        ("BACKGROUND", (0, 1), (0, 1), colors.white),
+        ("BOX", (0, 0), (-1, -1), 0.5, BORDER),
+        ("LINEBELOW", (0, 0), (0, 0), 0.5, BORDER),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 7), ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+    ]))
+    table.hAlign = "LEFT"
+    return [table]
 
 
 def spacer(cm_height: float = 0.35) -> Spacer:

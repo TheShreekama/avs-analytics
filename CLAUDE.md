@@ -78,8 +78,13 @@ under Streamlit's AppTest in both counting modes.
 - **`eos_status` waterfall** (`cleaning.derive_eos_status`, first match wins): Completed →
   Cancelled → Blocked → At Risk (deferred) → Delayed (planned-end past & not ended) →
   At Risk (follow-up overdue / waiting) → On Track. **"Risk"** = {At Risk, Delayed, Blocked}.
-- **Full offering names.** On AVS → Azure pages, show `migration_path` (e.g. "SQL Server MI
-  Migration (From AVS)"), not the short `factory_offering`.
+- **Factory Offering and Primary Migration Path are two different columns**, and neither
+  stands in for the other. `factory_offering` is **which factory delivers the work** ("AVS
+  Migration Nominations", "SQL Migration Nominations") and scopes the AVS pipeline;
+  `migration_path` is **what moves where** ("Onprem to AVS", "SQL Server MI Migration (From
+  AVS)"), decides `is_from_avs`, and scopes the native pipeline. Both are carried in
+  `kpi.DRILLDOWN_COLUMNS` and charted separately in the "By offering, path & target"
+  section; label them "Factory Offering" and "Primary Migration Path" respectively.
 - **Dates.** `metrics.date_preset_range` (This/Last week, This/Last month, Last 3/6 months,
   This/Last FY [July], All time, Custom); default preset "This FY". FY presets span the
   **whole** fiscal year (1 Jul → 30 Jun), not year-to-date; everything is anchored on the
@@ -113,8 +118,10 @@ under Streamlit's AppTest in both counting modes.
   nodes whatever the account's state is now); Cumulative is the final column and runs over
   the displayed months only.
 - **Account state** (`kpi.account_state`, read across **all** of an account's waves, first
-  match wins): **On-Track** = ANY wave in flight (status 1-4) whose Current State reads On
-  Track (blank falls back to the status); **Completed** = latest wave `7 - Completed` AND
+  match wins): **On-Track** = ANY wave in flight (status 1-4) whose Current State is exactly
+  `On Track` (`kpi.is_on_track_wave`; matched through `_state_key`, so "On-Track" is the
+  same state and **a blank Current State is not on track — there is no fallback**);
+  **Completed** = latest wave `7 - Completed` AND
   no wave on track; then Cancelled → Blocked → Deferred → Other from the latest wave. So
   "latest wave completed + earlier wave on track" is **On-Track**, not Completed. Every
   account resolves to exactly one state, so `by_state` (the reported cut) and
@@ -135,10 +142,19 @@ under Streamlit's AppTest in both counting modes.
   exception** to the separation: intake is a historical fact and counts every approved
   nomination.
 - **Forward-looking metrics** (`kpi.eligible_pipeline_waves`): a wave is eligible when all
-  three hold — status not 7/5/6 (completed, deferred, cancelled), nomination **approved**,
-  Current State not containing *Blocked*. `acr_pipeline` sums Total ACR over them (every
-  report); `nodes_planned` sums Total Cores (**EOS reports only**,
-  `exporter.shows_nodes_planned`). Neither is period-bound.
+  **four** hold, judged per wave —
+  (1) `Factory Offering = "AVS Migration Nominations"` **or** `Primary Migration Path`
+  contains `"From AVS"` (`kpi.in_pipeline_scope`: the offering scopes the AVS motions, the
+  path scopes AVS → Azure Native, and the union serves both because neither population
+  holds the other's waves);
+  (2) `Nomination Status = "Approved"` (`kpi.is_nomination_approved` — the column, not
+  `is_approved`, which also accepts a stray approval date);
+  (3) `Current State = "On Track"` and nothing else;
+  (4) `Migration Status NOT IN ("5 - Deferred By Customer", "6 - Cancelled / Archived")`.
+  `acr_pipeline` sums Total ACR over them (every report); `nodes_planned` sums Total Cores
+  (**EOS reports only**, `exporter.shows_nodes_planned`). Neither is period-bound. Note the
+  rule excludes 5 and 6 only — a completed wave is kept out by condition 3, since a
+  finished wave reads *Done*, not *On Track*.
 - **Terminology.** "AV36 EOS" is called **EOS Migration** everywhere in the UI. The
   AVS → Azure Native page labels the Total Cores metric **Cores Migrated**; the AVS
   categories call it **Hosts Migrated** (same column, different noun).
@@ -246,9 +262,13 @@ under Streamlit's AppTest in both counting modes.
   whenever the two differ, mirroring the dashboards — **including over "All time"**, which
   resolves to no window at all: reading "no window" as "nothing to compare against" is what
   used to drop the row from the report while the dashboard still showed it.
-- **Each report states its own methodology.** `glossary.REPORT_METHODOLOGY` is the single
-  source rendered by the PDF, the HTML report and the Methodology page, so one rule cannot
-  be documented three ways.
+- **Each report states its own methodology, as rules rather than prose.**
+  `glossary.REPORT_METHODOLOGY` is the single source rendered by the PDF
+  (`pdf_kit.rule_block`), the HTML report (`.rule` / `<pre>`) and the Methodology page
+  (`st.code`), so one rule cannot be documented three ways. An item is either a paragraph
+  or a `glossary.Rule(title, lines)` whose lines are **monospaced and aligned as written** —
+  alignment carries the meaning, and a test asserts every rule's trailing comments line up
+  and every line still fits the PDF column.
 - **A generated report names neither the app nor the file it read.** No `Source:` line, no
   dataset on the cover, no app name in the PDF furniture or the HTML footer; the default
   title is `exporter.DEFAULT_TITLE` ("Migration Programme Report").

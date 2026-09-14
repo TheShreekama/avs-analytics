@@ -299,7 +299,21 @@ def test_offering_and_target_lives_only_on_the_avs_native_page():
     for page in ("category_dashboard.avs_native", "category_dashboard.all_avs"):
         sections = _sections(_render(page, "Customer (deduplicated)"))
         owns = page.endswith("avs_native")
-        assert ("By offering & target" in sections) is owns, (page, sections)
+        assert ("By offering, path & target" in sections) is owns, (page, sections)
+
+
+def test_the_offering_and_the_path_are_charted_as_the_two_columns_they_are():
+    """Factory Offering and Primary Migration Path are not the same field."""
+    at = _render("category_dashboard.avs_native", "Customer (deduplicated)")
+    assert not at.exception, f"raised: {at.exception}"
+    # Each column opens its own records, so each has its own drill-down.
+    labels = [e.label or "" for e in at.expander]
+    assert any("nominations by offering" in lab for lab in labels), labels
+    assert any("nominations by migration path" in lab for lab in labels), labels
+    # …and nothing calls the path "the offering" any more.
+    text = " ".join([m.value for m in at.markdown] + [c.value for c in at.caption])
+    assert "(offering)" not in text, text[:400]
+    assert "Factory Offering" in text and "Primary Migration Path" in text
 
 
 def test_operational_status_is_gone_from_the_ui():
