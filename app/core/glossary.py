@@ -93,18 +93,22 @@ NODES_PLANNED = (
     "node refresh."
 )
 
-EXCLUDED_ACCOUNTS = (
-    "Accounts whose state is neither On-Track nor Completed: blocked, "
-    "deferred, cancelled / archived, or waiting on a follow-up.\n"
+BLOCKED_ACCOUNTS = (
+    "Accounts that have stopped: their latest wave's CURRENT STATE reads "
+    "Blocked, Blocked - Account team, Blocked - Customer, Blocked - Partner / "
+    "ISD, or Waiting action on follow up date.\n"
     "They are reported HERE AND NOWHERE ELSE. None of them is counted in the "
     "headline tiles, the trends, the pipeline chart or the regional cut, and "
-    "none of those numbers appears in this section — every account resolves to "
-    "exactly one state, so the two cuts partition the population with nothing "
-    "double-counted and nothing dropped.\n"
-    "The stated reason is read from Migration Status for cancelled and "
-    "deferred accounts — the column that took them out — and from Current "
-    "State for the rest, which is where the reason lives. Nothing is inferred: "
-    "an account with neither reads 'Not stated'."
+    "none of those numbers appears in this section.\n"
+    "CANCELLED AND DEFERRED ACCOUNTS ARE NOT HERE. They are out of the "
+    "reported pipeline too, but a cancelled or deferred engagement is a "
+    "decision someone has already taken, not work that has stopped — and this "
+    "section is the one a review can act on. A wave cancelled while its "
+    "Current State still reads 'Blocked' is reported as the cancellation it "
+    "is.\n"
+    "The Current State is the breakdown, because the state IS the reason; the "
+    "STATUS SUMMARY column on every row is the programme's own note on what "
+    "the account is waiting for."
 )
 
 EXECUTIVE_SUMMARY = (
@@ -375,11 +379,18 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple[str, ...]], ...] = (
         "and the excluded cut partition the population: nothing is counted "
         "twice and nothing is lost.",
     )),
-    ("Accounts outside the reported pipeline", (
-        "Blocked, deferred, cancelled / archived and waiting accounts are "
-        "**reported in their own section and nowhere else**. They are not in "
-        "the headline metrics, not in the state chart, not in the trends and "
-        "not in the regional cut.",
+    ("Blocked & waiting accounts", (
+        "Accounts that have stopped are **reported in their own section and "
+        "nowhere else**: they are not in the headline metrics, not in the state "
+        "chart, not in the trends and not in the regional cut.",
+        "An account is in that section when its latest wave's **Current State** "
+        "is one of **Blocked**, **Blocked - Account team**, **Blocked - "
+        "Customer**, **Blocked - Partner / ISD** or **Waiting action on follow "
+        "up date**, and its account state is neither reported (On-Track, "
+        "Completed) nor closed out (Cancelled, Deferred).",
+        "**Cancelled and deferred accounts are not in it.** They are outside "
+        "the reported pipeline as well, but a cancelled or deferred engagement "
+        "is a decision already taken rather than work that has stopped.",
         "**New Engagements is the one deliberate exception**, and it is not an "
         "exclusion at all: an account that was nominated and approved inside the "
         "period is counted there whatever became of it afterwards, because "
@@ -387,12 +398,12 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple[str, ...]], ...] = (
         "blocked would be reporting something else. No metric that reads an "
         "account's *state* — completions, on-track accounts, the state chart, "
         "ACR Pipeline, Nodes Deployment Planned — counts them.",
-        "That section reports what the data supports about them: how many "
-        "accounts, the ACR they hold up, their state distribution, their WW "
-        "Region distribution, the reason each one carries (Migration Status "
-        "for cancelled and deferred accounts, since that is the column that "
-        "took them out; Current State for the rest) and how many waves sit "
-        "behind them. No reason is inferred — a blank reads *Not stated*.",
+        "It reports what the data supports about them: how many accounts, the "
+        "ACR they hold up, the Current State each is stopped on — the state is "
+        "the reason, so it needs no second table — their WW Region "
+        "distribution, how many waves sit behind them, and the programme's own "
+        "**Status Summary** against every account, which is the sentence "
+        "explaining what it is waiting for.",
     )),
     ("EOS reporting — Gen-1 and Gen-2 only", (
         "An account is in **EOS scope** when any of its waves carries an "

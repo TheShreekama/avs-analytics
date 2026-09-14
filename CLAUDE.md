@@ -120,13 +120,20 @@ under Streamlit's AppTest in both counting modes.
   account resolves to exactly one state, so `by_state` (the reported cut) and
   `excluded_accounts` (`EXCLUDED_STATES`) partition the population — nothing double-counted,
   nothing lost. `on_track_by_stage` groups by the stage of the **on-track wave itself**.
-- **Accounts outside the reported pipeline** (`kpi.excluded_accounts`, plus
-  `excluded_reasons` / `wave_profile`, assembled by `exporter.excluded_tables`): blocked,
-  deferred, cancelled and waiting accounts, reported in a section of their own on every
-  dashboard and in both exports — never mixed into the On-Track/Completed metrics. The
-  stated reason reads Migration Status for cancelled/deferred accounts (the column that
-  took them out) and Current State for the rest. **New Engagements is the one deliberate
-  exception**: intake is a historical fact and counts every approved nomination.
+- **Blocked & waiting accounts** (`kpi.blocked_accounts` + `wave_profile`, assembled by
+  `exporter.blocked_tables`, titled `exporter.BLOCKED_TITLE`): accounts whose latest wave's
+  **Current State** is one of `kpi.BLOCKED_STATES` — Blocked, Blocked - Account team,
+  Blocked - Customer, Blocked - Partner / ISD, Waiting action on follow up date — matched
+  through `_state_key` so dash style and case cannot hide one. A section of its own on
+  every dashboard and in both exports, never mixed into the On-Track/Completed metrics,
+  with the Current State as the breakdown (the state *is* the reason) and the export's
+  **Status Summary** on every row (`kpi.BLOCKED_DRILLDOWN_COLUMNS`, a shorter column list
+  so the reason is not twenty columns to the right). **Cancelled and deferred accounts are
+  not in it**: they are outside the reported pipeline too (`kpi.excluded_accounts` is the
+  full complement, and still what makes the partition checkable) but a cancellation is a
+  decision taken, not work that stopped. **New Engagements is the one deliberate
+  exception** to the separation: intake is a historical fact and counts every approved
+  nomination.
 - **Forward-looking metrics** (`kpi.eligible_pipeline_waves`): a wave is eligible when all
   three hold — status not 7/5/6 (completed, deferred, cancelled), nomination **approved**,
   Current State not containing *Blocked*. `acr_pipeline` sums Total ACR over them (every
@@ -225,17 +232,29 @@ under Streamlit's AppTest in both counting modes.
   pass `currency=True` to `charts.trend_chart` / `bar` / `donut` / `fy_lines` (the factory
   writes the hover, `html_report._Builder.figure` the axis; omitting it on the factory
   leaves an axis reading $1.2M above a tooltip reading 1,250,000).
-- **The opt-in section.** The excluded-accounts block in the HTML report is a
-  `_optional_card`: a real checkbox plus `.opt-toggle:not(:checked) ~ .opt-body
-  { display: none }`, so it is hidden from the first paint with **no script having run** —
+- **Opt-in sections.** The blocked-accounts block and the methodology in the HTML report
+  are `_optional_card`s: a real checkbox plus `.opt-toggle:not(:checked) ~ .opt-body
+  { display: none }`, so each is hidden from the first paint with **no script having run** —
   which is what makes it work in a file opened offline. The script only re-measures
-  Plotly on reveal (a chart laid out hidden is zero wide). Default unticked.
+  Plotly on reveal (a chart laid out hidden is zero wide). Default unticked, and the
+  methodology carries no `doc.anchor`, so it stays out of the contents list.
+- **Which sections a report carries** is `exporter.ReportSections(blocked=True,
+  insights=False)` — the defaults the Reports page offers — passed to `build_report` and
+  `build_html_report` alike. Inclusion (build time) and visibility (the reader's checkbox)
+  are separate questions.
+- **The This-FY row** (`html_report._this_fy`) sits above the selected period's row
+  whenever the two differ, mirroring the dashboards — **including over "All time"**, which
+  resolves to no window at all: reading "no window" as "nothing to compare against" is what
+  used to drop the row from the report while the dashboard still showed it.
 - **Each report states its own methodology.** `glossary.REPORT_METHODOLOGY` is the single
   source rendered by the PDF, the HTML report and the Methodology page, so one rule cannot
   be documented three ways.
 - **A generated report names neither the app nor the file it read.** No `Source:` line, no
   dataset on the cover, no app name in the PDF furniture or the HTML footer; the default
   title is `exporter.DEFAULT_TITLE` ("Migration Programme Report").
+- **Readable headers in the HTML report.** `html_report._label` maps canonical keys to
+  their schema labels, so an account table heads its columns "Customer Name", not
+  `customer_name`. The dashboards already did this through `components.column_label`.
 - **Drill-down.** Charts use a category x-axis and `drilldown.normalize_bucket` so a
   Plotly month label ("2026-06-01") matches the record's period ("2026-06"); summary
   tables are `st.dataframe(on_select=...)` rows that select the same bucket.

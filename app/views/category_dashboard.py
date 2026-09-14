@@ -9,8 +9,8 @@ in which population they select:
   2. **Current Pipeline** — nominations by state (On-Track / Completed only),
      on-track accounts by stage.
   3. **Regional breakdown** — where the category sits geographically, by status.
-  4. **Accounts outside the reported pipeline** — blocked, deferred, cancelled
-     and waiting accounts, reported apart from every metric above.
+  4. **Blocked & waiting accounts** — accounts stopped on a blocking Current
+     State, reported apart from every metric above.
   5. **Detailed Data** — every record behind the numbers, groupable and exportable.
 
 Month-over-month trends are **not** here: they live under Trend Analysis, one
@@ -27,7 +27,7 @@ import streamlit as st
 
 from app import state
 from app.config import EOS_MATRIX_START_FY, FY_START_MONTH
-from app.core import glossary, kpi, metrics, segments
+from app.core import exporter, glossary, kpi, metrics, segments
 from app.core.metrics import fmt_currency, fmt_int
 from app.ui import charts, components, drilldown
 from app.ui.theme import banner, page_header, section, subheading
@@ -108,7 +108,7 @@ def render(category: str) -> None:
         _offering_and_target(fact, key)
     if category in _REGIONAL_BREAKDOWN:
         _regional_breakdown(fact, waves, key)
-    _excluded_accounts(fact, waves, key)
+    _blocked_accounts(fact, waves, key)
     _detailed_data(fact, waves, start, end, key, shown)
 
 
@@ -304,8 +304,8 @@ def _pipeline(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
             period="Current state — not filtered by the reporting period")
     st.caption("Every account in this category read across all of its waves, "
                "whatever its nomination date. On-Track and Completed only — "
-               "blocked, deferred and cancelled accounts are reported below, "
-               "under **Accounts outside the reported pipeline**. Pick a state "
+               "blocked and waiting accounts are reported below, under "
+               "**Blocked & waiting accounts**. Pick a state "
                "below the doughnut, or click a bar or table row, to open the "
                "accounts behind it.")
     states, state_rows = kpi.by_state(fact, lasts=waves.last)
@@ -420,73 +420,70 @@ def _regional_breakdown(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> N
                 "the heatmap above is drawn from.")
 
 
-def _excluded_accounts(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
-    """Blocked, deferred, cancelled and waiting accounts — reported on their own.
+def _blocked_accounts(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
+    """Accounts that have stopped — blocked, or waiting on a follow-up.
 
     Deliberately a section of its own rather than extra slices on the pipeline
     chart: these accounts are neither delivering nor delivered, so folding them
     into either number would misstate both.  What they are is where a programme
-    review spends its time, so everything the export supports about them is here.
+    review spends its time, so the Current State that stopped each one is the
+    breakdown and the programme's own **Status Summary** is on every row.
     """
-    section("Accounts outside the reported pipeline",
-            help=glossary.EXCLUDED_ACCOUNTS,
+    section(exporter.BLOCKED_TITLE, help=glossary.BLOCKED_ACCOUNTS,
             period="Current state — not filtered by the reporting period")
-    st.caption("Every account whose state is neither On-Track nor Completed. "
-               "These accounts are in **none** of the metrics above — not the "
-               "tiles, not the pipeline, not the regional cut — and those "
-               "metrics are in none of these numbers.")
-    summary, rows = kpi.excluded_accounts(fact, lasts=waves.last)
+    st.caption("Accounts stopped on a stated blocking state — **Blocked**, "
+               "**Blocked - Account team**, **Blocked - Customer**, **Blocked - "
+               "Partner / ISD** or **Waiting action on follow up date**. They "
+               "are in **none** of the metrics above, and those metrics are in "
+               "none of these numbers. Cancelled and deferred accounts are out "
+               "of the reported pipeline too, but they are decisions already "
+               "taken rather than work that has stopped, so they are not here.")
+    summary, rows = kpi.blocked_accounts(fact, lasts=waves.last)
     if rows.empty:
-        components.empty_state("Every account here is On-Track or Completed — "
-                               "nothing falls outside the reported pipeline.")
+        components.empty_state("No accounts are blocked or waiting — every "
+                               "account here is moving, finished, or closed out.")
         return
     acr = pd.to_numeric(rows.get("total_acr"), errors="coerce").sum()
     components.kpi_row([
-        {"label": "Excluded Accounts", "value": fmt_int(rows["tpid_key"].nunique()),
+        {"label": "Blocked Accounts", "value": fmt_int(rows["tpid_key"].nunique()),
          "tone": "warn", "sub": "not in any metric above"},
         {"label": "ACR Held Up", "value": fmt_currency(acr), "tone": "warn",
          "sub": "summed over those accounts"},
-        {"label": "States", "value": fmt_int(len(summary)),
-         "sub": "distinct reasons they are out"},
+        {"label": "Current States", "value": fmt_int(len(summary)),
+         "sub": "distinct states they are stopped on"},
     ])
 
     c1, c2 = st.columns([3, 2])
     with c1:
         picked = drilldown.selectable_chart(
             charts.bar(summary, "category", "count", color_status=True,
-                       title="Accounts by excluded state"), key=f"{key}_excl")
+                       title="Accounts by current state"), key=f"{key}_blocked")
     with c2:
         picked += drilldown.selectable_table(
-            summary.rename(columns={"category": "State", "count": "Accounts",
-                                    "acr": "ACR"}),
-            key=f"{key}_excl_table", bucket_col="State")
-    drilldown.drilldown(rows.assign(bucket=rows["state"]), "bucket", picked,
-                        key=f"{key}_excl_rows", what="accounts",
-                        unit_col="total_acr")
+            summary.rename(columns={"category": "Current State",
+                                    "count": "Accounts", "acr": "ACR"}),
+            key=f"{key}_blocked_table", bucket_col="Current State")
+    drilldown.drilldown(rows.assign(bucket=rows["blocked_state"]), "bucket",
+                        picked, key=f"{key}_blocked_rows", what="accounts",
+                        unit_col="total_acr",
+                        columns=kpi.BLOCKED_DRILLDOWN_COLUMNS)
 
-    reasons = kpi.excluded_reasons(rows)
-    profile = kpi.wave_profile(fact, rows)
     left, right = st.columns(2)
     with left:
-        subheading("Stated reason")
-        st.caption("Migration Status for cancelled and deferred accounts — the "
-                   "column that took them out — and Current State for the rest. "
-                   "Nothing is inferred: a blank reads *Not stated*.")
-        components.show_table(reasons.rename(columns={"category": "Reason",
-                                                      "count": "Accounts"}))
-    with right:
         subheading("Waves behind these accounts")
         st.caption("An account blocked on its fifth wave is a different problem "
                    "from one blocked on its first.")
-        components.show_table(profile.rename(columns={"category": "Waves",
-                                                      "count": "Accounts"}))
-    if "region_geo" in rows.columns:
-        subheading("By WW Region")
-        region = pd.crosstab(
-            rows["region_geo"].astype("string").replace({"": pd.NA}).fillna("Unknown"),
-            rows["state"])
-        st.plotly_chart(charts.heatmap(region, title="WW Region × excluded state"),
-                        width="stretch")
+        components.show_table(kpi.wave_profile(fact, rows).rename(
+            columns={"category": "Waves", "count": "Accounts"}))
+    with right:
+        if "region_geo" in rows.columns:
+            subheading("By WW Region")
+            st.caption("Where the stopped accounts sit.")
+            region = pd.crosstab(
+                rows["region_geo"].astype("string").replace({"": pd.NA}).fillna("Unknown"),
+                rows["blocked_state"])
+            st.plotly_chart(charts.heatmap(region, title="WW Region × current state",
+                                           height=300), width="stretch")
 
 
 def _offering_and_target(fact: pd.DataFrame, key: str) -> None:

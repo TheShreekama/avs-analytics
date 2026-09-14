@@ -125,6 +125,11 @@ CANONICAL_FIELDS: list[CanonicalField] = [
                    DTYPE_CATEGORY, "Delivery Status", ("milestone",)),
     CanonicalField("current_state", "Current State", "Current State", DTYPE_CATEGORY,
                    "Delivery Status", ("state", "operational state", "rag")),
+    CanonicalField("status_summary", "Status Summary", "Status Summary", DTYPE_TEXT,
+                   "Delivery Status",
+                   ("status update", "latest update", "status notes", "summary"),
+                   description="Free-text note on where the engagement stands — the "
+                               "reason behind a blocked or waiting Current State."),
     CanonicalField("sales_stage", "Sales Stage (MSX)", "Sales Stage Name - MSX",
                    DTYPE_CATEGORY, "Delivery Status", ("sales stage", "msx stage")),
     CanonicalField("commitment_status", "MSX Commitment", "MSX Commitment Status",

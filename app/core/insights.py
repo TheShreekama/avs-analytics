@@ -262,7 +262,7 @@ def programme_insights(fact: pd.DataFrame,
     accounts = int(len(lasts))
 
     out += _pipeline_insights(fact, kpi, region_dim)
-    out += _excluded_insights(fact, kpi, lasts, states, accounts)
+    out += _blocked_insights(fact, kpi, lasts, states, accounts)
     out += _bottleneck_insights(fact, kpi)
     out += _delay_insights(fact, kpi)
     out += _wave_insights(fact, kpi, lasts, states, accounts)
@@ -318,42 +318,40 @@ def _pipeline_insights(fact, kpi, region_dim: str) -> list[Insight]:
     return out
 
 
-def _excluded_insights(fact, kpi, lasts, states, accounts: int) -> list[Insight]:
-    """Blocked, deferred and cancelled accounts: how many, how much, and why."""
+def _blocked_insights(fact, kpi, lasts, states, accounts: int) -> list[Insight]:
+    """Accounts that have stopped: how many, how much, and on what."""
     if lasts.empty or accounts == 0 or states.empty:
         return []
-    excluded = states.isin(kpi.EXCLUDED_STATES)
-    stuck = int(excluded.sum())
-    if not stuck:
+    summary, rows = kpi.blocked_accounts(fact, lasts=lasts)
+    if rows.empty:
         return []
-    rows = lasts[excluded.to_numpy()].assign(state=states[excluded].to_numpy())
+    stuck = int(rows["tpid_key"].nunique())
     share = stuck / accounts * 100
     out = [Insight(
-        "Excluded", "Accounts outside the reported pipeline",
-        f"**{fmt_int(stuck)}** of {fmt_int(accounts)} accounts ({share:.0f}%) are "
-        f"neither on track nor completed — "
-        + ", ".join(f"{fmt_int(v)} {k.lower()}"
-                    for k, v in rows["state"].value_counts().items())
+        "Blocked", "Accounts that have stopped",
+        f"**{fmt_int(stuck)}** of {fmt_int(accounts)} accounts ({share:.0f}%) "
+        f"are blocked or waiting on a follow-up — "
+        + ", ".join(f"{fmt_int(v)} on {k.lower()}"
+                    for k, v in zip(summary["category"], summary["count"]))
         + ". They are reported separately and are in none of the figures above.",
         CRITICAL if share >= 25 else WARNING, fmt_int(stuck))]
     held = float(_num(rows, "total_acr").sum())
     if held > 0:
         top = rows.loc[_num(rows, "total_acr").idxmax()]
         out.append(Insight(
-            "Excluded", "ACR held up outside the pipeline",
-            f"**{fmt_currency(held)}** of ACR sits on those accounts; the largest "
-            f"single one is **{top.get('customer_name', '?')}** at "
+            "Blocked", "ACR held up behind a blocked account",
+            f"**{fmt_currency(held)}** of ACR sits on those accounts; the "
+            f"largest single one is **{top.get('customer_name', '?')}** at "
             f"{fmt_currency(_num(rows, 'total_acr').max())} "
-            f"({str(top.get('state', '')).lower()}).",
+            f"({str(top.get('blocked_state', '')).lower()}).",
             WARNING, fmt_currency(held)))
-    reasons = kpi.excluded_reasons(rows, limit=1)
-    if not reasons.empty:
-        reason, count = reasons.iloc[0]["category"], int(reasons.iloc[0]["count"])
+    if len(summary) and int(summary.iloc[0]["count"]) > 1:
+        state, count = summary.iloc[0]["category"], int(summary.iloc[0]["count"])
         out.append(Insight(
-            "Excluded", "Most common reason for exclusion",
-            f"**{reason}** accounts for {fmt_int(count)} of the {fmt_int(stuck)} — "
-            f"the single change that would return the most accounts to the "
-            f"reported pipeline.", INFO, reason))
+            "Blocked", "Most common blocking state",
+            f"**{state}** stops {fmt_int(count)} of the {fmt_int(stuck)} — the "
+            f"single change that would return the most accounts to the reported "
+            f"pipeline.", INFO, state))
     return out
 
 

@@ -58,6 +58,23 @@ STATE_OTHER = "Other"
 #: accounts sitting in a blocked/waiting state are deliberately not shown there.
 REPORTED_STATES = (STATE_ON_TRACK, STATE_COMPLETED)
 
+#: The Current State values that mean "this account is stopped" — the only ones
+#: the blocked-accounts section reports.  Written exactly as the export writes
+#: them; matched through :func:`_state_key`, so spacing, dash style and case in
+#: the file cannot hide one ("Blocked – Partner/ISD" is the same state).
+BLOCKED_STATES: tuple[str, ...] = (
+    "Blocked",
+    "Blocked - Account team",
+    "Blocked - Customer",
+    "Blocked - Partner / ISD",
+    "Waiting action on follow up date",
+)
+
+#: The account states the blocked-accounts section covers: stopped, not closed.
+#: Cancelled and Deferred are out of the reported pipeline too, but they are
+#: decisions rather than blockages, so they are not in that section.
+BLOCKED_ACCOUNT_STATES = (STATE_BLOCKED, STATE_OTHER)
+
 #: Everything the primary reports leave out: an account in one of these states
 #: is neither delivering nor delivered, so it is reported separately (see
 #: :func:`excluded_accounts`) rather than padding the On-Track/Completed cut.
@@ -649,6 +666,42 @@ def is_blocked(df: pd.DataFrame) -> pd.Series:
     return _current_state(df).str.contains("blocked", case=False, na=False).fillna(False)
 
 
+def _state_key(values: pd.Series) -> pd.Series:
+    """A Current State value reduced to what identifies it.
+
+    Lower-cased, with every run of non-alphanumerics collapsed to one space, so
+    "Blocked - Partner / ISD", "blocked – partner/isd" and "Blocked  Partner
+    ISD" are one state rather than three.
+    """
+    return (values.astype("string").str.lower()
+            .str.replace(r"[^a-z0-9]+", " ", regex=True).str.strip())
+
+
+#: The blocking vocabulary, keyed for matching.
+_BLOCKED_KEYS = {k: label for k, label in
+                 zip(_state_key(pd.Series(list(BLOCKED_STATES))), BLOCKED_STATES)}
+
+
+def is_blocking_state(df: pd.DataFrame) -> pd.Series:
+    """Rows whose Current State is one of :data:`BLOCKED_STATES`."""
+    if df.empty:
+        return pd.Series(dtype=bool)
+    return _state_key(_current_state(df)).isin(_BLOCKED_KEYS).fillna(False)
+
+
+def blocking_state_label(df: pd.DataFrame) -> pd.Series:
+    """The blocking state each row carries, named as :data:`BLOCKED_STATES` names it.
+
+    Reporting the canonical spelling rather than the cell's own means two files
+    that punctuate "Blocked - Partner / ISD" differently still produce one
+    category rather than two bars saying the same thing.
+    """
+    if df.empty:
+        return pd.Series(dtype="object")
+    keys = _state_key(_current_state(df))
+    return keys.map(_BLOCKED_KEYS).astype("object")
+
+
 def is_deferred(df: pd.DataFrame) -> pd.Series:
     """Migration Status is "5 - Deferred by Customer" (by code, or by label)."""
     if df.empty:
@@ -871,38 +924,54 @@ def excluded_accounts(fact: pd.DataFrame, lasts: pd.DataFrame | None = None
     return summary.reset_index(drop=True), rows
 
 
-def excluded_reasons(rows: pd.DataFrame, limit: int = 10) -> pd.DataFrame:
-    """Why each excluded account is out, as the export itself words it.
+def blocked_accounts(fact: pd.DataFrame, lasts: pd.DataFrame | None = None
+                     ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Accounts stopped on one of the **stated blocking states**, with their rows.
 
-    A cancelled or deferred account is named by its **Migration Status**, which
-    is the column that took it out ("6 - Cancelled / Archived"); everything else
-    is named by its **Current State**, which is where the reason lives
-    ("Blocked - Customer", "Waiting action on follow up date").  Reading Current
-    State for all of them would report a deferred account as "On Track", since
-    that is exactly the contradiction the two columns can carry.  Nothing is
-    inferred: an account with neither reads "Not stated".
+    A narrower cut than :func:`excluded_accounts`, and the one the reports
+    show.  An account qualifies when both hold:
+
+    * its account state is **Blocked or Other** — never On-Track or Completed,
+      so nothing here is also counted above, and never Cancelled or Deferred,
+      because a cancelled or deferred engagement is a decision someone has
+      already taken rather than work that has stopped; and
+    * its latest wave's **Current State** is one of :data:`BLOCKED_STATES` —
+      the blocked variants and "Waiting action on follow up date".
+
+    Both conditions, so a wave cancelled while its Current State still reads
+    "Blocked" is reported as the cancellation it is and stays out of here.
+    What is left is the accounts that are meant to be moving and are not, which
+    is what a review can act on.
+
+    Returns ``(summary, rows)`` where summary is Current State × accounts × ACR
+    — the state *is* the reason, so it needs no second table — and rows are the
+    accounts' latest waves carrying ``state`` (the derived account state) and
+    ``blocked_state`` (the Current State as the export words it).
     """
-    if rows is None or rows.empty:
-        return pd.DataFrame(columns=["category", "count"])
-    state = _current_state(rows).replace({"": pd.NA})
-    status = (rows["migration_status_label"].astype("string").str.strip()
-              .replace({"": pd.NA, "Unknown": pd.NA})
-              if "migration_status_label" in rows.columns
-              else pd.Series(pd.NA, index=rows.index, dtype="string"))
-    named_by_status = (rows["state"].isin((STATE_CANCELLED, STATE_DEFERRED))
-                       if "state" in rows.columns
-                       else pd.Series(False, index=rows.index))
-    reason = state.where(~named_by_status.to_numpy(), status)
-    reason = reason.fillna(status).fillna("Not stated")
-    return (reason.value_counts().rename_axis("category")
-            .reset_index(name="count").head(limit))
+    empty = pd.DataFrame(columns=["category", "count", "acr"])
+    if lasts is None:
+        lasts = latest_wave(fact) if not fact.empty else fact
+    if lasts.empty:
+        return empty, lasts
+    rows = lasts.copy()
+    rows["state"] = account_state(fact, lasts)
+    rows = rows[rows["state"].isin(BLOCKED_ACCOUNT_STATES) & is_blocking_state(rows)]
+    if rows.empty:
+        return empty, rows
+    rows["blocked_state"] = blocking_state_label(rows)
+    rows["_acr"] = pd.to_numeric(rows.get("total_acr"), errors="coerce")
+    summary = (rows.groupby("blocked_state", as_index=False)
+                   .agg(count=("tpid_key", "nunique"), acr=("_acr", "sum"))
+                   .rename(columns={"blocked_state": "category"})
+                   .sort_values("count", ascending=False))
+    return summary.reset_index(drop=True), rows
 
 
 def wave_profile(fact: pd.DataFrame, rows: pd.DataFrame) -> pd.DataFrame:
     """How many waves the given accounts carry — 1 wave, 2 waves, 3+.
 
     A blocked account on its fifth wave is a different problem from one blocked
-    on its first, so the excluded cut reports the shape of the work behind it.
+    on its first, so the section reports the shape of the work behind it.
     """
     if fact.empty or rows is None or rows.empty:
         return pd.DataFrame(columns=["category", "count"])
@@ -983,6 +1052,17 @@ def nodes_planned(fact: pd.DataFrame) -> Metric:
 #: row shows the account's latest wave rather than an arbitrary one.
 LATEST_WAVE_COLUMN = "Most Recent / Latest Wave"
 
+#: The blocked-accounts drill-down, as its own column list rather than the
+#: general one plus an extra.  It answers a different question — *why has this
+#: account stopped, and who is on it* — so it drops the platform and category
+#: columns and keeps **Status Summary** in view, which is the whole point of the
+#: table and would otherwise sit twenty columns to the right.
+BLOCKED_DRILLDOWN_COLUMNS = [
+    "tpid", "customer_name", "region_geo", "blocked_state",
+    "migration_status_label", "phase", "solution_architect", "assigned_pm",
+    "total_cores", "total_acr", "status_summary",
+]
+
 
 def account_detail(fact: pd.DataFrame, firsts: pd.DataFrame | None = None,
                    lasts: pd.DataFrame | None = None) -> pd.DataFrame:
@@ -1014,9 +1094,16 @@ def account_detail(fact: pd.DataFrame, firsts: pd.DataFrame | None = None,
     return out.reset_index(drop=True)
 
 
-def drilldown_frame(records: pd.DataFrame) -> pd.DataFrame:
-    """Trim underlying records to the agreed drill-down columns."""
+def drilldown_frame(records: pd.DataFrame,
+                    columns: list[str] | None = None) -> pd.DataFrame:
+    """Trim underlying records to the agreed drill-down columns.
+
+    ``columns`` overrides that list for a drill-down answering a different
+    question — :data:`BLOCKED_DRILLDOWN_COLUMNS` for the blocked accounts, which
+    leads with why each one has stopped.
+    """
+    columns = list(columns if columns is not None else DRILLDOWN_COLUMNS)
     if records is None or records.empty:
-        return pd.DataFrame(columns=[c for c in DRILLDOWN_COLUMNS])
-    cols = [c for c in DRILLDOWN_COLUMNS if c in records.columns]
+        return pd.DataFrame(columns=columns)
+    cols = [c for c in columns if c in records.columns]
     return records[cols].reset_index(drop=True)
