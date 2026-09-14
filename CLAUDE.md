@@ -118,9 +118,11 @@ under Streamlit's AppTest in both counting modes.
   nodes whatever the account's state is now); Cumulative is the final column and runs over
   the displayed months only.
 - **Account state** (`kpi.account_state`, read across **all** of an account's waves, first
-  match wins): **On-Track** = ANY wave in flight (status 1-4) whose Current State is exactly
-  `On Track` (`kpi.is_on_track_wave`; matched through `_state_key`, so "On-Track" is the
-  same state and **a blank Current State is not on track — there is no fallback**);
+  match wins): **On-Track** = ANY wave where `Nomination Status = "Approved"` **and** the
+  status is in flight (1-4) **and** Current State is exactly `On Track`
+  (`kpi.is_on_track_wave`; matched through `_state_key`, so "On-Track" is the same state,
+  while **an unapproved nomination and a blank Current State are not on track — there is no
+  fallback**);
   **Completed** = latest wave `7 - Completed` AND
   no wave on track; then Cancelled → Blocked → Deferred → Other from the latest wave. So
   "latest wave completed + earlier wave on track" is **On-Track**, not Completed. Every

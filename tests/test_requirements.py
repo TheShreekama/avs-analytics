@@ -1765,7 +1765,8 @@ def test_the_report_states_its_own_methodology(state_doc):
                 assert esc(line) in body, line
 
     # …and the rules a reader would go looking for say what the code does.
-    for phrase in ('Current State      =  "On Track"',
+    for phrase in ('Current State      =   "On Track"',
+                   'Nomination Status  =   "Approved"',
                    'Nomination Status       =        "Approved"',
                    'Factory Offering        =        "AVS Migration Nominations"',
                    'Primary Migration Path  CONTAINS "From AVS"',
@@ -1962,3 +1963,36 @@ def test_the_pipeline_rule_is_documented_exactly_as_implemented():
         assert status in text, status
     # …and nothing the rule does not exclude is listed as an exclusion.
     assert "7 - Completed" not in text.split("NOT IN")[-1]
+
+
+def test_an_unapproved_nomination_is_never_on_track():
+    """On Track needs the nomination approved as well as moving and stated."""
+    rows = [  # (tpid, Nomination Status, Current State, Migration Status, on track?)
+        ("1", "Approved", "On Track", "4 - Executing Migration", True),
+        ("2", "Pending", "On Track", "4 - Executing Migration", False),
+        ("3", "On Hold", "On Track", "2 - Executing Pre-Requisites", False),
+        ("4", "Declined", "On Track", "4 - Executing Migration", False),
+        ("5", "Approved", "", "4 - Executing Migration", False),   # blank state
+        ("6", "Approved", "Done", "7 - Completed", False),
+    ]
+    raw = pd.DataFrame([{
+        "TPID": t, "Customer Name": f"Acct {t}", "Task ID": f"k{t}",
+        "Phase": "Wave 1", "Factory Offering": "AVS Migration Nominations",
+        "Primary Migration Path": "Onprem to AVS", "Nomination Status": ns,
+        "Current State": cs, "Migration Status": ms,
+        "Nom. Approval Date": "2026-01-05", "Nom. Created Date": "2026-01-05",
+        "Total Cores": "10", "Total ACR": "$100,000", "WW Region": "EMEA",
+        "Tags": "x",
+    } for t, ns, cs, ms, _ok in rows]).astype("string")
+    mp = mapping.resolve_mapping(list(raw.columns))
+    frame, _ = cleaning.build_fact_frame(raw, mp, pd.Timestamp("2026-09-01"))
+
+    assert list(kpi.is_on_track_wave(frame)) == [r[4] for r in rows]
+    assert _tpids(kpi.on_track_accounts(frame).records) == ["1"]
+    lasts = kpi.latest_wave(frame)
+    states = dict(zip(lasts["tpid"].astype(str), kpi.account_state(frame, lasts)))
+    assert states["1"] == kpi.STATE_ON_TRACK
+    # An unapproved nomination is not on track — and not blocked or deferred
+    # either, so it falls to Other rather than being reported anywhere.
+    assert {states[t] for t in ("2", "3", "4", "5")} == {kpi.STATE_OTHER}
+    assert states["6"] == kpi.STATE_COMPLETED

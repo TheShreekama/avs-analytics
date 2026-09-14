@@ -41,13 +41,15 @@ CORES_MIGRATED = HOSTS_MIGRATED.replace("nodes/hosts", "cores")
 
 ON_TRACK_ACCOUNTS = (
     "Customers (TPIDs) with ANY wave genuinely in flight. A WAVE is on track "
-    "when BOTH hold:\n"
-    "1. Migration Status IN ('1 - Validating Commitment & Initial Scope', "
+    "when ALL THREE hold:\n"
+    "1. Nomination Status = 'Approved'. An unapproved nomination is not on "
+    "track however it is progressing — nothing has been committed to yet.\n"
+    "2. Migration Status IN ('1 - Validating Commitment & Initial Scope', "
     "'2 - Executing Pre-Requisites', '3 - Finalize Scope', '4 - Executing "
     "Migration'). A wave that is '5 - Deferred by Customer', '6 - Cancelled / "
     "Archived' or '7 - Completed' is never on track, whatever its Current "
     "State says.\n"
-    "2. Current State = 'On Track' — and nothing else. 'Blocked - Customer', "
+    "3. Current State = 'On Track' — and nothing else. 'Blocked - Customer', "
     "'Blocked - Account team' and 'Waiting action on follow up date' are not "
     "on track, whatever the status says.\n"
     "A BLANK Current State is NOT on track. The column is how the programme "
@@ -184,8 +186,9 @@ PIPELINE = (
 BY_STATE = (
     "Customers by state, read across ALL of an account's waves. Only two "
     "states are reported:\n"
-    "• On-Track — ANY wave is in flight (Migration Status 1-4) AND its Current "
-    "State = 'On Track' (a blank state is not on track).\n"
+    "• On-Track — ANY wave has Nomination Status = 'Approved', is in flight "
+    "(Migration Status 1-4) AND its Current State = 'On Track' (an unapproved "
+    "nomination or a blank state is not on track).\n"
     "• Completed — the LATEST wave's Migration Status is '7 - Completed' AND "
     "no wave of the account is on track.\n"
     "Cancelled, deferred, blocked and waiting accounts are deliberately left "
@@ -394,16 +397,19 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         "waves it has, so no multi-wave account is ever double-counted.",
     )),
     ("Account state — On-Track vs. Completed", (
-        Rule("A WAVE is On Track when BOTH hold", (
-            'Migration Status  IN  ("1 - Validating Commitment & Initial Scope",',
-            '                       "2 - Executing Pre-Requisites",',
-            '                       "3 - Finalize Scope",',
-            '                       "4 - Executing Migration")',
-            'Current State      =  "On Track"          -- and nothing else',
+        Rule("A WAVE is On Track when ALL THREE hold", (
+            'Nomination Status  =   "Approved"',
+            'Migration Status   IN  ("1 - Validating Commitment & Initial Scope",',
+            '                        "2 - Executing Pre-Requisites",',
+            '                        "3 - Finalize Scope",',
+            '                        "4 - Executing Migration")',
+            'Current State      =   "On Track"         -- and nothing else',
         )),
-        "A **blank Current State is not On Track**. The column is how the "
-        "programme says an engagement is moving; a wave nobody has said that "
-        "about is ignored rather than counted, and lands in *Other*.",
+        "An **unapproved nomination is not On Track** however it is "
+        "progressing — nothing has been committed to yet — and a **blank "
+        "Current State is not On Track** either: the column is how the "
+        "programme says an engagement is moving, so a wave nobody has said "
+        "that about is ignored rather than counted. Both land in *Other*.",
         Rule("The ACCOUNT's state, first match wins", (
             "On-Track   ← ANY wave of the account is On Track (above)",
             'Completed  ← latest wave Migration Status = "7 - Completed"',
