@@ -76,11 +76,6 @@ BLOCKED_STATES: tuple[str, ...] = (
     "Waiting action on follow up date",
 )
 
-#: The account states the blocked-accounts section covers: stopped, not closed.
-#: Cancelled and Deferred are out of the reported pipeline too, but they are
-#: decisions rather than blockages, so they are not in that section.
-BLOCKED_ACCOUNT_STATES = (STATE_BLOCKED, STATE_OTHER)
-
 #: Everything the primary reports leave out: an account in one of these states
 #: is neither delivering nor delivered, so it is reported separately (see
 #: :func:`excluded_accounts`) rather than padding the On-Track/Completed cut.
@@ -712,19 +707,6 @@ def is_blocking_state(df: pd.DataFrame) -> pd.Series:
     return _state_key(_current_state(df)).isin(_BLOCKED_KEYS).fillna(False)
 
 
-def blocking_state_label(df: pd.DataFrame) -> pd.Series:
-    """The blocking state each row carries, named as :data:`BLOCKED_STATES` names it.
-
-    Reporting the canonical spelling rather than the cell's own means two files
-    that punctuate "Blocked - Partner / ISD" differently still produce one
-    category rather than two bars saying the same thing.
-    """
-    if df.empty:
-        return pd.Series(dtype="object")
-    keys = _state_key(_current_state(df))
-    return keys.map(_BLOCKED_KEYS).astype("object")
-
-
 def is_deferred(df: pd.DataFrame) -> pd.Series:
     """Migration Status is "5 - Deferred by Customer" (by code, or by label)."""
     if df.empty:
@@ -947,29 +929,65 @@ def excluded_accounts(fact: pd.DataFrame, lasts: pd.DataFrame | None = None
     return summary.reset_index(drop=True), rows
 
 
+#: How a stopped account is labelled when the Current State is not one of the
+#: stated blocking values: by the Migration Status that took it out.
+DEFERRED_LABEL = "Deferred By Customer"
+CANCELLED_LABEL = "Cancelled / Archived"
+UNSTATED_LABEL = "Not stated"
+
+
+def blocked_state_label(rows: pd.DataFrame) -> pd.Series:
+    """Why each stopped account is stopped, in one label, first match winning::
+
+        "Cancelled / Archived"   ← Migration Status = "6 - Cancelled / Archived"
+        "Deferred By Customer"   ← Migration Status = "5 - Deferred By Customer"
+        one of BLOCKED_STATES    ← Current State says so, in its canonical spelling
+        "Not approved"           ← Nomination Status is not "Approved"
+        "Not stated"             ← Current State is blank or unmapped
+        the Current State itself ← anything else the file says
+
+    The two Migration Statuses come **first on purpose**: they are decisions the
+    customer has taken, and an account deferred while its Current State still
+    reads "Blocked - Customer" is deferred.  Nothing is inferred — an account
+    with nothing recorded reads *Not stated* rather than being given a reason.
+    """
+    if rows.empty:
+        return pd.Series(dtype="object")
+    current = _current_state(rows).replace({"": pd.NA})
+    # Categoricals are filled with "Unknown" as the file is read; that is the
+    # absence of a state, not a state.
+    current = current.mask(current.str.casefold().eq("unknown"))
+    canonical = _state_key(current).map(_BLOCKED_KEYS)
+
+    out = canonical.fillna(current).astype("object")
+    unapproved = ~is_nomination_approved(rows) & canonical.isna()
+    out[unapproved.to_numpy()] = "Not approved"
+    out = pd.Series(out, index=rows.index).fillna(UNSTATED_LABEL)
+    out[is_deferred(rows).to_numpy()] = DEFERRED_LABEL
+    out[is_cancelled(rows).to_numpy()] = CANCELLED_LABEL
+    return out
+
+
 def blocked_accounts(fact: pd.DataFrame, lasts: pd.DataFrame | None = None
                      ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Accounts stopped on one of the **stated blocking states**, with their rows.
+    """Every account that is neither On-Track nor Completed, and why.
 
-    A narrower cut than :func:`excluded_accounts`, and the one the reports
-    show.  An account qualifies when both hold:
+    The complement of :func:`by_state`, and the section the reports show: an
+    account is here when its :func:`account_state` is one of
+    :data:`EXCLUDED_STATES` — blocked, waiting, deferred, cancelled or a state
+    nobody has recorded.  Nothing here is counted in a headline metric above it,
+    and nothing above it is counted here, so the two cuts partition the
+    population and the reports reconcile.
 
-    * its account state is **Blocked or Other** — never On-Track or Completed,
-      so nothing here is also counted above, and never Cancelled or Deferred,
-      because a cancelled or deferred engagement is a decision someone has
-      already taken rather than work that has stopped; and
-    * its latest wave's **Current State** is one of :data:`BLOCKED_STATES` —
-      the blocked variants and "Waiting action on follow up date".
+    The breakdown is **why** each account has stopped
+    (:func:`blocked_state_label`): the blocking Current States as the programme
+    words them, with *Deferred By Customer* and *Cancelled / Archived* broken
+    out by Migration Status, since those are decisions rather than blockages
+    and a review reads them differently.
 
-    Both conditions, so a wave cancelled while its Current State still reads
-    "Blocked" is reported as the cancellation it is and stays out of here.
-    What is left is the accounts that are meant to be moving and are not, which
-    is what a review can act on.
-
-    Returns ``(summary, rows)`` where summary is Current State × accounts × ACR
-    — the state *is* the reason, so it needs no second table — and rows are the
-    accounts' latest waves carrying ``state`` (the derived account state) and
-    ``blocked_state`` (the Current State as the export words it).
+    Returns ``(summary, rows)`` where summary is reason × accounts × ACR and
+    rows are the accounts' latest waves carrying ``state`` (the derived account
+    state) and ``blocked_state`` (the reason).
     """
     empty = pd.DataFrame(columns=["category", "count", "acr"])
     if lasts is None:
@@ -978,10 +996,10 @@ def blocked_accounts(fact: pd.DataFrame, lasts: pd.DataFrame | None = None
         return empty, lasts
     rows = lasts.copy()
     rows["state"] = account_state(fact, lasts)
-    rows = rows[rows["state"].isin(BLOCKED_ACCOUNT_STATES) & is_blocking_state(rows)]
+    rows = rows[rows["state"].isin(EXCLUDED_STATES)]
     if rows.empty:
         return empty, rows
-    rows["blocked_state"] = blocking_state_label(rows)
+    rows["blocked_state"] = blocked_state_label(rows)
     rows["_acr"] = pd.to_numeric(rows.get("total_acr"), errors="coerce")
     summary = (rows.groupby("blocked_state", as_index=False)
                    .agg(count=("tpid_key", "nunique"), acr=("_acr", "sum"))

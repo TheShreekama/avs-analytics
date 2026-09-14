@@ -1446,18 +1446,17 @@ def test_excluded_accounts_partition_the_population(state_fact):
     assert float(summary["acr"].sum()) == 2_400_000 + 300_000 + 90_000
 
 
-def test_the_blocked_section_reports_only_the_stated_blocking_states(state_fact):
-    """Blocked variants and "Waiting action on follow up date" — nothing else.
+def test_the_blocked_section_covers_every_stopped_account(state_fact):
+    """Blocked, waiting, deferred and cancelled — all of them, grouped by why.
 
-    Gamma is blocked; Delta (deferred) and Epsilon (cancelled) are out of the
-    reported pipeline too, but a decision already taken is not a blockage, and
-    both read "On Track" in Current State anyway.
+    Gamma is blocked, Delta deferred and Epsilon cancelled: the three are in
+    one section, told apart by the column that stopped each.
     """
     summary, rows = kpi.blocked_accounts(state_fact)
-    assert list(summary["category"]) == ["Blocked - Customer"]
-    assert _tpids(rows) == ["3"]
-    assert float(summary["acr"].sum()) == 2_400_000
-    assert set(rows["blocked_state"]) == {"Blocked - Customer"}
+    assert _tpids(rows) == ["3", "4", "5"]
+    assert set(summary["category"]) == {"Blocked - Customer", "Deferred By Customer",
+                                        "Cancelled / Archived"}
+    assert float(summary["acr"].sum()) == 2_400_000 + 300_000 + 90_000
     assert list(kpi.wave_profile(state_fact, rows)["category"]) == ["1 wave"]
     # The note explaining the account leads the table rather than trailing it.
     columns = list(kpi.drilldown_frame(rows, columns=kpi.BLOCKED_DRILLDOWN_COLUMNS))
@@ -1466,51 +1465,73 @@ def test_the_blocked_section_reports_only_the_stated_blocking_states(state_fact)
     assert len(columns) < len(kpi.DRILLDOWN_COLUMNS)
 
 
-@pytest.mark.parametrize("state,included", [
-    ("Blocked", True),
-    ("Blocked - Account team", True),
-    ("Blocked - Customer", True),
-    ("Blocked - Partner / ISD", True),
-    ("blocked – partner/isd", True),          # en dash, no spaces, lower case
-    ("Waiting action on follow up date", True),
-    ("On Track", False),
-    ("Done", False),
-    ("Waiting", False),                       # not the stated waiting state
-    ("", False),
+@pytest.mark.parametrize("state,status,expected", [
+    # The stated blocking states keep their canonical spelling…
+    ("Blocked", "2 - Executing Pre-Requisites", "Blocked"),
+    ("Blocked - Account team", "2 - Executing Pre-Requisites", "Blocked - Account team"),
+    ("Blocked - Customer", "2 - Executing Pre-Requisites", "Blocked - Customer"),
+    ("Blocked - Partner / ISD", "2 - Executing Pre-Requisites", "Blocked - Partner / ISD"),
+    ("blocked – partner/isd", "2 - Executing Pre-Requisites", "Blocked - Partner / ISD"),
+    ("Waiting action on follow up date", "3 - Finalize Scope",
+     "Waiting action on follow up date"),
+    # …the two Migration Statuses win over whatever the Current State says…
+    ("Blocked - Customer", "5 - Deferred By Customer", "Deferred By Customer"),
+    ("On Track", "5 - Deferred By Customer", "Deferred By Customer"),
+    ("Blocked - Customer", "6 - Cancelled / Archived", "Cancelled / Archived"),
+    ("On Track", "6 - Cancelled / Archived", "Cancelled / Archived"),
+    # …and anything else is named by what the file actually says.
+    ("Blocked by legal", "2 - Executing Pre-Requisites", "Blocked by legal"),
+    ("Done", "2 - Executing Pre-Requisites", "Done"),
+    ("", "2 - Executing Pre-Requisites", "Not stated"),
 ])
-def test_only_the_listed_current_states_count_as_blocked(state, included):
+def test_every_stopped_account_is_labelled_by_why_it_stopped(state, status, expected):
+    """The section covers all of them; the reason is what tells them apart."""
     row = {"TPID": "9", "Customer Name": "Solo", "Task ID": "s1",
            "Phase": "Wave 1", "Tags": "x", "WW Region": "EMEA",
-           "Migration Status": "2 - Executing Pre-Requisites",
-           "Nomination Status": "Approved", "Nom. Approval Date": "2026-01-05",
-           "Nom. Created Date": "2026-01-05", "Current State": state,
-           "Status Summary": "why it is where it is",
-           "Total Cores": "10", "Total ACR": "$1,000",
-           "Primary Migration Path": "Onprem to AVS"}
+           "Factory Offering": "AVS Migration Nominations",
+           "Primary Migration Path": "Onprem to AVS",
+           "Migration Status": status, "Nomination Status": "Approved",
+           "Nom. Approval Date": "2026-01-05", "Nom. Created Date": "2026-01-05",
+           "Current State": state, "Status Summary": "why it is where it is",
+           "Total Cores": "10", "Total ACR": "$1,000"}
     mp = mapping.resolve_mapping(list(row))
     frame, _ = cleaning.build_fact_frame(pd.DataFrame([row]).astype("string"), mp,
                                         pd.Timestamp("2026-03-01"))
-    _summary, rows = kpi.blocked_accounts(frame)
-    assert (not rows.empty) is included, (state, rows)
+    summary, rows = kpi.blocked_accounts(frame)
+    assert list(summary["category"]) == [expected], (state, status)
+    assert list(rows["blocked_state"]) == [expected]
 
 
-def test_a_cancelled_account_is_not_reported_as_blocked():
-    """Its Current State still says Blocked; the cancellation is the fact."""
-    row = {"TPID": "9", "Customer Name": "Solo", "Task ID": "s1",
-           "Phase": "Wave 1", "Tags": "x", "WW Region": "EMEA",
-           "Migration Status": "6 - Cancelled / Archived",
-           "Nomination Status": "Approved", "Nom. Approval Date": "2026-01-05",
-           "Nom. Created Date": "2026-01-05",
-           "Current State": "Blocked - Customer", "Status Summary": "note",
-           "Total Cores": "10", "Total ACR": "$1,000",
-           "Primary Migration Path": "Onprem to AVS"}
+def test_an_unapproved_nomination_is_named_as_one():
+    """It is not on track, and "On Track" would be a nonsense reason."""
+    row = {"TPID": "9", "Customer Name": "Solo", "Task ID": "s1", "Phase": "Wave 1",
+           "Tags": "x", "WW Region": "EMEA",
+           "Factory Offering": "AVS Migration Nominations",
+           "Primary Migration Path": "Onprem to AVS",
+           "Migration Status": "4 - Executing Migration",
+           "Nomination Status": "Pending", "Nom. Approval Date": "",
+           "Nom. Created Date": "2026-01-05", "Current State": "On Track",
+           "Total Cores": "10", "Total ACR": "$1,000"}
     mp = mapping.resolve_mapping(list(row))
     frame, _ = cleaning.build_fact_frame(pd.DataFrame([row]).astype("string"), mp,
                                         pd.Timestamp("2026-03-01"))
-    assert kpi.blocked_accounts(frame)[1].empty
-    # …and it is still out of the reported pipeline, as a cancellation.
-    _summary, excluded = kpi.excluded_accounts(frame)
-    assert list(excluded["state"]) == [kpi.STATE_CANCELLED]
+    assert list(kpi.blocked_accounts(frame)[0]["category"]) == ["Not approved"]
+
+
+def test_the_section_and_the_charts_partition_the_accounts(state_fact):
+    """Every account is either charted above or in the section — never both."""
+    waves = kpi.wave_index(state_fact)
+    _states, reported = kpi.by_state(state_fact, lasts=waves.last)
+    _reasons, stopped = kpi.blocked_accounts(state_fact, lasts=waves.last)
+
+    assert set(reported["tpid"]) & set(stopped["tpid"]) == set()
+    assert len(reported) + len(stopped) == state_fact["tpid_key"].nunique()
+    # Cancelled and deferred accounts are in the section now, named by the
+    # Migration Status that took them out.
+    reasons = dict(zip(stopped["tpid"], stopped["blocked_state"]))
+    assert reasons["4"] == "Deferred By Customer"
+    assert reasons["5"] == "Cancelled / Archived"
+    assert reasons["3"] == "Blocked - Customer"
 
 
 def test_blocked_accounts_are_in_none_of_the_delivery_metrics(state_fact):
@@ -1718,11 +1739,11 @@ def test_the_optional_sections_are_present_but_hidden_by_default(state_doc):
     # Hidden by a CSS rule on the checkbox itself, so it is hidden from the
     # first paint with no script having run.
     assert ".opt-toggle:not(:checked) ~ .opt-body" in state_doc
-    assert "Blocked &amp; waiting accounts" in body
-    assert "Show blocked &amp; waiting accounts" in body
+    assert "Blocked, deferred &amp; cancelled accounts" in body
+    assert "Show blocked, deferred &amp; cancelled accounts" in body
     assert "Show methodology &amp; logic" in body
     # The data is there, waiting: counts, ACR and the accounts themselves.
-    assert "ACR held up" in body and "Accounts by current state" in body
+    assert "ACR held up" in body and "Accounts by reason" in body
 
 
 def test_the_blocked_accounts_table_carries_the_status_summary(state_doc):
@@ -1913,7 +1934,7 @@ def test_each_optional_section_is_included_only_when_asked_for(
     # which likewise appears nowhere else.
     text = _flowable_text(exp.build_story(state_ctx, reports=["avs"],
                                           sections=sections))
-    assert ("Accounts stopped on a stated blocking state" in text) is blocked
+    assert ("Every account that is neither On-Track nor Completed" in text) is blocked
     assert ("Derived from this report's own population" in text) is insights
 
 
@@ -2153,11 +2174,10 @@ def test_the_reconciliation_accounts_for_every_account(every_state_fact):
 
     home = dict(zip(rows["State"], rows["Reported in"]))
     assert "charted above" in home[kpi.STATE_ON_TRACK]
-    assert "cancelled" in home[kpi.STATE_CANCELLED].lower()
-    assert "deferred" in home[kpi.STATE_DEFERRED].lower()
-    # A "Blocked …" wording outside the stated five is visible as a shortfall
-    # rather than silently absent from the blocked section.
-    assert "1 of 2" in home[kpi.STATE_BLOCKED]
+    # Every other state is reported in the one section, so nothing is homeless.
+    for state in (kpi.STATE_CANCELLED, kpi.STATE_DEFERRED, kpi.STATE_BLOCKED,
+                  kpi.STATE_OTHER):
+        assert home[state].startswith(exp.BLOCKED_TITLE), (state, home[state])
 
 
 def test_the_reports_carry_the_reconciliation(every_state_fact):
@@ -2181,7 +2201,7 @@ def test_the_reports_carry_the_reconciliation(every_state_fact):
 
     text = _flowable_text(exp.build_story(ctx, reports=["eos"]))
     assert "Where every account sits" in text
-    assert "Not reported — cancelled / archived" in text
+    assert exp.BLOCKED_TITLE in text
 
 
 def test_the_eos_report_cuts_accounts_by_generation_and_state(every_state_fact):
@@ -2197,22 +2217,29 @@ def test_the_eos_report_cuts_accounts_by_generation_and_state(every_state_fact):
     waves = kpi.wave_index(pop)
 
     grid, rows = exp.generation_status(pop, waves)
-    assert list(grid.index) == [segments.GEN_1, segments.GEN_2]
+    # A row per generation, and the programme as a whole on top of them.
+    assert list(grid.index) == [segments.GEN_1, segments.GEN_2, exp.ALL_EOS_ROW]
     # The three states a review asks about lead, in that order.
     assert list(grid.columns)[:3] == [kpi.STATE_ON_TRACK, kpi.STATE_COMPLETED,
                                       kpi.STATE_BLOCKED]
-    # Every state is a column, so each row totals that generation's accounts…
+    # Every state is a column, so each generation's row totals its accounts…
     per_generation = (pop.drop_duplicates("tpid_key")["generation"]
                       .value_counts().to_dict())
-    assert grid.sum(axis=1).to_dict() == per_generation
-    # …and the whole grid totals the report's accounts, which over all time is
-    # what New Engagements counts.
-    assert int(grid.to_numpy().sum()) == pop["tpid_key"].nunique()
-    assert int(grid.to_numpy().sum()) == kpi.new_engagements(
+    generations = grid.drop(index=exp.ALL_EOS_ROW)
+    assert generations.sum(axis=1).to_dict() == per_generation
+    # …the All EOS row is exactly those rows added up…
+    assert grid.loc[exp.ALL_EOS_ROW].to_dict() == generations.sum().to_dict()
+    # …and it totals the report's accounts, which over all time is what New
+    # Engagements counts.
+    assert int(grid.loc[exp.ALL_EOS_ROW].sum()) == pop["tpid_key"].nunique()
+    assert int(grid.loc[exp.ALL_EOS_ROW].sum()) == kpi.new_engagements(
         pop, None, None, firsts=waves.first).count
-    # Each cell can open its own accounts.
+    # A cell opens its own accounts, and every account belongs to two cells:
+    # its generation's, and the total row's.
     buckets = set(html_report_module()._by_generation_state(rows))
-    assert f"{segments.GEN_1} · {kpi.STATE_BLOCKED}" in buckets
+    assert any(b.startswith(f"{segments.GEN_1} · {kpi.STATE_BLOCKED}|")
+               for b in buckets)
+    assert all(f"{exp.ALL_EOS_ROW} · " in b for b in buckets)
 
 
 def html_report_module():
@@ -2246,10 +2273,18 @@ def test_the_generation_heatmap_is_in_the_eos_report_only(every_state_fact):
     parser.feed(eos.split('id="gt-eos"', 1)[1].split("</table>", 1)[0])
     header, *body_rows = [r for r in parser.rows if r]
     total = header.index("Total")
-    accounts = sum(int(row[total]) for row in body_rows)
     pop = segments.population(every_state_fact, segments.CAT_EOS_ALL)
-    assert accounts == pop["tpid_key"].nunique()
-    assert len(body_rows) == pop.drop_duplicates("tpid_key")["generation"].nunique()
+    per_row = {row[0]: int(row[total]) for row in body_rows}
+    generations = pop.drop_duplicates("tpid_key")["generation"].nunique()
+    assert len(body_rows) == generations + 1              # …plus the total row
+    assert per_row[exp_module().ALL_EOS_ROW] == pop["tpid_key"].nunique()
+    assert (sum(v for k, v in per_row.items() if k != exp_module().ALL_EOS_ROW)
+            == pop["tpid_key"].nunique())
+
+
+def exp_module():
+    from app.core import exporter
+    return exporter
 
     avs = _main(html_report.build_html_report(ctx, reports=["avs"]).decode())
     assert "Accounts by generation and state" not in avs

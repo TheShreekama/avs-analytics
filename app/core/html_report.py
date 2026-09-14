@@ -853,11 +853,23 @@ def _generation_status(doc: _Builder, spec, pop, waves) -> str:
     return body
 
 
+#: Separates the buckets of a row that belongs to more than one point — the
+#: same character the report's script splits on.
+_BUCKET_JOIN = "|"
+
+
 def _by_generation_state(rows: pd.DataFrame) -> list[str]:
-    """The pair a heatmap cell names: the generation and the state."""
+    """The pair a heatmap cell names: the generation and the state.
+
+    Two buckets per row, because the grid has an **All EOS** total row as well
+    as one per generation, and every account belongs to both: clicking Gen-2 ·
+    Completed opens that generation's completed accounts, clicking All EOS ·
+    Completed opens the programme's.
+    """
     if "_generation" not in rows.columns:
         return ["" for _ in range(len(rows))]
-    return [f"{g}{_REGION_STAGE_JOIN}{s}"
+    return [f"{g}{_REGION_STAGE_JOIN}{s}{_BUCKET_JOIN}"
+            f"{exporter.ALL_EOS_ROW}{_REGION_STAGE_JOIN}{s}"
             for g, s in zip(rows["_generation"], rows["state"])]
 
 
@@ -875,17 +887,17 @@ def _blocked(doc: _Builder, spec, pop, waves) -> None:
     against it, which is the sentence explaining what it is waiting on.
     """
     tables = exporter.blocked_tables(pop, waves)
-    label = "Show blocked & waiting accounts"
+    label = f"Show {exporter.BLOCKED_TITLE.lower()}"
     card_id = _slug("optx", spec.key)
     if tables["rows"].empty:
         doc.write(_optional_card(
             card_id, exporter.BLOCKED_TITLE, exporter.BLOCKED_NOTE,
-            '<p class="empty">No accounts are blocked or waiting — every account '
-            "here is moving, finished, or closed out.</p>", label))
+            '<p class="empty">Nothing has stopped — every account here is '
+            "On-Track or Completed.</p>", label))
         return
 
     body = _kpi_tiles([
-        _Tile("Blocked accounts", fmt_int(tables["accounts"]),
+        _Tile("Stopped accounts", fmt_int(tables["accounts"]),
               "not in any metric above"),
         _Tile("ACR held up", fmt_currency(tables["acr"]),
               "summed over those accounts"),
@@ -895,13 +907,13 @@ def _blocked(doc: _Builder, spec, pop, waves) -> None:
     states = tables["summary"]
     by_state = lambda rows: list(rows["blocked_state"])          # noqa: E731
     body += _drillable(
-        doc, heading="Accounts by current state",
+        doc, heading="Accounts by reason",
         fig=charts.bar(states, "category", "count", color_status=True),
         rows=tables["rows"], buckets=by_state,
         table_id=_slug("xs", spec.key), mode="x", height=320,
-        label="Accounts — by current state", detail=True)
+        label="Accounts — by reason", detail=True)
     body += _drillable(
-        doc, heading="ACR held up by current state",
+        doc, heading="ACR held up by reason",
         fig=charts.bar(states, "category", "acr", currency=True,
                        color_status=True),
         rows=tables["rows"], buckets=by_state,
@@ -909,7 +921,7 @@ def _blocked(doc: _Builder, spec, pop, waves) -> None:
         label="Accounts — by the ACR they hold up", detail=True)
     if not tables["region"].empty:
         body += _drillable(
-            doc, heading="WW Region × current state",
+            doc, heading="WW Region × reason",
             fig=charts.heatmap(tables["region"]),
             rows=_region_state_rows(tables["rows"]), buckets=_by_region_state,
             table_id=_slug("xr", spec.key), mode="y-x", height=360,

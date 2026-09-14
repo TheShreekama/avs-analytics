@@ -206,14 +206,17 @@ def eos_untagged_accounts(fact: pd.DataFrame) -> int:
 #: What the blocked-accounts section is called, everywhere it appears.  Named
 #: for what the reader is looking at — accounts that have stopped moving — not
 #: for the reporting mechanism that leaves them out.
-BLOCKED_TITLE = "Blocked & waiting accounts"
+BLOCKED_TITLE = "Blocked, deferred & cancelled accounts"
 
 BLOCKED_NOTE = (
-    "Accounts stopped on a stated blocking state — Blocked, Blocked - Account "
-    "team, Blocked - Customer, Blocked - Partner / ISD, or Waiting action on "
-    "follow up date. None of them is in any metric above, and none of those "
-    "metrics is in here. Status Summary carries the programme's own note on "
-    "why each one has stopped."
+    "Every account that is neither On-Track nor Completed, grouped by why. The "
+    "blocking Current States — Blocked, Blocked - Account team, Blocked - "
+    "Customer, Blocked - Partner / ISD, Waiting action on follow up date — with "
+    "Deferred By Customer and Cancelled / Archived broken out by Migration "
+    "Status, since those are decisions rather than blockages. None of them is "
+    "in any metric above, and none of those metrics is in here, so the two add "
+    "up to the report's accounts. Status Summary carries the programme's own "
+    "note on each one."
 )
 
 
@@ -222,15 +225,14 @@ BLOCKED_NOTE = (
 _STATE_HOME = {
     kpi.STATE_ON_TRACK: "Current pipeline (charted above)",
     kpi.STATE_COMPLETED: "Current pipeline (charted above)",
-    kpi.STATE_DEFERRED: "Not reported — deferred by the customer",
-    kpi.STATE_CANCELLED: "Not reported — cancelled / archived",
-    kpi.STATE_BLOCKED: "Not reported — Current State is not a stated blocking state",
-    kpi.STATE_OTHER: "Not reported — no stated state (see Data Inconsistency)",
 }
 
 
 #: The order states read across the generation grid: the three a review asks
 #: about first, then whatever else the file contains.
+#: The total row of the generation grid — both generations together.
+ALL_EOS_ROW = "All EOS"
+
 GENERATION_STATE_ORDER = (kpi.STATE_ON_TRACK, kpi.STATE_COMPLETED,
                           kpi.STATE_BLOCKED, kpi.STATE_DEFERRED,
                           kpi.STATE_CANCELLED, kpi.STATE_OTHER)
@@ -257,7 +259,12 @@ def generation_status(pop: pd.DataFrame, waves: kpi.WaveIndex
     grid = pd.crosstab(rows["_generation"], rows["state"])
     order = ([s for s in GENERATION_STATE_ORDER if s in grid.columns]
              + [s for s in grid.columns if s not in GENERATION_STATE_ORDER])
-    return grid[order], rows
+    grid = grid[order]
+    # The programme as a whole, on top of its generations: the question is
+    # usually "how is EOS doing" before it is "how is Gen-2 doing", and a total
+    # row means the reader adds nothing up by hand.
+    grid.loc[ALL_EOS_ROW] = grid.sum()
+    return grid, rows
 
 
 def reconciliation(pop: pd.DataFrame, waves: kpi.WaveIndex) -> tuple[pd.DataFrame, int]:
@@ -266,9 +273,8 @@ def reconciliation(pop: pd.DataFrame, waves: kpi.WaveIndex) -> tuple[pd.DataFram
     The answer to "the charts show 32 of my 36 accounts — where are the other
     four?".  Each account resolves to exactly one state, so these rows sum to
     the report's own account count; what varies is **where** a state is
-    reported, and three of them are reported nowhere: a cancelled or deferred
-    engagement is a decision already taken, and an account with no stated
-    Current State cannot be said to be moving.
+    reported — the two reported states above, and everything else in the
+    blocked, deferred & cancelled section.
 
     Returns ``(rows, accounts)`` — the table, and the total it sums to.
     """
@@ -290,10 +296,9 @@ def reconciliation(pop: pd.DataFrame, waves: kpi.WaveIndex) -> tuple[pd.DataFram
             continue
         shown = int(part["tpid_key"].isin(in_section).sum())
         where = _STATE_HOME.get(state, "Not reported")
-        if shown == len(part):
-            where = BLOCKED_TITLE
-        elif shown:
-            where = f"{BLOCKED_TITLE} ({fmt_int(shown)} of {fmt_int(len(part))})"
+        if state not in _STATE_HOME:
+            where = (BLOCKED_TITLE if shown == len(part) else
+                     f"{BLOCKED_TITLE} ({fmt_int(shown)} of {fmt_int(len(part))})")
         rows.append({"State": state,
                      "Accounts": int(part["tpid_key"].nunique()),
                      "ACR": float(part["_acr"].sum()),
@@ -543,24 +548,23 @@ def _blocked_block(pop: pd.DataFrame, waves: kpi.WaveIndex, ss,
     out = [Paragraph(BLOCKED_TITLE, ss["H2"]),
            Paragraph(_esc(BLOCKED_NOTE), ss["Muted"]), kit.spacer(0.15)]
     if tables["rows"].empty:
-        out.append(Paragraph("No accounts are blocked or waiting — every account "
-                             "here is moving, finished, or closed out.",
-                             ss["Body2"]))
+        out.append(Paragraph("Nothing has stopped — every account here is "
+                             "On-Track or Completed.", ss["Body2"]))
         return out
 
     out += [kit.kpi_cards([
-        ("Blocked Accounts", fmt_int(tables["accounts"]), "not in any metric above"),
+        ("Stopped Accounts", fmt_int(tables["accounts"]), "not in any metric above"),
         ("ACR Held Up", fmt_currency(tables["acr"]), "sum over those accounts"),
         ("Waves Behind Them", fmt_int(tables["wave_count"]),
          "every wave of those accounts"),
     ], ss, per_row=3), kit.spacer(0.25)]
 
-    states = tables["summary"].rename(columns={"category": "Current State",
+    states = tables["summary"].rename(columns={"category": "Reason",
                                                "count": "Accounts", "acr": "ACR"})
     states["ACR"] = states["ACR"].map(fmt_currency)
     states["Accounts"] = states["Accounts"].map(fmt_int)
     out.append(KeepTogether([
-        Paragraph("By current state", ss["H3"]),
+        Paragraph("By reason", ss["H3"]),
         kit.df_table(states, ss, col_widths=[8 * cm, 3 * cm, 3.5 * cm],
                      align_right=[1, 2], font_size=8)]))
 
@@ -590,7 +594,7 @@ BLOCKED_COLUMNS = [
     ("tpid", "TPID", 1.6),
     ("customer_name", "Customer", 3.2),
     ("region_geo", "WW Region", 2.0),
-    ("blocked_state", "Current State", 2.6),
+    ("blocked_state", "Reason", 2.6),
     ("assigned_pm", "Factory PM", 2.4),
     ("total_acr", "ACR", 1.6),
     ("status_summary", "Status Summary", 7.0),

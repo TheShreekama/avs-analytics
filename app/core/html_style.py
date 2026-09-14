@@ -396,6 +396,18 @@ def script() -> str:
     return state[id];
   }
 
+  // A row can belong to more than one point: an EOS account sits in its own
+  // generation AND in the "All EOS" total row of the same grid. Such a row
+  // carries its buckets pipe-separated — a character no label uses — and
+  // matches whichever of them was clicked.
+  var BUCKETS = '|';
+  function inBucket(row, bucket) {
+    var raw = row.getAttribute('data-bucket');
+    if (raw === null) return false;
+    if (raw === bucket) return true;
+    return raw.indexOf(BUCKETS) !== -1 && raw.split(BUCKETS).indexOf(bucket) !== -1;
+  }
+
   function apply(id) {
     var table = document.getElementById(id);
     if (!table) return;
@@ -403,7 +415,7 @@ def script() -> str:
     if (!body) return;
     var st = slot(id), shown = 0;
     Array.prototype.forEach.call(body.rows, function (row) {
-      var okBucket = !st.bucket || row.getAttribute('data-bucket') === st.bucket;
+      var okBucket = !st.bucket || inBucket(row, st.bucket);
       var okQuery = !st.query || row.textContent.toLowerCase().indexOf(st.query) !== -1;
       var hit = okBucket && okQuery;
       row.style.display = hit ? '' : 'none';
