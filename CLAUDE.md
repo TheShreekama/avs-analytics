@@ -154,9 +154,15 @@ under Streamlit's AppTest in both counting modes.
   (3) `Current State = "On Track"` and nothing else;
   (4) `Migration Status NOT IN ("5 - Deferred By Customer", "6 - Cancelled / Archived")`.
   `acr_pipeline` sums Total ACR over them (every report); `nodes_planned` sums Total Cores
-  (**EOS reports only**, `exporter.shows_nodes_planned`). Neither is period-bound. Note the
-  rule excludes 5 and 6 only — a completed wave is kept out by condition 3, since a
-  finished wave reads *Done*, not *On Track*.
+  (**EOS reports only**, `exporter.shows_nodes_planned`). Note the rule excludes 5 and 6
+  only — a completed wave is kept out by condition 3, since a finished wave reads *Done*,
+  not *On Track*.
+  **Both are read over the whole dataset, never the reporting period**: work nominated
+  before the window is still work still to do. Both renderers take `all_time_where` (the
+  sidebar filters with the `_date` key dropped — the same clause the EOS matrix uses) and
+  pass that population to `exporter.headline(..., all_time=…)`; every other filter still
+  binds, so a region-filtered report reports that region's pipeline. The dashboards need no
+  such argument — they read the whole category already.
 - **Terminology.** "AV36 EOS" is called **EOS Migration** everywhere in the UI. The
   AVS → Azure Native page labels the Total Cores metric **Cores Migrated**; the AVS
   categories call it **Hosts Migrated** (same column, different noun).
@@ -244,6 +250,13 @@ under Streamlit's AppTest in both counting modes.
 - **Nodes vs Cores.** `html_report._unit_noun`: the AVS motions deploy **Nodes**, only
   `(From AVS)` moves **Cores**. One noun per report, used by the tiles and the trend
   titles so the two cannot disagree.
+- **Money is formatted by column, in one place.** `metrics.MONEY_COLUMNS` /
+  `metrics.format_money_frame` decide which columns are money and render them;
+  `components.format_money` (dashboards, `fmt_currency`) and `html_report._accounts_frame`
+  (exported tables, `fmt_compact_currency`) both defer to it, so no table is the one place
+  showing a raw `2400000`. A column already formatted is left alone rather than written
+  twice, and Total Cores is rendered as a whole number — a node count reading "36.0" is the
+  float leaking.
 - **Money reads in K/M everywhere, tooltips included.** `metrics.fmt_compact_currency`
   ($12.5K / $125K / $1.25M) is computed in Python and carried on the trace as
   `customdata`, because Plotly's own SI format writes a lowercase "k" and no symbol —

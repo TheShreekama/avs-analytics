@@ -1996,3 +1996,109 @@ def test_an_unapproved_nomination_is_never_on_track():
     # either, so it falls to Other rather than being reported anywhere.
     assert {states[t] for t in ("2", "3", "4", "5")} == {kpi.STATE_OTHER}
     assert states["6"] == kpi.STATE_COMPLETED
+
+
+# --------------------------------------------------------------------------- #
+# The forward-looking tiles read the whole dataset, never the window
+# --------------------------------------------------------------------------- #
+#: September onwards — drops Acme's July nomination from the reporting period.
+_FROM_SEP = "WHERE \"created_date\" >= '2025-09-01'"
+_SEP_WINDOW = (pd.Timestamp("2025-09-01"), pd.Timestamp("2026-06-30"))
+
+
+def _tile_values(doc: str, group: str) -> dict:
+    import re
+    body = _main(doc)
+    return dict(re.findall(
+        r'data-tile="kpi-\w+-(\w+)" data-tile-group="' + group +
+        r'"[^>]*>.*?<div class="value">([^<]*)</div>', body, re.S))
+
+
+def test_the_period_never_narrows_acr_pipeline_or_planned_nodes(state_ctx):
+    """Work nominated before the window is still work still to do."""
+    from app.core import html_report
+
+    whole = _tile_values(html_report.build_html_report(
+        state_ctx, "", reports=["eos"]).decode(), "kpis-eos")
+    narrowed = _tile_values(html_report.build_html_report(
+        state_ctx, _FROM_SEP, reports=["eos"], all_time_where="",
+        date_window=_SEP_WINDOW, period_label="Sep 25 → Jun 26").decode(),
+        "kpis-eos")
+
+    # The period-bound tiles move…
+    assert whole["engagements"] != narrowed["engagements"]
+    # …and the two forward-looking ones do not.
+    assert narrowed["acr_pipeline"] == whole["acr_pipeline"]
+    assert narrowed["nodes_planned"] == whole["nodes_planned"]
+
+
+def test_the_pdf_reads_the_pipeline_over_the_whole_dataset_too(state_ctx):
+    from app.core import exporter as exp
+
+    def pipeline(where, all_time_where, window):
+        text = _flowable_text(exp.build_story(
+            state_ctx, where, reports=["eos"], date_window=window,
+            all_time_where=all_time_where))
+        import re
+        return re.search(r"ACR PIPELINE\s*(\S+?)eligible", text).group(1)
+
+    assert pipeline(_FROM_SEP, "", _SEP_WINDOW) == pipeline("", None, None)
+
+
+def test_a_filter_that_is_not_the_period_still_binds_on_the_pipeline(state_ctx):
+    """Only the window is dropped: a report cut to one region reports that region.
+
+    Read the other way round from the test above — the report sees everything,
+    the pipeline only EMEA — which is what proves the figure is drawn from
+    ``all_time_where`` rather than simply ignoring the filters.
+    """
+    from app.core import html_report
+
+    emea = "WHERE \"region_geo\" = 'EMEA'"
+    doc = html_report.build_html_report(
+        state_ctx, "", reports=["eos"], all_time_where=emea).decode()
+    everything = html_report.build_html_report(
+        state_ctx, "", reports=["eos"]).decode()
+    assert (_tile_values(doc, "kpis-eos")["acr_pipeline"]
+            != _tile_values(everything, "kpis-eos")["acr_pipeline"])
+
+
+def test_money_in_the_underlying_tables_reads_in_k_and_m(state_doc):
+    """The account tables are not the one place a raw 2400000 survives."""
+    import re
+    body = _main(state_doc)
+    # Every account table heads an ACR column…
+    assert "<th>Total ACR</th>" in body
+    # …and no cell under it is a raw number.
+    for table in re.findall(r'<table class="data"[^>]*>(.*?)</table>', body, re.S):
+        headers = re.findall(r"<th[^>]*>([^<]*)</th>", table)
+        if "Total ACR" not in headers:
+            continue
+        acr = headers.index("Total ACR")
+        for row in re.findall(r"<tr[^>]*>(.*?)</tr>", table.split("<tbody>")[-1], re.S):
+            cells = re.findall(r"<td[^>]*>([^<]*)</td>", row)
+            if len(cells) > acr and cells[acr]:
+                assert re.fullmatch(r"\$[\d.]+[KMB]?", cells[acr]), cells[acr]
+        # Cores are whole things, not floats.
+        if "Total Cores" in headers:
+            cores = headers.index("Total Cores")
+            for row in re.findall(r"<tr[^>]*>(.*?)</tr>",
+                                  table.split("<tbody>")[-1], re.S):
+                cells = re.findall(r"<td[^>]*>([^<]*)</td>", row)
+                if len(cells) > cores and cells[cores]:
+                    assert "." not in cells[cores], cells[cores]
+
+
+def test_one_rule_decides_which_columns_hold_money():
+    """The dashboards and the reports read the same list, so neither forgets."""
+    from app.ui import components
+    frame = pd.DataFrame({"total_acr": [1_200_000.0], "acr": [840_000.0],
+                          "total_cores": [10], "customer_name": ["A"]})
+    on_screen = components.format_money(frame)
+    in_report = metrics.format_money_frame(frame, metrics.fmt_compact_currency)
+    assert list(on_screen["total_acr"]) == ["$1.20M"]
+    assert list(in_report["total_acr"]) == ["$1.2M"]
+    for out in (on_screen, in_report):
+        assert list(out["total_cores"]) == [10]          # counts are not money
+    # A column already formatted is left alone rather than written twice.
+    assert list(metrics.format_money_frame(in_report)["total_acr"]) == ["$1.2M"]

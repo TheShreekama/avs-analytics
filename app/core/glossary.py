@@ -89,9 +89,11 @@ ACR_PIPELINE = (
     "4. Migration Status NOT IN ('5 - Deferred By Customer', '6 - Cancelled / "
     "Archived').\n"
     "Any single failure drops the wave.\n"
-    "It is a snapshot of where things stand: the reporting period does not "
-    "narrow it. Distinct from ACR Claimed, which is value already realised by "
-    "waves that ended inside the period."
+    "It is read over the WHOLE DATASET, never the reporting period: work "
+    "nominated before the window is still work still to do. Every other filter "
+    "still binds — a report cut to one region reports that region's pipeline.\n"
+    "Distinct from ACR Claimed, which is value already realised by waves that "
+    "ended inside the period."
 )
 
 NODES_PLANNED = (
@@ -103,6 +105,8 @@ NODES_PLANNED = (
     "Reported as NODES because that is what the AVS motions deploy, from the "
     "Total Cores column that records them. Read against Hosts Migrated, which "
     "is the deployment already delivered.\n"
+    "Like ACR Pipeline it is read over the WHOLE DATASET, never the reporting "
+    "period.\n"
     "Shown on the EOS reports only — that programme is the one that plans a "
     "node refresh."
 )
@@ -473,10 +477,13 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         "columns** — the offering says which factory delivers the work, the "
         "path says what moves where — and each motion is scoped by the one "
         "that defines it.",
-        "Neither figure is period-bound: both answer what the approved, "
-        "on-track work is worth **as things stand**, so no date window narrows "
-        "them. ACR Pipeline is therefore disjoint from **ACR Claimed**, which "
-        "is value already realised by waves that have ended.",
+        "**Both are read over the whole dataset, never the reporting period.** "
+        "Work nominated before the window is still work still to do, so a "
+        "narrower period cannot shrink the pipeline. Every *other* filter still "
+        "binds: a report cut to one region reports that region's pipeline, not "
+        "the portfolio's. ACR Pipeline is therefore disjoint from **ACR "
+        "Claimed**, which is value already realised by waves that have ended "
+        "inside the period.",
     )),
     ("EOS reporting — Gen-1 and Gen-2 only", (
         Rule("An account's EOS scope and generation", (
@@ -526,9 +533,10 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
     )),
     ("Periods, regions and money", (
         "The reporting period narrows the period-bound measures only. "
-        "**On-Track Accounts, ACR Pipeline, Nodes Deployment Planned, the "
-        "current pipeline, the regional cut and the blocked-accounts section "
-        "are snapshots** and say so under their own titles.",
+        "**On-Track Accounts, the current pipeline, the regional cut and the "
+        "blocked-accounts section are snapshots** of where things stand now, "
+        "and **ACR Pipeline and Nodes Deployment Planned are read over the "
+        "whole dataset**. All of them say so under their own titles.",
         "Selecting any period other than the current fiscal year adds a **This "
         "FY row above it**, each row measured over its own window — including "
         "over *All time*, which spans several fiscal years and so loses the one "

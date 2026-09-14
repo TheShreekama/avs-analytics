@@ -281,24 +281,13 @@ _NICE.update({
 
 #: Columns holding money.  Every table renders these as $1.2M / $840.0K rather
 #: than a raw number — a rule applied here so no caller can forget it.
-_MONEY_COLUMNS = {"total_acr", "acr", "acr_claimed", "total acr", "acr claimed",
-                  "estimated_acr", "estimated acr"}
-
-
-def _is_money(column: str) -> bool:
-    return str(column).strip().lower() in _MONEY_COLUMNS
-
-
 def format_money(df: pd.DataFrame) -> pd.DataFrame:
-    """A copy of ``df`` with its money columns rendered as currency."""
-    money = [c for c in df.columns if _is_money(c) and
-             pd.api.types.is_numeric_dtype(df[c])]
-    if not money:
-        return df
-    out = df.copy()
-    for col in money:
-        out[col] = out[col].map(fmt_currency)
-    return out
+    """A copy of ``df`` with its money columns rendered as currency.
+
+    The rule itself lives in :mod:`app.core.metrics`, so the exported reports
+    format the same columns the same way.
+    """
+    return metrics.format_money_frame(df)
 
 
 def column_label(col) -> str:

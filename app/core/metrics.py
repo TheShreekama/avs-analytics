@@ -230,6 +230,35 @@ def fmt_compact_currency(v: float) -> str:
     return f"${v:,.0f}"
 
 
+#: Columns holding money, by canonical key and by the labels those keys render
+#: as.  Every table — on screen and in the exported reports — renders these as
+#: currency rather than a raw number, a rule kept here so neither surface can
+#: forget it and the two cannot disagree.
+MONEY_COLUMNS = {"total_acr", "acr", "acr_claimed", "estimated_acr",
+                 "total acr", "acr claimed", "estimated acr", "acr held up"}
+
+
+def is_money_column(column) -> bool:
+    return str(column).strip().lower() in MONEY_COLUMNS
+
+
+def format_money_frame(df, formatter=None):
+    """A copy of *df* with its **numeric** money columns rendered as currency.
+
+    Only numeric ones: a column a caller has already formatted is left exactly
+    as it is, so money is never written twice ("$$1.2M").
+    """
+    import pandas as _pd
+    money = [c for c in df.columns
+             if is_money_column(c) and _pd.api.types.is_numeric_dtype(df[c])]
+    if not money:
+        return df
+    out = df.copy()
+    for col in money:
+        out[col] = out[col].map(formatter or fmt_currency)
+    return out
+
+
 def fmt_int(v) -> str:
     if is_blank(v):
         return "—"

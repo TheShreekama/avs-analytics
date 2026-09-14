@@ -157,23 +157,32 @@ def labelled(fact: pd.DataFrame, column: str) -> pd.DataFrame:
             .rename_axis("category").reset_index(name="count"))
 
 
-def headline(pop: pd.DataFrame, waves: kpi.WaveIndex, start, end) -> dict:
+def headline(pop: pd.DataFrame, waves: kpi.WaveIndex, start, end,
+             all_time: pd.DataFrame | None = None) -> dict:
     """The dashboard tiles, computed exactly as the dashboard computes them.
 
     ``acr_pipeline`` and ``nodes_planned`` are the two forward-looking ones and
-    are deliberately *not* period-bound: they answer what the approved,
-    unblocked, unfinished work is worth and how many nodes it still has to
-    deploy, which no historical window narrows.  ``nodes_planned`` is computed
-    for every report but only shown on the EOS ones.
+    are read over the **whole dataset**, never the reporting period: they answer
+    what the approved, on-track work is worth and how many nodes it still has
+    to deploy, and work nominated before the window is still work still to do.
+    Pass ``all_time`` — the same population with the period dropped — and they
+    are computed from it; without it they fall back to ``pop``, which is right
+    when the caller has no period filter to drop (the dashboards read the whole
+    category already).  Every other filter still binds: a report cut to one
+    region reports that region's pipeline, not the portfolio's.
+
+    ``nodes_planned`` is computed for every report but only shown on the EOS
+    ones.
     """
+    ahead = pop if all_time is None else all_time
     return {
         "engagements": kpi.new_engagements(pop, start, end, firsts=waves.first),
         "completed": kpi.migrations_completed(pop, start, end, lasts=waves.last),
         "hosts": kpi.hosts_migrated(pop, start, end),
         "on_track": kpi.on_track_accounts(pop, lasts=waves.last),
         "acr": kpi.acr_claimed(pop, start, end),
-        "acr_pipeline": kpi.acr_pipeline(pop),
-        "nodes_planned": kpi.nodes_planned(pop),
+        "acr_pipeline": kpi.acr_pipeline(ahead),
+        "nodes_planned": kpi.nodes_planned(ahead),
     }
 
 
@@ -311,16 +320,18 @@ def _summary_block(spec: ReportSpec, metrics_: dict, ss, period_label: str) -> l
         ("ACR Claimed", fmt_currency(metrics_["acr"].value),
          "waves ended in the period"),
         ("ACR Pipeline", fmt_currency(metrics_["acr_pipeline"].value),
-         "approved, unblocked, unfinished waves"),
+         "eligible waves, all time"),
     ]
     if shows_nodes_planned(spec):
         tiles.append(("Nodes Deployment Planned",
                       fmt_int(metrics_["nodes_planned"].value),
-                      "Total Cores on those same waves"))
+                      "Total Cores, eligible waves, all time"))
     return [Paragraph("Executive summary", ss["H2"]),
-            Paragraph(f"Reporting period: {_esc(period_label)}. On-Track, ACR "
-                      "Pipeline and any planned deployment are snapshots of where "
-                      "things stand now — no date window narrows them.", ss["Muted"]),
+            Paragraph(f"Reporting period: {_esc(period_label)}. On-Track is a "
+                      "snapshot of where things stand now; <b>ACR Pipeline and "
+                      "Nodes Deployment Planned are read over the whole dataset</b> "
+                      "— work nominated before the window is still work still to "
+                      "do. No date window narrows any of the three.", ss["Muted"]),
             kit.spacer(0.2),
             kit.kpi_cards(tiles, ss, per_row=3)]
 
@@ -649,8 +660,11 @@ def _generation_pipeline(fact: pd.DataFrame, category: str, ss) -> list:
 
 def _report_section(fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
                     period_label: str, with_drilldown: bool,
-                    sections: ReportSections) -> list:
+                    sections: ReportSections,
+                    all_time: pd.DataFrame | None = None) -> list:
     pop = segments.population(fact, spec.category)
+    # The forward-looking tiles read the whole programme, not the window.
+    ahead = None if all_time is None else segments.population(all_time, spec.category)
     links = [("View drill-down →", f"dd_{spec.key}")] if with_drilldown else []
     links.append(("Contents", "toc"))
 
@@ -679,7 +693,8 @@ def _report_section(fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
         return story
 
     waves = kpi.wave_index(pop)
-    blocks = [_summary_block(spec, headline(pop, waves, start, end), ss, period_label),
+    blocks = [_summary_block(spec, headline(pop, waves, start, end, ahead), ss,
+                             period_label),
               _trend_block(pop, waves, start, end, spec, ss),
               _pipeline_block(pop, waves, ss)]
     if spec.key == "native":
@@ -1031,6 +1046,7 @@ def build_story(ctx, where: str = "", scope_label: str = "All data",
                 drilldown: bool = True,
                 appendices: list[str] | None = None,
                 sections: ReportSections | None = None,
+                all_time_where: str | None = None,
                 max_drilldown_rows: int = MAX_DRILLDOWN_ROWS) -> list:
     """Assemble the report as ReportLab flowables — cover, contents, both parts.
 
@@ -1044,6 +1060,10 @@ def build_story(ctx, where: str = "", scope_label: str = "All data",
     start, end = date_window or (None, None)
     ss = kit.styles()
     fact = analytics.select_all(ctx.con, where, table="fact")
+    # The same filters with the reporting period dropped — what ACR Pipeline and
+    # Nodes Deployment Planned are read over, so a window narrows neither.
+    all_time = (fact if all_time_where is None or all_time_where == where
+                else analytics.select_all(ctx.con, all_time_where, table="fact"))
 
     story = _cover(ctx, ss, title, subtitle, scope_label, period_label, specs,
                    drilldown and bool(specs))
@@ -1055,7 +1075,7 @@ def build_story(ctx, where: str = "", scope_label: str = "All data",
                        "trends, current pipeline, regional cut and insights.", ss)
         for spec in specs:
             story += _report_section(fact, spec, ss, start, end, period_label,
-                                     drilldown, sections)
+                                     drilldown, sections, all_time)
 
     if specs and drilldown:
         story += _part("part_detail", "Part 2 — Supporting Detail",

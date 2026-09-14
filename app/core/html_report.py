@@ -101,8 +101,18 @@ def _label(column) -> str:
 
 def _accounts_frame(rows: pd.DataFrame,
                     columns: list[str] | None = None) -> pd.DataFrame:
-    """The drill-down columns of *rows*, headed the way a reader reads them."""
+    """The drill-down columns of *rows*, ready to print.
+
+    Headed the way a reader reads them, and with **money written as money** —
+    $12.5K, $1.25M — by the same rule the tiles and the dashboards use, so a
+    table cannot be the one place in the report showing a raw 2400000.
+    """
     frame = kpi.drilldown_frame(rows, columns=columns)
+    frame = metrics.format_money_frame(frame, metrics.fmt_compact_currency)
+    # Cores are whole things; a node count reading "36.0" is the float leaking.
+    if "total_cores" in frame.columns:
+        frame["total_cores"] = pd.to_numeric(frame["total_cores"], errors="coerce").map(
+            lambda v: "" if pd.isna(v) else fmt_int(v))
     return frame.rename(columns={c: _label(c) for c in frame.columns})
 
 
@@ -467,7 +477,7 @@ def _population_line(spec, pop: pd.DataFrame) -> str:
 
 
 def _summary(doc: _Builder, spec, pop, waves, start, end, period_label,
-             fy_window=None, fy_label: str = "") -> None:
+             fy_window=None, fy_label: str = "", all_time=None) -> None:
     """The headline tiles, over a This-FY row when the period is not This FY.
 
     The same two-row rule the dashboard's Executive Summary uses: selecting
@@ -478,23 +488,26 @@ def _summary(doc: _Builder, spec, pop, waves, start, end, period_label,
     if fy_window and fy_window[0] is not None:
         doc.write('<p class="note">Two periods: the fiscal year you are in, then '
                   "the period selected for this report. Each row is measured over "
-                  "its own window.</p>"
+                  "its own window — except ACR pipeline and any planned "
+                  "deployment, which are read over the whole dataset and so read "
+                  "the same on both rows.</p>"
                   f'<h4 class="sub">{esc(fy_label)}</h4>')
         _summary_row(doc, spec, pop, waves, fy_window[0], fy_window[1], fy_label,
-                     slug="fy")
+                     slug="fy", all_time=all_time)
         doc.write(f'<h4 class="sub">{esc(period_label)}</h4>')
-    _summary_row(doc, spec, pop, waves, start, end, period_label)
+    _summary_row(doc, spec, pop, waves, start, end, period_label,
+                 all_time=all_time)
 
 
 def _summary_row(doc: _Builder, spec, pop, waves, start, end,
-                 period_label: str, slug: str = "") -> None:
+                 period_label: str, slug: str = "", all_time=None) -> None:
     """One period's tiles, each with the accounts behind it.
 
     The same five metrics the dashboard's Executive Summary shows, and the same
     records under each — ``Metric.records`` is what the number was counted from,
     so the table can never disagree with the tile above it.
     """
-    head = exporter.headline(pop, waves, start, end)
+    head = exporter.headline(pop, waves, start, end, all_time)
     noun = _unit_noun(spec)
     group = _slug("kpis", spec.key, slug)
     metrics_shown = [
@@ -508,12 +521,13 @@ def _summary_row(doc: _Builder, spec, pop, waves, start, end,
          "any wave on track — now"),
         ("ACR claimed", "acr", fmt_currency(head["acr"].value), period_label),
         ("ACR pipeline", "acr_pipeline", fmt_currency(head["acr_pipeline"].value),
-         "eligible waves — now"),
+         "eligible waves — all time"),
     ]
     if exporter.shows_nodes_planned(spec):
         metrics_shown.append(
             (f"{noun} deployment planned", "nodes_planned",
-             fmt_int(head["nodes_planned"].value), "Total Cores, eligible waves"))
+             fmt_int(head["nodes_planned"].value),
+             "Total Cores, eligible waves — all time"))
     panes, tiles = [], []
     for label, key, value, unit in metrics_shown:
         table_id = _slug("kpi", spec.key, slug, key)
@@ -931,7 +945,10 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec
         return
 
     waves = kpi.wave_index(pop)
-    _summary(doc, spec, pop, waves, start, end, period_label, fy_window, fy_label)
+    # The forward-looking tiles are read over the whole programme: ``all_time``
+    # is the same filters with the reporting period dropped.
+    _summary(doc, spec, pop, waves, start, end, period_label, fy_window, fy_label,
+             all_time=segments.population(all_time, spec.category))
     if spec.key == "eos":
         # The matrix is the programme's own grid, so it is drawn from rows the
         # reporting period never touched — see :func:`_eos_matrix`.
