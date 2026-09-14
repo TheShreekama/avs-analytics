@@ -208,6 +208,28 @@ def fmt_currency(v: float) -> str:
     return f"${v:,.0f}"
 
 
+def fmt_compact_currency(v: float) -> str:
+    """Money at its shortest readable length — ``$12.5K``, ``$125K``, ``$1.25M``.
+
+    Three significant figures, with a trailing ``.0`` trimmed rather than
+    printed: 125,000 reads as ``$125K``, not ``$125.0K``.  Used wherever space
+    is tight and the exact cent is noise — chart axes and, above all, chart
+    **tooltips**, where the alternative is a hover reading ``$1,250,000``.
+
+    :func:`fmt_currency` stays the fuller form for tiles and tables ($1.25M,
+    $840.0K); this one never widens beyond six characters plus the suffix.
+    """
+    if is_blank(v):
+        return "—"
+    v = float(v)
+    a = abs(v)
+    for step, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if a >= step:
+            scaled = f"{v / step:.3g}"
+            return f"${scaled}{suffix}"
+    return f"${v:,.0f}"
+
+
 def fmt_int(v) -> str:
     if is_blank(v):
         return "—"

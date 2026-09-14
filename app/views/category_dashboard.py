@@ -9,7 +9,9 @@ in which population they select:
   2. **Current Pipeline** — nominations by state (On-Track / Completed only),
      on-track accounts by stage.
   3. **Regional breakdown** — where the category sits geographically, by status.
-  4. **Detailed Data** — every record behind the numbers, groupable and exportable.
+  4. **Accounts outside the reported pipeline** — blocked, deferred, cancelled
+     and waiting accounts, reported apart from every metric above.
+  5. **Detailed Data** — every record behind the numbers, groupable and exportable.
 
 Month-over-month trends are **not** here: they live under Trend Analysis, one
 page per measure with every category on it, so a measure can be read across the
@@ -41,6 +43,9 @@ _REGION_STAGE_JOIN = " · "
 #: pages are subsets of EOS Migration (All), which already carries it.
 _REGIONAL_BREAKDOWN = (segments.CAT_EOS_ALL, segments.CAT_ALL_AVS,
                        segments.CAT_AVS_NATIVE)
+
+#: The EOS pages — the only ones that report the deployment still planned.
+_EOS_CATEGORIES = (segments.CAT_EOS_ALL, segments.CAT_EOS_GEN1, segments.CAT_EOS_GEN2)
 
 # The AVS → Azure Native motion moves *cores* to Azure-native services; the AVS
 # categories move *hosts*.  Both are the Total Cores column — only the noun differs.
@@ -103,6 +108,7 @@ def render(category: str) -> None:
         _offering_and_target(fact, key)
     if category in _REGIONAL_BREAKDOWN:
         _regional_breakdown(fact, waves, key)
+    _excluded_accounts(fact, waves, key)
     _detailed_data(fact, waves, start, end, key, shown)
 
 
@@ -165,6 +171,19 @@ def _why_empty(ctx, category: str) -> None:
     """Show what the file actually contains when a category selects nothing."""
     st.markdown("**Why is this empty?**")
     fact = ctx.fact
+    untagged = segments.population(fact, segments.CAT_EOS_UNCLASSIFIED)
+    if category in _EOS_CATEGORIES and not untagged.empty:
+        # The likeliest reason an EOS page is empty: accounts in scope by
+        # migration path that no wave ever tagged with a generation.  EOS is
+        # reported by generation, so they are not counted here.
+        count = fmt_int(segments.tpid_key(untagged).nunique())
+        banner(f"<b>{count}</b> account(s) are in EOS scope through an "
+               "<b>AV36/AV36P/AV52 - EOS</b> migration path but carry no "
+               "<b>AVS Migration - Gen1/Gen2</b> tag on any wave. EOS is "
+               "reported by generation, so they are excluded from this page and "
+               "from every EOS total — they are listed on <b>Data → Data "
+               "Inconsistency</b>, and tagging them at source brings them "
+               "straight in.")
     accounts = fact.drop_duplicates("tpid_key")
     gen = (accounts["generation"].value_counts(dropna=False)
            .rename_axis("Generation").reset_index(name="Accounts (TPID)"))
@@ -213,30 +232,44 @@ def _summary_row(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str,
     hosts = kpi.hosts_migrated(fact, start, end)
     on_track = kpi.on_track_accounts(fact, lasts=waves.last)
     acr = kpi.acr_claimed(fact, start, end)
+    pipeline = kpi.acr_pipeline(fact)
+    planned = kpi.nodes_planned(fact)
 
     cores_help = (glossary.CORES_MIGRATED if category == segments.CAT_AVS_NATIVE
                   else glossary.HOSTS_MIGRATED)
-    components.kpi_row([
+    tiles = [
         {"label": "New Engagements", "value": fmt_int(engagements.value),
          "sub": "unique TPIDs, Wave-1 approval", "help": glossary.NEW_ENGAGEMENTS},
         {"label": "Migrations Completed", "value": fmt_int(completed.value),
-         "sub": "latest wave completed", "tone": "good",
+         "sub": "latest wave done, none on track", "tone": "good",
          "help": glossary.MIGRATIONS_COMPLETED},
         {"label": unit_label, "value": fmt_int(hosts.value),
          "sub": "sum of Total Cores", "help": cores_help},
         {"label": "On-Track Accounts", "value": fmt_int(on_track.value), "tone": "warn",
-         "sub": "current — not period-bound", "help": glossary.ON_TRACK_ACCOUNTS},
+         "sub": "any wave on track — now", "help": glossary.ON_TRACK_ACCOUNTS},
         {"label": "ACR Claimed", "value": fmt_currency(acr.value),
          "sub": "waves ended in the period", "help": glossary.ACR_CLAIMED},
-    ])
+        {"label": "ACR Pipeline", "value": fmt_currency(pipeline.value),
+         "sub": "eligible waves — now", "help": glossary.ACR_PIPELINE},
+    ]
+    panels = [
+        ("New Engagements", engagements, "new-engagements"),
+        ("Migrations Completed", completed, "migrations-completed"),
+        (unit_label, hosts, "hosts-migrated"),
+        ("On-Track Accounts", on_track, "on-track"),
+        ("ACR Claimed", acr, "acr-claimed"),
+        ("ACR Pipeline", pipeline, "acr-pipeline"),
+    ]
+    # Planned deployment is an EOS measure: only that programme reports the
+    # nodes still to go alongside the nodes already deployed.
+    if category in _EOS_CATEGORIES:
+        tiles.append({"label": "Nodes Deployment Planned",
+                      "value": fmt_int(planned.value),
+                      "sub": "Total Cores, eligible waves",
+                      "help": glossary.NODES_PLANNED})
+        panels.append(("Nodes Deployment Planned", planned, "nodes-planned"))
+    components.kpi_row(tiles)
     with st.expander(f"🔎 Records behind these tiles — {period_label}"):
-        panels = [
-            ("New Engagements", engagements, "new-engagements"),
-            ("Migrations Completed", completed, "migrations-completed"),
-            (unit_label, hosts, "hosts-migrated"),
-            ("On-Track Accounts", on_track, "on-track"),
-            ("ACR Claimed", acr, "acr-claimed"),
-        ]
         for tab, (title, metric, name) in zip(st.tabs([p[0] for p in panels]), panels):
             with tab:
                 frame = kpi.drilldown_frame(metric.records)
@@ -269,9 +302,12 @@ def _pipeline(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
     # does the pipeline stand right now", which no date window should narrow.
     section("Current pipeline", help=glossary.PIPELINE,
             period="Current state — not filtered by the reporting period")
-    st.caption("Every account in this category at its latest wave, whatever its "
-               "nomination date. Pick a state below the doughnut, or click a bar "
-               "or table row, to open the accounts behind it.")
+    st.caption("Every account in this category read across all of its waves, "
+               "whatever its nomination date. On-Track and Completed only — "
+               "blocked, deferred and cancelled accounts are reported below, "
+               "under **Accounts outside the reported pipeline**. Pick a state "
+               "below the doughnut, or click a bar or table row, to open the "
+               "accounts behind it.")
     states, state_rows = kpi.by_state(fact, lasts=waves.last)
     stages, stage_rows = kpi.on_track_by_stage(fact, lasts=waves.last)
 
@@ -319,14 +355,20 @@ def _regional_breakdown(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> N
     Account-grain (each TPID's latest wave), so an account with five waves is one
     account here rather than five rows — which is what the state chart above it
     counts too.
+
+    **One** chart: the stacked bar that used to sit beside the heatmap carried
+    the same region × stage counts, and two pictures of one cut is one too many.
+    The heatmap keeps the numbers in its cells; the summary beside it is what a
+    reader clicks to open the accounts, since a heatmap cell cannot be selected
+    in Streamlit.
     """
     section("Regional breakdown", help=glossary.REGIONAL_BREAKDOWN,
             period="Current state — not filtered by the reporting period")
     st.caption("Accounts at their latest wave, by WW Region and migration status — "
                "the four in-flight stages and Completed only. Stages are shown by "
-               "their code, with the key below the charts. Click a segment of the "
-               "stacked bar to open exactly the accounts in that region *and* "
-               "that stage.")
+               "their code, with the key below the chart. Pick a row of the "
+               "summary to open exactly the accounts in that region *and* that "
+               "stage.")
     rows = waves.last
     if rows.empty or "region_geo" not in rows.columns:
         components.empty_state("No regional data to report.")
@@ -345,21 +387,22 @@ def _regional_breakdown(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> N
     pivot = pd.crosstab(rows["_status"], rows["_region"])
     heat = pd.crosstab(rows["_region"], rows["_status"])
 
-    c1, c2 = st.columns(2)
+    c1, c2 = st.columns([3, 2])
     with c1:
-        mode = st.radio("View", ["Counts", "Share %"], horizontal=True,
-                        key=f"{key}_region_mode", label_visibility="collapsed")
-        # Each trace is a region and each x position a stage, so a clicked
-        # segment identifies both — hence the region-qualified bucket below.
-        picked = drilldown.selectable_chart(
-            charts.stacked_bar(pivot, title="Migration status by WW Region",
-                               percent=(mode == "Share %")),
-            key=f"{key}_region_bar",
-            curve_labels=[str(c) for c in pivot.columns],
-            curve_join=_REGION_STAGE_JOIN)
-    with c2:
         st.plotly_chart(charts.heatmap(heat, title="WW Region × status heatmap"),
                         width="stretch")
+    with c2:
+        # Long form, one row per region/stage pair: the selectable stand-in for
+        # clicking a heatmap cell, which Streamlit reports no points for.
+        pairs = (heat.stack().rename("Accounts").reset_index()
+                 .rename(columns={"_region": "WW Region", "_status": "Stage"}))
+        pairs = pairs[pairs["Accounts"] > 0]
+        pairs["Region · Stage"] = (pairs["WW Region"].astype(str)
+                                   + _REGION_STAGE_JOIN
+                                   + pairs["Stage"].astype(str))
+        picked = drilldown.selectable_table(
+            pairs[["WW Region", "Stage", "Accounts", "Region · Stage"]],
+            key=f"{key}_region_table", bucket_col="Region · Stage")
 
     if stage_key:
         st.caption("**Stage key** — " + " · ".join(
@@ -374,7 +417,76 @@ def _regional_breakdown(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> N
         pivot.reset_index().rename(columns={"_status": "Stage"}),
         f"{key}_region_grid", label="Underlying data — stage × WW Region",
         caption="Account counts per migration stage and WW Region: the numbers "
-                "both charts above are drawn from.")
+                "the heatmap above is drawn from.")
+
+
+def _excluded_accounts(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
+    """Blocked, deferred, cancelled and waiting accounts — reported on their own.
+
+    Deliberately a section of its own rather than extra slices on the pipeline
+    chart: these accounts are neither delivering nor delivered, so folding them
+    into either number would misstate both.  What they are is where a programme
+    review spends its time, so everything the export supports about them is here.
+    """
+    section("Accounts outside the reported pipeline",
+            help=glossary.EXCLUDED_ACCOUNTS,
+            period="Current state — not filtered by the reporting period")
+    st.caption("Every account whose state is neither On-Track nor Completed. "
+               "These accounts are in **none** of the metrics above — not the "
+               "tiles, not the pipeline, not the regional cut — and those "
+               "metrics are in none of these numbers.")
+    summary, rows = kpi.excluded_accounts(fact, lasts=waves.last)
+    if rows.empty:
+        components.empty_state("Every account here is On-Track or Completed — "
+                               "nothing falls outside the reported pipeline.")
+        return
+    acr = pd.to_numeric(rows.get("total_acr"), errors="coerce").sum()
+    components.kpi_row([
+        {"label": "Excluded Accounts", "value": fmt_int(rows["tpid_key"].nunique()),
+         "tone": "warn", "sub": "not in any metric above"},
+        {"label": "ACR Held Up", "value": fmt_currency(acr), "tone": "warn",
+         "sub": "summed over those accounts"},
+        {"label": "States", "value": fmt_int(len(summary)),
+         "sub": "distinct reasons they are out"},
+    ])
+
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        picked = drilldown.selectable_chart(
+            charts.bar(summary, "category", "count", color_status=True,
+                       title="Accounts by excluded state"), key=f"{key}_excl")
+    with c2:
+        picked += drilldown.selectable_table(
+            summary.rename(columns={"category": "State", "count": "Accounts",
+                                    "acr": "ACR"}),
+            key=f"{key}_excl_table", bucket_col="State")
+    drilldown.drilldown(rows.assign(bucket=rows["state"]), "bucket", picked,
+                        key=f"{key}_excl_rows", what="accounts",
+                        unit_col="total_acr")
+
+    reasons = kpi.excluded_reasons(rows)
+    profile = kpi.wave_profile(fact, rows)
+    left, right = st.columns(2)
+    with left:
+        subheading("Stated reason")
+        st.caption("Migration Status for cancelled and deferred accounts — the "
+                   "column that took them out — and Current State for the rest. "
+                   "Nothing is inferred: a blank reads *Not stated*.")
+        components.show_table(reasons.rename(columns={"category": "Reason",
+                                                      "count": "Accounts"}))
+    with right:
+        subheading("Waves behind these accounts")
+        st.caption("An account blocked on its fifth wave is a different problem "
+                   "from one blocked on its first.")
+        components.show_table(profile.rename(columns={"category": "Waves",
+                                                      "count": "Accounts"}))
+    if "region_geo" in rows.columns:
+        subheading("By WW Region")
+        region = pd.crosstab(
+            rows["region_geo"].astype("string").replace({"": pd.NA}).fillna("Unknown"),
+            rows["state"])
+        st.plotly_chart(charts.heatmap(region, title="WW Region × excluded state"),
+                        width="stretch")
 
 
 def _offering_and_target(fact: pd.DataFrame, key: str) -> None:

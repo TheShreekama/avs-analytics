@@ -211,6 +211,306 @@ def generate_insights(fact: pd.DataFrame, region_dim: str = "region_geo") -> lis
                            "No data quality issues detected in the current selection.",
                            POSITIVE, "0"))
 
+    out += programme_insights(fact, region_dim)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Programme-management rules
+# --------------------------------------------------------------------------- #
+# Every rule below reads the same columns the reports are built from and is
+# guarded twice over: on the columns being present at all (a partly-mapped file,
+# or the customer rollup, carries fewer), and on there being enough rows for the
+# statement to mean anything.  A rule with nothing to say says nothing — an
+# insight list padded with "0 accounts are blocked" trains a reader to skip it.
+# --------------------------------------------------------------------------- #
+#: Rules need at least this many accounts before they generalise about a split.
+_MIN_ACCOUNTS = 3
+
+
+def _has(fact: pd.DataFrame, *columns: str) -> bool:
+    return all(c in fact.columns for c in columns)
+
+
+def _num(fact: pd.DataFrame, column: str) -> pd.Series:
+    return pd.to_numeric(fact.get(column), errors="coerce")
+
+
+def programme_insights(fact: pd.DataFrame,
+                       region_dim: str = "region_geo") -> list[Insight]:
+    """Migration-programme findings: pipeline, bottlenecks, delays and exclusions.
+
+    Deliberately separate from the portfolio rules above — these read the
+    *delivery* columns (migration status, current state, planned vs actual
+    dates, cores, waves) rather than the nomination ones, and each says which
+    figures it is derived from so a reader can check it against the tables.
+    """
+    from . import kpi, segments            # imported here: kpi imports metrics only
+
+    out: list[Insight] = []
+    if fact is None or fact.empty:
+        return out
+    if region_dim not in fact.columns:
+        region_dim = "ww_region" if "ww_region" in fact.columns else ""
+
+    # The frame is normally wave-level; the customer rollup hands over one row
+    # per account already, in which case the latest wave of each account is
+    # simply that row.  Either way the rules below read accounts.
+    lasts = kpi.latest_wave(fact)
+    states = (kpi.account_state(fact, lasts) if not lasts.empty
+              else pd.Series(dtype=object))
+    accounts = int(len(lasts))
+
+    out += _pipeline_insights(fact, kpi, region_dim)
+    out += _excluded_insights(fact, kpi, lasts, states, accounts)
+    out += _bottleneck_insights(fact, kpi)
+    out += _delay_insights(fact, kpi)
+    out += _wave_insights(fact, kpi, lasts, states, accounts)
+    out += _delivery_insights(fact, kpi, segments)
+    return out
+
+
+def _pipeline_insights(fact, kpi, region_dim: str) -> list[Insight]:
+    """What the approved, unblocked, unfinished work is worth — and where it sits."""
+    if not _has(fact, "migration_status_code", "is_approved", "current_state"):
+        return []
+    eligible = fact[kpi.eligible_pipeline_waves(fact)]
+    if eligible.empty:
+        return []
+    out = []
+    pipeline_acr = float(_num(eligible, "total_acr").sum())
+    claimed = float(_num(fact[fact.get("actual_end_date").notna()], "total_acr").sum()
+                    if "actual_end_date" in fact.columns else 0.0)
+    if pipeline_acr > 0:
+        share = (f" That is {pipeline_acr / (pipeline_acr + claimed) * 100:.0f}% of "
+                 f"the ACR this portfolio has claimed and planned together."
+                 if claimed + pipeline_acr > 0 else "")
+        out.append(Insight(
+            "Pipeline", "ACR still to land",
+            f"**{fmt_currency(pipeline_acr)}** of ACR sits on "
+            f"{fmt_int(len(eligible))} approved, unblocked, unfinished waves.{share}",
+            INFO, fmt_currency(pipeline_acr)))
+        if region_dim and region_dim in eligible.columns:
+            by_region = (eligible.groupby(region_dim)["total_acr"].sum()
+                         .sort_values(ascending=False))
+            by_region = by_region[by_region > 0]
+            if len(by_region) >= 2:
+                top, value = by_region.index[0], float(by_region.iloc[0])
+                out.append(Insight(
+                    "Pipeline", "Where the pipeline is concentrated",
+                    f"**{top}** carries {fmt_currency(value)} of it "
+                    f"({value / pipeline_acr * 100:.0f}%), the largest share of any "
+                    f"region — the exposure if that one region slips.",
+                    WARNING if value / pipeline_acr >= 0.5 else INFO,
+                    fmt_currency(value)))
+    cores = float(_num(eligible, "total_cores").sum())
+    delivered = 0.0
+    if "actual_end_date" in fact.columns:
+        done = fact[kpi.is_completed(fact) & fact["actual_end_date"].notna()]
+        delivered = float(_num(done, "total_cores").sum())
+    if cores > 0 and delivered > 0:
+        out.append(Insight(
+            "Pipeline", "Deployment still ahead",
+            f"**{fmt_int(cores)}** nodes (Total Cores) are planned on those waves "
+            f"against {fmt_int(delivered)} already deployed — "
+            f"{cores / (cores + delivered) * 100:.0f}% of the programme's nodes "
+            f"are still to come.", INFO, fmt_int(cores)))
+    return out
+
+
+def _excluded_insights(fact, kpi, lasts, states, accounts: int) -> list[Insight]:
+    """Blocked, deferred and cancelled accounts: how many, how much, and why."""
+    if lasts.empty or accounts == 0 or states.empty:
+        return []
+    excluded = states.isin(kpi.EXCLUDED_STATES)
+    stuck = int(excluded.sum())
+    if not stuck:
+        return []
+    rows = lasts[excluded.to_numpy()].assign(state=states[excluded].to_numpy())
+    share = stuck / accounts * 100
+    out = [Insight(
+        "Excluded", "Accounts outside the reported pipeline",
+        f"**{fmt_int(stuck)}** of {fmt_int(accounts)} accounts ({share:.0f}%) are "
+        f"neither on track nor completed — "
+        + ", ".join(f"{fmt_int(v)} {k.lower()}"
+                    for k, v in rows["state"].value_counts().items())
+        + ". They are reported separately and are in none of the figures above.",
+        CRITICAL if share >= 25 else WARNING, fmt_int(stuck))]
+    held = float(_num(rows, "total_acr").sum())
+    if held > 0:
+        top = rows.loc[_num(rows, "total_acr").idxmax()]
+        out.append(Insight(
+            "Excluded", "ACR held up outside the pipeline",
+            f"**{fmt_currency(held)}** of ACR sits on those accounts; the largest "
+            f"single one is **{top.get('customer_name', '?')}** at "
+            f"{fmt_currency(_num(rows, 'total_acr').max())} "
+            f"({str(top.get('state', '')).lower()}).",
+            WARNING, fmt_currency(held)))
+    reasons = kpi.excluded_reasons(rows, limit=1)
+    if not reasons.empty:
+        reason, count = reasons.iloc[0]["category"], int(reasons.iloc[0]["count"])
+        out.append(Insight(
+            "Excluded", "Most common reason for exclusion",
+            f"**{reason}** accounts for {fmt_int(count)} of the {fmt_int(stuck)} — "
+            f"the single change that would return the most accounts to the "
+            f"reported pipeline.", INFO, reason))
+    return out
+
+
+def _bottleneck_insights(fact, kpi) -> list[Insight]:
+    """Which stage the in-flight work is piled up in, and what it is worth."""
+    if not _has(fact, "migration_status_label"):
+        return []
+    moving = fact[kpi.in_flight(fact)]
+    if len(moving) < _MIN_ACCOUNTS:
+        return []
+    by_stage = moving.groupby("migration_status_label").agg(
+        waves=("migration_status_label", "size"), acr=("total_acr", "sum"))
+    by_stage = by_stage.sort_values("waves", ascending=False)
+    stage, row = by_stage.index[0], by_stage.iloc[0]
+    share = int(row["waves"]) / len(moving) * 100
+    out = [Insight(
+        "Bottleneck", "Where in-flight work is piled up",
+        f"**{stage}** holds {fmt_int(int(row['waves']))} of the "
+        f"{fmt_int(len(moving))} in-flight waves ({share:.0f}%), carrying "
+        f"{fmt_currency(float(row['acr']))} of ACR.",
+        WARNING if share >= 50 else INFO, fmt_int(int(row["waves"])))]
+    if _has(fact, "approval_date", "actual_start_date"):
+        lag = (pd.to_datetime(fact["actual_start_date"], errors="coerce")
+               - pd.to_datetime(fact["approval_date"], errors="coerce")).dt.days
+        lag = lag[lag >= 0]
+        if len(lag) >= _MIN_ACCOUNTS:
+            out.append(Insight(
+                "Bottleneck", "Approval to start",
+                f"Migrations begin a median of **{lag.median():.0f} days** after "
+                f"approval (over {fmt_int(len(lag))} waves with both dates); a "
+                f"quarter take longer than {lag.quantile(0.75):.0f} days.",
+                WARNING if lag.median() > 90 else INFO, f"{lag.median():.0f}d"))
+    return out
+
+
+def _delay_insights(fact, kpi) -> list[Insight]:
+    """Waves whose own plan has passed them by."""
+    if not _has(fact, "planned_end_date", "actual_end_date"):
+        return []
+    planned = pd.to_datetime(fact["planned_end_date"], errors="coerce")
+    ended = pd.to_datetime(fact["actual_end_date"], errors="coerce")
+    as_of = pd.Timestamp.today().normalize()
+    overdue = fact[planned.notna() & ended.isna() & (planned < as_of)]
+    out = []
+    if not overdue.empty:
+        days = (as_of - pd.to_datetime(overdue["planned_end_date"],
+                                       errors="coerce")).dt.days
+        worst = overdue.loc[days.idxmax()]
+        out.append(Insight(
+            "Delays", "Past their planned end date",
+            f"**{fmt_int(len(overdue))}** waves are past their planned end date "
+            f"with no actual end recorded, by a median of {days.median():.0f} "
+            f"days. The furthest overdue is **{worst.get('customer_name', '?')}** "
+            f"at {fmt_int(days.max())} days.",
+            CRITICAL if len(overdue) >= 10 else WARNING, fmt_int(len(overdue))))
+    done = fact[planned.notna() & ended.notna()]
+    if len(done) >= _MIN_ACCOUNTS:
+        slip = (pd.to_datetime(done["actual_end_date"], errors="coerce")
+                - pd.to_datetime(done["planned_end_date"], errors="coerce")).dt.days
+        late = int((slip > 0).sum())
+        out.append(Insight(
+            "Delays", "Plan versus delivery",
+            f"Of {fmt_int(len(done))} waves with both a planned and an actual end "
+            f"date, **{fmt_int(late)}** finished late "
+            f"({late / len(done) * 100:.0f}%), with a median slip of "
+            f"{slip.median():+.0f} days.",
+            WARNING if late / len(done) > 0.5 else POSITIVE, f"{slip.median():+.0f}d"))
+    return out
+
+
+def _wave_insights(fact, kpi, lasts, states, accounts: int) -> list[Insight]:
+    """What having several waves does to an account."""
+    if accounts < _MIN_ACCOUNTS or "tpid_key" not in fact.columns:
+        return []
+    # Wave-level rows count themselves; the rollup already carries the count.
+    per_account = (_num(fact, "n_waves").fillna(1) if "n_waves" in fact.columns
+                   else fact.groupby("tpid_key").size())
+    multi = int((per_account > 1).sum())
+    out = []
+    if multi:
+        out.append(Insight(
+            "Waves", "Accounts running several waves",
+            f"**{fmt_int(multi)}** of {fmt_int(accounts)} accounts "
+            f"({multi / accounts * 100:.0f}%) carry more than one wave — up to "
+            f"{fmt_int(int(per_account.max()))} — so every account-level figure "
+            f"in this report counts them once, not once per wave.",
+            INFO, fmt_int(multi)))
+    # The classification rule this report turns on, stated with its own count.
+    if not lasts.empty and not states.empty:
+        completed_last = kpi.is_completed(lasts).to_numpy()
+        still_running = ((states == kpi.STATE_ON_TRACK).to_numpy() & completed_last)
+        held = int(still_running.sum())
+        if held:
+            out.append(Insight(
+                "Waves", "Finished a wave, still delivering",
+                f"**{fmt_int(held)}** account(s) have a completed latest wave but "
+                f"another wave still on track, so they count as On-Track rather "
+                f"than Completed — the classification rule that keeps a "
+                f"part-finished account out of the completed total.",
+                INFO, fmt_int(held)))
+    return out
+
+
+def _delivery_insights(fact, kpi, segments) -> list[Insight]:
+    """Differences between the motions, and inside the EOS population."""
+    out = []
+    if "is_from_avs" in fact.columns and "tpid_key" in fact.columns:
+        flag = fact["is_from_avs"].astype(bool)
+        if flag.any() and (~flag).any():
+            rates = {}
+            for label, part in (("AVS → Azure Native", fact[flag]),
+                                ("onboarding to AVS", fact[~flag])):
+                waves_ = kpi.wave_index(part)
+                total = part["tpid_key"].nunique()
+                done = kpi.migrations_completed(part, None, None,
+                                                lasts=waves_.last).count
+                if total:
+                    rates[label] = (done / total * 100, done, total)
+            if len(rates) == 2:
+                (a, (ra, da, ta)), (b, (rb, db, tb)) = sorted(
+                    rates.items(), key=lambda kv: -kv[1][0])
+                out.append(Insight(
+                    "Motions", "Completion differs by migration type",
+                    f"**{a}** has completed {ra:.0f}% of its accounts "
+                    f"({fmt_int(da)}/{fmt_int(ta)}) against {rb:.0f}% for {b} "
+                    f"({fmt_int(db)}/{fmt_int(tb)}).", INFO, f"{ra:.0f}%"))
+    if "generation" in fact.columns and "is_eos_population" in fact.columns:
+        eos = fact[fact["is_eos_population"].astype(bool)]
+        if not eos.empty:
+            per_gen = (eos.drop_duplicates("tpid_key")["generation"]
+                       .value_counts())
+            tagged = {g: int(per_gen.get(g, 0))
+                      for g in (segments.GEN_1, segments.GEN_2)}
+            if sum(tagged.values()):
+                cores = (eos.groupby("generation")["total_cores"].sum()
+                         if "total_cores" in eos.columns else pd.Series(dtype=float))
+                extra = ""
+                if not cores.empty:
+                    extra = (" Nodes follow the same split: "
+                             + ", ".join(
+                                 f"{fmt_int(float(cores.get(g, 0)))} on "
+                                 f"{g.replace('-', '')}"
+                                 for g in (segments.GEN_1, segments.GEN_2)) + ".")
+                out.append(Insight(
+                    "EOS", "Generation mix of the EOS population",
+                    f"**{fmt_int(tagged[segments.GEN_1])}** accounts are tagged "
+                    f"Gen1 and {fmt_int(tagged[segments.GEN_2])} Gen2.{extra}",
+                    INFO, fmt_int(sum(tagged.values()))))
+            untagged = int(per_gen.get(segments.GEN_UNCLASSIFIED, 0))
+            if untagged:
+                out.append(Insight(
+                    "EOS", "EOS accounts with no generation tag",
+                    f"**{fmt_int(untagged)}** account(s) are in EOS scope through "
+                    f"their migration path but carry no Gen1/Gen2 tag on any "
+                    f"wave. They are excluded from EOS reporting and listed "
+                    f"under Data Inconsistency — adding the tag at source brings "
+                    f"them back in.", WARNING, fmt_int(untagged)))
     return out
 
 

@@ -31,7 +31,8 @@ from reportlab.lib.units import cm
 from reportlab.platypus import KeepTogether, PageBreak, Paragraph
 
 from ..ui import pdf_charts as pc
-from . import analytics, insights as insights_mod, kpi, pdf_kit as kit, segments
+from . import (analytics, glossary, insights as insights_mod, kpi,
+               pdf_kit as kit, segments)
 from .metrics import fmt_currency, fmt_int
 
 
@@ -69,6 +70,13 @@ REPORTS: tuple[ReportSpec, ...] = (
         blurb="Migrations away from AVS to Azure-native services — the "
               "\"(From AVS)\" offerings. Reported here and nowhere else."),
 )
+
+#: What a report calls itself when the caller says nothing.  Deliberately about
+#: the subject — the migration programme — and never about the application that
+#: rendered it or the export it was read from: a report circulated to leadership
+#: should read as analysis, not as a tool's output.
+DEFAULT_TITLE = "Migration Programme Report"
+DEFAULT_SUBTITLE = "Management Report"
 
 REPORT_KEYS = [r.key for r in REPORTS]
 _BY_KEY = {r.key: r for r in REPORTS}
@@ -134,17 +142,74 @@ def labelled(fact: pd.DataFrame, column: str) -> pd.DataFrame:
 
 
 def headline(pop: pd.DataFrame, waves: kpi.WaveIndex, start, end) -> dict:
-    """The five dashboard tiles, computed exactly as the dashboard computes them."""
+    """The dashboard tiles, computed exactly as the dashboard computes them.
+
+    ``acr_pipeline`` and ``nodes_planned`` are the two forward-looking ones and
+    are deliberately *not* period-bound: they answer what the approved,
+    unblocked, unfinished work is worth and how many nodes it still has to
+    deploy, which no historical window narrows.  ``nodes_planned`` is computed
+    for every report but only shown on the EOS ones.
+    """
     return {
         "engagements": kpi.new_engagements(pop, start, end, firsts=waves.first),
         "completed": kpi.migrations_completed(pop, start, end, lasts=waves.last),
         "hosts": kpi.hosts_migrated(pop, start, end),
         "on_track": kpi.on_track_accounts(pop, lasts=waves.last),
         "acr": kpi.acr_claimed(pop, start, end),
+        "acr_pipeline": kpi.acr_pipeline(pop),
+        "nodes_planned": kpi.nodes_planned(pop),
     }
 
 
-def _insight_lines(pop: pd.DataFrame, ss, limit: int = 6) -> list:
+#: Which report shows the "Nodes Deployment Planned" tile.  The EOS programme
+#: reports the deployment still to come; the other motions do not.
+def shows_nodes_planned(spec: "ReportSpec") -> bool:
+    return spec.key == "eos"
+
+
+def eos_untagged_accounts(fact: pd.DataFrame) -> int:
+    """Accounts in EOS scope by migration path with no generation tag on any wave.
+
+    They are outside every EOS report (EOS is reported by generation), so the
+    number is worth stating wherever an EOS report is thinner than a reader
+    expects — an empty report that does not say why is a dead end.
+    """
+    untagged = segments.population(fact, segments.CAT_EOS_UNCLASSIFIED)
+    return 0 if untagged.empty else int(segments.tpid_key(untagged).nunique())
+
+
+def excluded_tables(pop: pd.DataFrame, waves: kpi.WaveIndex) -> dict:
+    """Everything the excluded-accounts section reports, built once for both renderers.
+
+    Accounts whose state is blocked, deferred, cancelled/archived or otherwise
+    unreported — the complement of the On-Track/Completed cut, never mixed into
+    it.  Returns the summary, the WW Region cross-tab, the stated reasons, the
+    wave profile and the underlying rows; a caller renders whichever of them the
+    data actually supports.
+    """
+    summary, rows = kpi.excluded_accounts(pop, lasts=waves.last)
+    if rows.empty:
+        return {"summary": summary, "rows": rows, "region": pd.DataFrame(),
+                "reasons": pd.DataFrame(), "waves": pd.DataFrame(), "acr": 0.0,
+                "accounts": 0, "wave_count": 0}
+    region = pd.DataFrame()
+    if "region_geo" in rows.columns:
+        region = pd.crosstab(clean(rows["region_geo"]), rows["state"])
+    return {
+        "summary": summary,
+        "rows": rows,
+        "region": region,
+        "reasons": kpi.excluded_reasons(rows),
+        "waves": kpi.wave_profile(pop, rows),
+        "acr": float(pd.to_numeric(rows.get("total_acr"), errors="coerce").sum()),
+        "accounts": int(rows["tpid_key"].nunique()),
+        # Every wave those accounts own, not just the latest one each: an
+        # account blocked on its fifth wave has five waves behind it.
+        "wave_count": int(pop["tpid_key"].isin(rows["tpid_key"]).sum()),
+    }
+
+
+def _insight_lines(pop: pd.DataFrame, ss, limit: int = 14) -> list:
     out = []
     for item in insights_mod.generate_insights(pop)[:limit]:
         colour = kit.SEV_COLOR.get(item.severity, kit.PRIMARY)
@@ -207,17 +272,23 @@ def _summary_block(spec: ReportSpec, metrics_: dict, ss, period_label: str) -> l
         ("New Engagements", fmt_int(metrics_["engagements"].value),
          "unique TPIDs, Wave-1 approval"),
         ("Migrations Completed", fmt_int(metrics_["completed"].value),
-         "latest wave completed"),
+         "latest wave completed, no wave on track"),
         (spec.unit_label, fmt_int(metrics_["hosts"].value), "sum of Total Cores"),
         ("On-Track Accounts", fmt_int(metrics_["on_track"].value),
-         "current — not period-bound"),
+         "any wave on track — not period-bound"),
         ("ACR Claimed", fmt_currency(metrics_["acr"].value),
          "waves ended in the period"),
+        ("ACR Pipeline", fmt_currency(metrics_["acr_pipeline"].value),
+         "approved, unblocked, unfinished waves"),
     ]
+    if shows_nodes_planned(spec):
+        tiles.append(("Nodes Deployment Planned",
+                      fmt_int(metrics_["nodes_planned"].value),
+                      "Total Cores on those same waves"))
     return [Paragraph("Executive summary", ss["H2"]),
-            Paragraph(f"Reporting period: {_esc(period_label)}. On-Track is a "
-                      "snapshot of where the pipeline stands now — no date window "
-                      "narrows it.", ss["Muted"]),
+            Paragraph(f"Reporting period: {_esc(period_label)}. On-Track, ACR "
+                      "Pipeline and any planned deployment are snapshots of where "
+                      "things stand now — no date window narrows them.", ss["Muted"]),
             kit.spacer(0.2),
             kit.kpi_cards(tiles, ss, per_row=3)]
 
@@ -264,9 +335,10 @@ def _pipeline_block(pop: pd.DataFrame, waves: kpi.WaveIndex, ss) -> list:
     states, _ = kpi.by_state(pop, lasts=waves.last)
     stages, _ = kpi.on_track_by_stage(pop, lasts=waves.last)
     out = [Paragraph("Current pipeline", ss["H2"]),
-           Paragraph("Every account at its latest wave, whatever its nomination "
-                     "date. On-Track and Completed only — cancelled, blocked and "
-                     "waiting accounts are deliberately not charted here.",
+           Paragraph("Every account read across all of its waves, whatever its "
+                     "nomination date. On-Track and Completed only — blocked, "
+                     "deferred and cancelled accounts are reported separately, "
+                     "under Accounts outside the reported pipeline.",
                      ss["Muted"]), kit.spacer(0.15)]
     if states.empty:
         out.append(Paragraph("No On-Track or Completed accounts to report.",
@@ -286,6 +358,12 @@ def _pipeline_block(pop: pd.DataFrame, waves: kpi.WaveIndex, ss) -> list:
 
 
 def _regional_block(waves: kpi.WaveIndex, ss) -> list:
+    """The regional cut as **one** chart.
+
+    The stacked bar and the heatmap carried the same numbers — region against
+    stage — so the bar has gone and the heatmap stands alone: it is the one that
+    reads every region and every stage at once without a legend to decode.
+    """
     pivot, heat, legend = region_status(waves.last)
     if pivot.empty:
         return []
@@ -297,13 +375,67 @@ def _regional_block(waves: kpi.WaveIndex, ss) -> list:
                       "chart above rather than counting waves." +
                       (f" {_esc(key)}" if key else ""), ss["Muted"]),
             kit.spacer(0.15),
-            KeepTogether([Paragraph("Migration status by WW Region", ss["H3"]),
-                          kit.image(pc.stacked_bar_png(pivot, height_px=280),
-                                    width_cm=16.6)]),
-            kit.spacer(0.2),
             KeepTogether([Paragraph("WW Region × status heatmap", ss["H3"]),
-                          kit.image(pc.heatmap_png(heat, height_px=280),
+                          kit.image(pc.heatmap_png(heat, height_px=300),
                                     width_cm=16.6)])]
+
+
+def _excluded_block(pop: pd.DataFrame, waves: kpi.WaveIndex, ss) -> list:
+    """Accounts outside the reported pipeline — blocked, deferred, cancelled.
+
+    A section of its own, never folded into the metrics above it: these accounts
+    are neither delivering nor delivered, so counting them anywhere in the
+    On-Track/Completed story would misstate both.  What they *are* is where a
+    programme review spends its time, so everything the export supports about
+    them is reported here.
+    """
+    tables = excluded_tables(pop, waves)
+    out = [Paragraph("Accounts outside the reported pipeline", ss["H2"]),
+           Paragraph("Blocked, deferred, cancelled / archived and waiting "
+                     "accounts — every account whose state is neither On-Track "
+                     "nor Completed. They are excluded from every metric above "
+                     "and reported only here, so nothing is counted twice and "
+                     "nothing is dropped.", ss["Muted"]), kit.spacer(0.15)]
+    if tables["rows"].empty:
+        out.append(Paragraph("No accounts fall outside the reported pipeline — "
+                             "every account is On-Track or Completed.", ss["Body2"]))
+        return out
+
+    out += [kit.kpi_cards([
+        ("Excluded Accounts", fmt_int(tables["accounts"]), "not in any metric above"),
+        ("ACR Held Up", fmt_currency(tables["acr"]), "sum over those accounts"),
+        ("Waves Behind Them", fmt_int(tables["wave_count"]),
+         "every wave of those accounts"),
+    ], ss, per_row=3), kit.spacer(0.25)]
+
+    states = tables["summary"].rename(columns={"category": "State",
+                                               "count": "Accounts", "acr": "ACR"})
+    states["ACR"] = states["ACR"].map(fmt_currency)
+    states["Accounts"] = states["Accounts"].map(fmt_int)
+    out.append(KeepTogether([
+        Paragraph("By state", ss["H3"]),
+        kit.df_table(states, ss, col_widths=[8 * cm, 3 * cm, 3.5 * cm],
+                     align_right=[1, 2], font_size=8)]))
+
+    if not tables["region"].empty:
+        out += [kit.spacer(0.25),
+                KeepTogether([Paragraph("By WW Region", ss["H3"]),
+                              kit.image(pc.heatmap_png(tables["region"],
+                                                       height_px=260),
+                                        width_cm=16.6)])]
+    for title, frame, first_col in (("Stated reason", tables["reasons"], "Reason"),
+                                    ("Waves behind these accounts", tables["waves"],
+                                     "Waves")):
+        if frame is None or frame.empty:
+            continue
+        printable = frame.rename(columns={"category": first_col, "count": "Accounts"})
+        printable["Accounts"] = printable["Accounts"].map(fmt_int)
+        out += [kit.spacer(0.25),
+                KeepTogether([Paragraph(title, ss["H3"]),
+                              kit.df_table(printable, ss,
+                                           col_widths=[11 * cm, 3.5 * cm],
+                                           align_right=[1], font_size=8)])]
+    return out
 
 
 def _offering_block(pop: pd.DataFrame, ss) -> list:
@@ -428,13 +560,24 @@ def _report_section(fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
              kit.nav_bar(ss, spec.title, links),
              kit.spacer(0.15),
              Paragraph(_esc(spec.blurb), ss["Body2"]),
-             Paragraph(f"Source: {_esc(spec.source)}", ss["Muted"]),
              kit.spacer(0.1),
              _population_line(spec, pop, ss),
              kit.spacer(0.3)]
     if pop.empty:
-        story += [Paragraph("No nominations fall into this report for the current "
-                            "filters.", ss["Body2"]), kit.page_break()]
+        story.append(Paragraph("No nominations fall into this report for the "
+                               "current filters.", ss["Body2"]))
+        untagged = eos_untagged_accounts(fact) if spec.key == "eos" else 0
+        if untagged:
+            story += [kit.spacer(0.15), Paragraph(
+                f"<b>{fmt_int(untagged)}</b> account(s) are in EOS scope through "
+                f"their migration path but carry no \"AVS Migration - "
+                f"Gen1/Gen2\" tag on any wave. EOS is reported by generation, so "
+                f"they are not counted here; they are listed in the data "
+                f"inconsistency review, and adding the tag at source brings them "
+                f"into this report.", ss["Body2"])]
+        if spec.breakdown:
+            story += [kit.spacer(0.35), *_generation_block(fact, spec, start, end, ss)]
+        story.append(kit.page_break())
         return story
 
     waves = kpi.wave_index(pop)
@@ -444,14 +587,16 @@ def _report_section(fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
     if spec.key == "native":
         blocks.append(_offering_block(pop, ss))
     blocks.append(_regional_block(waves, ss))
+    blocks.append(_excluded_block(pop, waves, ss))
     if spec.breakdown:
         blocks.append(_generation_block(fact, spec, start, end, ss))
     for block in blocks:
         if block:
             story += [*block, kit.spacer(0.35)]
     story += [Paragraph("Insights", ss["H2"]),
-              Paragraph("Generated from this report's population by the same "
-                        "deterministic rules the Insights page uses.", ss["Muted"]),
+              Paragraph("Derived from this report's own population by "
+                        "deterministic rules — no model, no estimate: each one "
+                        "states the figures it is read from.", ss["Muted"]),
               kit.spacer(0.15),
               *_insight_lines(pop, ss)]
     story.append(kit.page_break())
@@ -522,8 +667,7 @@ def _accounts_table(pop: pd.DataFrame, waves: kpi.WaveIndex, spec: ReportSpec,
     if total > max_rows:
         out.append(Paragraph(
             f"Showing the {fmt_int(max_rows)} largest of {fmt_int(total)} accounts "
-            f"by ACR. Export the full set from Reports → Data exports (CSV).",
-            ss["Muted"]))
+            f"by ACR; the remainder are available as a CSV extract.", ss["Muted"]))
     out.append(kit.spacer(0.2))
 
     for region, group in shown.groupby("_region_sort", sort=True):
@@ -697,6 +841,30 @@ _APPENDIX_FN = {"inconsistency": _appendix_inconsistency}
 
 
 # --------------------------------------------------------------------------- #
+# Methodology
+# --------------------------------------------------------------------------- #
+def _methodology(ss) -> list:
+    """How every figure in this report was calculated, from the shared text.
+
+    The same words the HTML report and the Methodology page carry
+    (:data:`app.core.glossary.REPORT_METHODOLOGY`), so a rule cannot be
+    documented three ways.
+    """
+    story = [kit.Anchor("methodology", "Methodology & logic", level=1),
+             kit.nav_bar(ss, "Methodology & logic", [("Contents", "toc")]),
+             kit.spacer(0.15),
+             Paragraph("How every figure in this report is calculated — the "
+                       "rules as implemented, not as intended.", ss["Body2"]),
+             kit.spacer(0.3)]
+    for heading, paragraphs in glossary.REPORT_METHODOLOGY:
+        block = [Paragraph(_esc(heading), ss["H2"])]
+        for text in paragraphs:
+            block += [Paragraph(_strip(text), ss["Body2"]), kit.spacer(0.08)]
+        story += [KeepTogether(block), kit.spacer(0.25)]
+    return story
+
+
+# --------------------------------------------------------------------------- #
 # Document assembly
 # --------------------------------------------------------------------------- #
 def _cover(ctx, ss, title: str, subtitle: str, scope_label: str,
@@ -710,8 +878,7 @@ def _cover(ctx, ss, title: str, subtitle: str, scope_label: str,
              kit.spacer(0.6),
              Paragraph(f"Scope: {_esc(scope_label)}", ss["CoverSub"]),
              Paragraph(f"Reporting period: {_esc(period_label)}", ss["CoverSub"]),
-             Paragraph(f"Dataset: {_esc(ctx.filename)} &nbsp;·&nbsp; As-of "
-                       f"{pd.Timestamp(ctx.as_of):%d %b %Y}", ss["CoverSub"]),
+             Paragraph(f"As-of {pd.Timestamp(ctx.as_of):%d %b %Y}", ss["CoverSub"]),
              Paragraph(f"Generated {datetime.now():%d %b %Y, %H:%M}", ss["CoverSub"])]
     if with_drilldown:
         story += [kit.spacer(0.8),
@@ -752,8 +919,8 @@ def _part(key: str, title: str, blurb: str, ss,
 
 def build_story(ctx, where: str = "", scope_label: str = "All data",
                 reports: list[str] | None = None, *,
-                title: str = "AVS Migration Analytics",
-                subtitle: str = "Management Report",
+                title: str = DEFAULT_TITLE,
+                subtitle: str = DEFAULT_SUBTITLE,
                 period_label: str = "All dates in the dataset",
                 date_window: tuple | None = None,
                 drilldown: bool = True,
@@ -793,13 +960,19 @@ def build_story(ctx, where: str = "", scope_label: str = "All data",
             story += _drilldown_section(fact, spec, ss, start, end, period_label,
                                         max_drilldown_rows)
 
-    if chosen:
-        # Drill-downs leave the document on landscape pages; the appendix reads
-        # as portrait like the rest of the report.
-        if specs and drilldown:
+    if specs:
+        # Drill-downs leave the document on landscape pages; everything after
+        # them reads as portrait like the rest of the report.
+        if drilldown:
             story += kit.turn(kit.PORTRAIT)
+        story += _part("part_method", "Methodology & Logic",
+                       "The rules behind every number above.", ss)
+        story += _methodology(ss)
+
+    if chosen:
+        # The methodology above already turned the document back to portrait.
         story += _part("part_appendix", "Appendix",
-                       "Supporting checks on the dataset itself.", ss)
+                       "Consistency checks on the records behind this report.", ss)
         for key in chosen:
             story += _APPENDIX_FN[key](ctx, ss)
 
@@ -821,9 +994,10 @@ def build_report(ctx, where: str = "", scope_label: str = "All data",
     sidebar's counting-mode toggle changes neither, which is what keeps the two
     reporting the same numbers.
     """
-    title = kw.get("title", "AVS Migration Analytics")
-    # The page header already carries the app name on the left, so the right-hand
-    # slot names this particular report rather than repeating it.
-    running = kw.get("subtitle", "Management Report") or title
+    title = kw.get("title", DEFAULT_TITLE)
+    # The running header carries the report's own title and subtitle — nothing
+    # about the application that rendered it or the file it was read from.
+    running = kw.get("subtitle", DEFAULT_SUBTITLE) or title
     return kit.build(
-        lambda: build_story(ctx, where, scope_label, reports, **kw), running, title)
+        lambda: build_story(ctx, where, scope_label, reports, **kw), running, title,
+        brand=title)

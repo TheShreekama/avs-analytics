@@ -29,8 +29,8 @@ from plotly.offline import get_plotlyjs
 
 from ..config import FY_START_MONTH, EOS_MATRIX_START_FY
 from ..ui import charts
-from . import (analytics, exporter, html_style, insights as insights_mod, kpi,
-               metrics, segments)
+from . import (analytics, exporter, glossary, html_style,
+               insights as insights_mod, kpi, metrics, segments)
 from .metrics import fmt_currency, fmt_int
 
 #: Plotly config for every figure: interactive, but without the "download plot"
@@ -134,11 +134,12 @@ class _Builder:
         fig.update_traces(width=0.62, cliponaxis=False, selector={"type": "bar"})
         fig.update_yaxes(rangemode="tozero")
         if currency:
-            # SI suffixes with a $ prefix: "$2M", "$840k". Plotly writes "k"
-            # lowercase, so the tick text is post-processed to "K" for the
-            # thousands step, matching ``metrics.fmt_currency``.
+            # SI suffixes with a $ prefix on the axis: "$2M", "$840k".  The
+            # *hover* is left exactly as the chart factory built it — money
+            # written the way the tiles write it ($1.25M), from customdata —
+            # because a tooltip is where a reader actually reads the number,
+            # and "1250000" there is the raw figure the report never shows.
             fig.update_yaxes(tickprefix="$", tickformat="~s")
-            fig.update_traces(hovertemplate="%{x}: $%{y:,.0f}<extra></extra>")
         else:
             _integer_ticks(fig)
         payload = json.loads(pio.to_json(fig))
@@ -382,6 +383,27 @@ def _drillable(doc: _Builder, *, heading: str, fig, rows: pd.DataFrame,
                               rows, table_id, buckets=buckets))
 
 
+def _optional_card(card_id: str, title: str, note: str, body: str,
+                   label: str) -> str:
+    """A card the reader opts into — collapsed to its checkbox until ticked.
+
+    The checkbox is a real ``<input>`` and the hiding is a CSS sibling rule, so
+    the section is hidden the moment the file opens, with no script having run
+    and nothing to install: exactly what a report read from a mail client's
+    download folder needs.  The script only listens for the change so Plotly can
+    re-measure charts that were laid out while hidden (a chart sized at zero
+    width stays zero wide until something tells it otherwise).
+    """
+    head = f'<h3 class="block">{esc(title)}</h3>' if title else ""
+    sub = f'<p class="note">{esc(note)}</p>' if note else ""
+    return (f'<div class="card optional">'
+            f'<input type="checkbox" class="opt-toggle" id="{card_id}" '
+            f'data-optional aria-controls="{card_id}-body">'
+            f'<label class="opt-label" for="{card_id}">{esc(label)}</label>'
+            f'<div class="opt-body" id="{card_id}-body">{head}{sub}{body}</div>'
+            f"</div>")
+
+
 def _card(title: str, note: str, body: str) -> str:
     head = f'<h3 class="block">{esc(title)}</h3>' if title else ""
     sub = f'<p class="note">{esc(note)}</p>' if note else ""
@@ -451,9 +473,15 @@ def _summary_row(doc: _Builder, spec, pop, waves, start, end,
         (spec.unit_label, "hosts", fmt_int(head["hosts"].value),
          f"Total {noun} deployed"),
         ("On-track accounts", "on_track", fmt_int(head["on_track"].value),
-         "at latest wave — now"),
+         "any wave on track — now"),
         ("ACR claimed", "acr", fmt_currency(head["acr"].value), period_label),
+        ("ACR pipeline", "acr_pipeline", fmt_currency(head["acr_pipeline"].value),
+         "eligible waves — now"),
     ]
+    if exporter.shows_nodes_planned(spec):
+        metrics_shown.append(
+            (f"{noun} deployment planned", "nodes_planned",
+             fmt_int(head["nodes_planned"].value), "Total Cores, eligible waves"))
     panes, tiles = [], []
     for label, key, value, unit in metrics_shown:
         table_id = _slug("kpi", spec.key, slug, key)
@@ -492,8 +520,11 @@ def _trends(doc: _Builder, spec, pop, waves, start, end) -> None:
     for title, table, rows, value_col, currency in series:
         if table.empty:
             continue
+        # ``currency`` reaches the factory as well as the figure: the factory
+        # writes the hover ($1.25M from customdata), the figure the axis.  Left
+        # off, the axis reads $1.2M while the tooltip reads 1,250,000.
         fig = charts.trend_chart(table, "period", value_col, "Cumulative",
-                                 height=300)
+                                 currency=currency, height=300)
         slug = _slug("t", spec.key, value_col.lower().replace(" ", ""))
         body = _drillable(doc, heading=title, fig=fig, rows=rows,
                           buckets=_by_month, table_id=slug + "-r",
@@ -538,36 +569,32 @@ def _pipeline(doc: _Builder, spec, pop, waves) -> None:
             table_id=_slug("pg", spec.key), mode="y", height=320)
     doc.write(_card(
         "Current pipeline",
-        "Every account at its latest wave, whatever its nomination date. "
-        "On-Track and Completed only — cancelled, blocked and waiting accounts "
-        "are deliberately not charted here. Click a slice or bar to narrow the "
-        "accounts beneath it.", body))
+        "Every account read across all of its waves, whatever its nomination "
+        "date. On-Track and Completed only — blocked, deferred and cancelled "
+        "accounts are reported separately, below. Click a slice or bar to "
+        "narrow the accounts beneath it.", body))
 
 
 def _regional(doc: _Builder, spec, waves) -> None:
     """Where the category sits by WW Region, with stages named by their code.
 
-    The full status names ("Validating Commitment & Initial Scope") are long
-    enough that five of them on an axis leave the plot a sliver, so the axis
-    carries the code and the key sits under the charts.  The two charts also get
-    a full-width row of their own rather than sharing one — a stacked bar and a
-    heatmap side by side in half a column each are unreadable.
+    **One** chart, not two.  The stacked bar and the heatmap carried the same
+    region × stage counts, so the bar has gone: the heatmap is the one that puts
+    every region against every stage at once, with the count written in each
+    cell and no legend to decode.  The full status names ("Validating Commitment
+    & Initial Scope") are long enough to swamp an axis, so the axis carries the
+    code and the key sits under the chart.
     """
     pivot, heat, legend = exporter.region_status(waves.last)
     if pivot.empty:
         return
     rows = _region_stage_rows(waves.last)
-    # Both charts read the same pair, so both filter the same accounts: on the
-    # stacked bar the region is the trace and the stage the x; on the heatmap
-    # the region is the y and the stage the x.
-    body = _drillable(doc, heading="Migration status by WW Region",
-                      fig=charts.stacked_bar(pivot), rows=rows,
-                      buckets=_by_region_stage, table_id=_slug("rb", spec.key),
-                      mode="trace-x", height=430)
-    body += _drillable(doc, heading="WW Region × status heatmap",
-                       fig=charts.heatmap(heat), rows=rows,
-                       buckets=_by_region_stage, table_id=_slug("rh", spec.key),
-                       mode="y-x", height=430)
+    # A heatmap cell names a region (its y) and a stage (its x), so the click
+    # filters the accounts to exactly that pair.
+    body = _drillable(doc, heading="WW Region × status heatmap",
+                      fig=charts.heatmap(heat), rows=rows,
+                      buckets=_by_region_stage, table_id=_slug("rh", spec.key),
+                      mode="y-x", height=430)
     if legend:
         body += ('<p class="note"><b>Stage key</b> — ' + " &nbsp;·&nbsp; ".join(
             f"<b>{esc(short)}</b> {esc(name)}" for short, name in legend) + "</p>")
@@ -585,8 +612,8 @@ def _regional(doc: _Builder, spec, waves) -> None:
         "Regional breakdown",
         "Accounts at their latest wave, by WW Region and migration status — one "
         "row per TPID, so this agrees with the state chart above rather than "
-        "counting waves. Click a bar segment or a heatmap cell to narrow the "
-        "accounts to that region and stage.", body))
+        "counting waves. Click a heatmap cell to narrow the accounts to that "
+        "region and stage.", body))
 
 
 #: Joins the two halves of a regional selection ("Americas - Enterprise · Stage 4").
@@ -705,8 +732,91 @@ def _generations(doc: _Builder, doc_fact, spec, start, end) -> None:
                numeric=set(frame.columns[1:]), row_head=True)))
 
 
+def _excluded(doc: _Builder, spec, pop, waves) -> None:
+    """Blocked, deferred, cancelled and waiting accounts — off by default.
+
+    Kept strictly apart from the metrics above: none of these accounts is in a
+    headline tile, a trend, the state chart or the regional cut, and none of
+    those numbers is in here.  It is hidden behind a checkbox because a
+    management report opens on what is being delivered; the accounts nobody is
+    delivering are one click away, for the review that goes looking for them.
+    """
+    tables = exporter.excluded_tables(pop, waves)
+    note = ("Every account whose state is neither On-Track nor Completed. These "
+            "accounts are excluded from every metric above — the tiles, the "
+            "trends, the pipeline and the regional cut — and reported only "
+            "here, so nothing is counted twice and nothing is dropped.")
+    label = "Show blocked, deferred and cancelled accounts"
+    if tables["rows"].empty:
+        doc.write(_optional_card(
+            _slug("optx", spec.key), "Accounts outside the reported pipeline",
+            note, '<p class="empty">No accounts fall outside the reported '
+            "pipeline — every account here is On-Track or Completed.</p>", label))
+        return
+
+    tiles = [_Tile("Excluded accounts", fmt_int(tables["accounts"]),
+                   "not in any metric above"),
+             _Tile("ACR held up", fmt_currency(tables["acr"]),
+                   "summed over those accounts"),
+             _Tile("Waves behind them", fmt_int(tables["wave_count"]),
+                   "every wave of those accounts")]
+    body = _kpi_tiles(tiles)
+
+    states = tables["summary"]
+    body += _drillable(
+        doc, heading="Accounts by excluded state",
+        fig=charts.bar(states, "category", "count", color_status=True),
+        rows=tables["rows"], buckets=lambda r: list(r["state"]),
+        table_id=_slug("xs", spec.key), mode="x", height=320,
+        label="Accounts — by state")
+    body += _drillable(
+        doc, heading="ACR held up by state",
+        fig=charts.bar(states, "category", "acr", currency=True,
+                       color_status=True),
+        rows=tables["rows"], buckets=lambda r: list(r["state"]),
+        table_id=_slug("xa", spec.key), mode="x", height=320, currency=True,
+        label="Accounts — by the ACR they hold up")
+    if not tables["region"].empty:
+        body += _drillable(
+            doc, heading="WW Region × excluded state",
+            fig=charts.heatmap(tables["region"]), rows=_region_state_rows(tables["rows"]),
+            buckets=_by_region_state, table_id=_slug("xr", spec.key),
+            mode="y-x", height=360, label="Accounts — by region and state")
+    for title, frame, first_col, slug in (
+            ("Stated reason", tables["reasons"], "Reason", "xw"),
+            ("Waves behind these accounts", tables["waves"], "Waves", "xv")):
+        if frame is None or frame.empty:
+            continue
+        printable = frame.rename(columns={"category": first_col, "count": "Accounts"})
+        printable["Accounts"] = printable["Accounts"].map(fmt_int)
+        body += (f'<h4 class="sub">{esc(title)}</h4>'
+                 + _table(printable, _slug(slug, spec.key), numeric={"Accounts"}))
+    body += ('<p class="note">A cancelled or deferred account is named by its '
+             "Migration Status — the column that took it out — and every other "
+             "by its Current State, which is where the reason lives. Nothing is "
+             "inferred: an account with neither reads <b>Not stated</b>.</p>")
+    doc.write(_optional_card(
+        _slug("optx", spec.key), "Accounts outside the reported pipeline",
+        note, body, label))
+
+
+def _region_state_rows(rows: pd.DataFrame) -> pd.DataFrame:
+    """Excluded accounts tagged with the region/state pair a heatmap cell names."""
+    if rows.empty or "region_geo" not in rows.columns:
+        return rows
+    return rows.assign(_region=exporter.clean(rows["region_geo"]),
+                       _state=rows["state"])
+
+
+def _by_region_state(rows: pd.DataFrame) -> list[str]:
+    if "_region" not in rows.columns:
+        return ["" for _ in range(len(rows))]
+    return [f"{r}{_REGION_STAGE_JOIN}{s}"
+            for r, s in zip(rows["_region"], rows["_state"])]
+
+
 def _insights(doc: _Builder, spec, pop) -> None:
-    items = insights_mod.generate_insights(pop)[:8]
+    items = insights_mod.generate_insights(pop)
     if not items:
         return
     entries = "".join(
@@ -715,8 +825,9 @@ def _insights(doc: _Builder, spec, pop) -> None:
         for item in items)
     doc.write(_card(
         "Insights",
-        "Generated from this report's population by the same deterministic rules "
-        "the Insights page uses.", f'<ul class="insights">{entries}</ul>'))
+        "Derived from this report's own population by deterministic rules — no "
+        "model, no estimate: each one states the figures it is read from.",
+        f'<ul class="insights">{entries}</ul>'))
 
 
 # --------------------------------------------------------------------------- #
@@ -752,11 +863,22 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec
     doc.write(f'<section class="report" id="{anchor}">'
               f'<div class="report-head"><h2>{esc(spec.title)}</h2>'
               f"<p>{esc(spec.blurb)}</p>"
-              f'<div class="source">Source: {esc(spec.source)}</div>'
               f"{_population_line(spec, pop)}</div>")
     if pop.empty:
+        why = ""
+        untagged = exporter.eos_untagged_accounts(fact) if spec.key == "eos" else 0
+        if untagged:
+            why = (f'<p class="note"><b>{fmt_int(untagged)}</b> account(s) are in '
+                   "EOS scope through their migration path but carry no "
+                   "<b>AVS Migration - Gen1/Gen2</b> tag on any wave. EOS is "
+                   "reported by generation, so they are not counted here; they "
+                   "are listed in the data inconsistency review, and adding the "
+                   "tag at source brings them into this report.</p>")
         doc.write('<div class="card"><p class="empty">No nominations fall into '
-                  "this report for the current filters.</p></div></section>")
+                  f"this report for the current filters.</p>{why}</div>")
+        if spec.breakdown:
+            _generations(doc, fact, spec, start, end)
+        doc.write("</section>")
         return
 
     waves = kpi.wave_index(pop)
@@ -773,9 +895,30 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec
     if spec.breakdown:
         _generations(doc, fact, spec, start, end)
     _insights(doc, spec, pop)
+    # Last, and hidden until asked for: the accounts none of the above counts.
+    _excluded(doc, spec, pop, waves)
     # No account list closes the report: every chart above already opens the
     # accounts it was drawn from, so a final table of all of them was the same
     # rows once more — and the bulk of the file.
+    doc.write('<p class="toplink"><a href="#top">↑ Back to contents</a></p>'
+              "</section>")
+
+
+def _methodology(doc: _Builder) -> None:
+    """How every figure above was calculated, in the report itself.
+
+    The same text the PDF prints and the Methodology page shows
+    (:data:`app.core.glossary.REPORT_METHODOLOGY`) — one source, so a rule
+    cannot be documented three different ways.
+    """
+    doc.anchor("methodology", "Methodology & logic")
+    doc.write('<section class="report" id="methodology">'
+              '<div class="report-head"><h2>Methodology &amp; logic</h2>'
+              "<p>How every figure in this report is calculated — the rules as "
+              "implemented, not as intended.</p></div>")
+    for heading, paragraphs in glossary.REPORT_METHODOLOGY:
+        body = "".join(f"<p>{rich(text)}</p>" for text in paragraphs)
+        doc.write(_card(heading, "", f'<div class="prose">{body}</div>'))
     doc.write('<p class="toplink"><a href="#top">↑ Back to contents</a></p>'
               "</section>")
 
@@ -807,8 +950,8 @@ def _inconsistency(doc: _Builder, ctx) -> None:
 
 def build_html_report(ctx, where: str = "", scope_label: str = "All data",
                       reports: list[str] | None = None, *,
-                      title: str = "AVS Migration Analytics",
-                      subtitle: str = "Management Report",
+                      title: str = exporter.DEFAULT_TITLE,
+                      subtitle: str = exporter.DEFAULT_SUBTITLE,
                       period_label: str = "All dates in the dataset",
                       date_window: tuple | None = None,
                       all_time_where: str | None = None,
@@ -839,6 +982,8 @@ def build_html_report(ctx, where: str = "", scope_label: str = "All data",
     for spec in specs:
         _report(doc, ctx, fact, all_time, spec, start, end, period_label,
                 fy_window, fy_label)
+    if specs:
+        _methodology(doc)
     if "inconsistency" in chosen:
         _inconsistency(doc, ctx)
     if not specs and not chosen:
@@ -885,9 +1030,9 @@ def _document(title: str, subtitle: str, chips: list[str], doc: _Builder) -> str
 </main>
 </div>
 <footer class="report-foot">
-  Generated locally by AVS Migration Analytics. Every figure is counted per
-  account at its latest wave, exactly as the Status Report pages count it.
-  This file is self-contained — charts, styles and data are all inside it.
+  Every figure is counted per account across all of its waves; the
+  Methodology &amp; logic section states each rule in full. This file is
+  self-contained — charts, styles and data are all inside it.
 </footer>
 <script>{get_plotlyjs()}</script>
 <script>{chr(10).join(doc.scripts)}</script>

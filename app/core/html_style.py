@@ -114,12 +114,36 @@ section.report {{ margin-bottom: 2.4rem; }}
 h3.block {{ font-size: 1.06rem; margin: 0 0 .2rem; letter-spacing: -.01em; }}
 h4.sub {{ font-size: .95rem; margin: 1rem 0 .4rem; color: var(--ink); }}
 .note {{ color: var(--muted); font-size: .86rem; margin: 0 0 .8rem; }}
+/* Running text (the methodology section): measured for reading, not for data. */
+.prose p {{ margin: 0 0 .6rem; font-size: .92rem; line-height: 1.55;
+            max-width: 78ch; }}
+.prose p:last-child {{ margin-bottom: 0; }}
 
 .card {{
   background: var(--card); border: 1px solid var(--border);
   border-radius: var(--radius); box-shadow: var(--shadow);
   padding: 1.15rem 1.25rem 1.25rem; margin-bottom: 1rem;
 }}
+/* ------------------------------------------------- opt-in ("optional") card --
+   A section the reader asks for.  The hiding is a plain CSS sibling rule on the
+   checkbox's own state, so the section is hidden from the first paint with no
+   script involved — which is what makes it work in a file opened straight from
+   a mail client, offline. */
+.card.optional {{ padding-bottom: 1rem; }}
+.card.optional .opt-toggle {{
+  width: 1rem; height: 1rem; margin: 0 .55rem 0 0; vertical-align: -2px;
+  accent-color: var(--primary); cursor: pointer;
+}}
+.card.optional .opt-label {{
+  font-size: .92rem; font-weight: 600; color: var(--ink); cursor: pointer;
+  user-select: none;
+}}
+.card.optional .opt-label:hover {{ color: var(--primary-dark); }}
+.opt-toggle:not(:checked) ~ .opt-body {{ display: none; }}
+.opt-toggle:checked ~ .opt-body {{ margin-top: 1rem; }}
+.opt-toggle:focus-visible + .opt-label {{ outline: 2px solid var(--primary);
+                                          outline-offset: 3px; border-radius: 4px; }}
+
 .grid2 {{ display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 1rem; }}
 @media (max-width: 820px) {{ .grid2 {{ grid-template-columns: 1fr; }} }}
 
@@ -260,6 +284,7 @@ footer.report-foot {{
   body {{ background: #fff; }}
   .shell {{ display: block; padding: 0; }}
   nav.toc, .tools, .toc-tools, button.btn {{ display: none !important; }}
+  .card.optional .opt-toggle {{ display: none; }}
   .card, .kpi, .report-head, .table-wrap {{ box-shadow: none; break-inside: avoid; }}
   section.report {{ break-before: page; }}
   details.acc {{ break-inside: avoid; }}
@@ -466,6 +491,16 @@ def script() -> str:
       setWide(!document.body.classList.contains('wide'));
     });
   }
+
+  // ---- opt-in sections ---------------------------------------------------
+  // The showing and hiding is the CSS rule on :checked; this only exists
+  // because a Plotly chart laid out inside a hidden container measures zero
+  // wide and stays that way until something asks it to resize.
+  document.querySelectorAll('input[data-optional]').forEach(function (box) {
+    box.addEventListener('change', function () {
+      if (box.checked) { setTimeout(resizeCharts, 0); }
+    });
+  });
 
   var expand = document.getElementById('expand-all');
   var collapse = document.getElementById('collapse-all');
