@@ -112,20 +112,23 @@ NODES_PLANNED = (
 )
 
 BLOCKED_ACCOUNTS = (
-    "Accounts that have stopped: their latest wave's CURRENT STATE reads "
-    "Blocked, Blocked - Account team, Blocked - Customer, Blocked - Partner / "
-    "ISD, or Waiting action on follow up date.\n"
-    "They are reported HERE AND NOWHERE ELSE. None of them is counted in the "
+    "Every account that is neither On-Track nor Completed, grouped by WHY it "
+    "has stopped:\n"
+    "• The blocking CURRENT STATES, in the programme's own words — 'Blocked', "
+    "'Blocked - Account team', 'Blocked - Customer', 'Blocked - Partner / "
+    "ISD', 'Waiting action on follow up date'.\n"
+    "• 'Deferred By Customer' and 'Cancelled / Archived', broken out by "
+    "MIGRATION STATUS — those are decisions the customer has taken rather than "
+    "work that is stuck, and a review reads them differently. The status wins "
+    "over the Current State: an account deferred while its state still reads "
+    "'Blocked - Customer' is reported as deferred.\n"
+    "• 'Not approved' for a nomination whose status is not 'Approved', and "
+    "'Not stated' where nothing has been recorded. Nothing is inferred.\n"
+    "They are reported HERE AND NOWHERE ELSE: none of them is counted in the "
     "headline tiles, the trends, the pipeline chart or the regional cut, and "
-    "none of those numbers appears in this section.\n"
-    "CANCELLED AND DEFERRED ACCOUNTS ARE NOT HERE. They are out of the "
-    "reported pipeline too, but a cancelled or deferred engagement is a "
-    "decision someone has already taken, not work that has stopped — and this "
-    "section is the one a review can act on. A wave cancelled while its "
-    "Current State still reads 'Blocked' is reported as the cancellation it "
-    "is.\n"
-    "The Current State is the breakdown, because the state IS the reason; the "
-    "STATUS SUMMARY column on every row is the programme's own note on what "
+    "none of those numbers appears in this section — so the two cuts add up to "
+    "the report's accounts.\n"
+    "The STATUS SUMMARY column on every row is the programme's own note on what "
     "the account is waiting for."
 )
 
@@ -458,26 +461,32 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
     )),
     ("Accounts that have stopped", (
         "Work that has stalled is worth more attention than work that is going "
-        "well, so it is reported on its own rather than buried in a total.",
-        Rule("Include an ACCOUNT when BOTH hold", (
-            "account state        IN  (Blocked, Other)",
-            "latest wave",
-            '  Current State      IN  ("Blocked",',
-            '                          "Blocked - Account team",',
-            '                          "Blocked - Customer",',
-            '                          "Blocked - Partner / ISD",',
-            '                          "Waiting action on follow up date")',
-        ), plain="Accounts the programme has marked as blocked, or as waiting "
-                 "on a follow-up — and that nothing else already accounts for."),
-        "**Accounts the customer cancelled or deferred are not in that "
-        "section.** They are not being worked on either, but somebody has "
-        "already decided that; this section is for work that is meant to be "
-        "moving and is not.",
+        "well, so every account that is neither moving nor finished is reported "
+        "on its own, grouped by why it stopped.",
+        Rule("Include an ACCOUNT, and name why", (
+            "include when  account state is neither On-Track nor Completed",
+            "",
+            "reason, first match wins:",
+            '  "Cancelled / Archived"   ← Migration Status = "6 - Cancelled / Archived"',
+            '  "Deferred By Customer"   ← Migration Status = "5 - Deferred By Customer"',
+            '  the Current State        ← "Blocked", "Blocked - Account team",',
+            '                             "Blocked - Customer",',
+            '                             "Blocked - Partner / ISD",',
+            '                             "Waiting action on follow up date"',
+            '  "Not approved"           ← Nomination Status is not "Approved"',
+            '  "Not stated"             ← nothing recorded',
+        ), plain="Everything that is not moving and not finished, labelled by "
+                 "the column that stopped it — the customer's decision first, "
+                 "then whatever the programme has recorded."),
+        "**Cancelled and deferred accounts are named by their Migration "
+        "Status**, not by their Current State: somebody has decided those, and "
+        "an account deferred while its state still reads *Blocked - Customer* "
+        "is deferred. A review reads a decision differently from a blockage.",
         "It is reported **apart from every other figure** and nowhere else: not "
         "in the headline tiles, the trends, the state chart or the regional "
-        "cut. The state each account is stopped on is the breakdown — the state "
-        "is the reason — and every row carries the programme's own **Status "
-        "Summary**, which is the note saying what it is waiting for.",
+        "cut — so this section and the charts above add up to the report's "
+        "accounts. Every row carries the programme's own **Status Summary**, "
+        "the note saying what the account is waiting for.",
         "One figure deliberately still counts them: **New Engagements**. An "
         "account approved during the period joined the programme then, whatever "
         "happened afterwards, and a number that changed when an account got "
@@ -488,11 +497,9 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         "\"where are the rest?\". Each report answers it with a table under "
         "the pipeline: every state, how many accounts are in it, and where "
         "those accounts are reported.",
-        "Three states are reported nowhere else, and the table says so: "
-        "**cancelled** and **deferred** accounts (a decision already taken), "
-        "and accounts with **no stated Current State** (nothing has been said "
-        "about them — they are listed under Data Inconsistency so the gap can "
-        "be filled at source).",
+        "Two rows are charted — On-Track and Completed — and every other row "
+        "is in the stopped-accounts section, whatever stopped it. Nothing is "
+        "reported nowhere.",
         "Because every account is in exactly one state, the rows add up to the "
         "report's own account count. If the charts appear to be missing "
         "accounts, that table is where they are.",
@@ -528,6 +535,14 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         "narrowing the dates cannot shrink the pipeline. Every other filter "
         "still applies: a report cut to one region shows that region's "
         "pipeline.",
+    )),
+    ("EOS by generation", (
+        "The EOS reports also cut their accounts by generation against state: "
+        "how much of Gen-1 is finished, how much of Gen-2 is still running, how "
+        "much of either has stopped. Every state is a column, and an **All "
+        "EOS** row adds the generations together, so the grid reads as the "
+        "programme first and its generations second — and each row totals the "
+        "accounts it covers.",
     )),
     ("EOS reporting — Gen-1 and Gen-2 only", (
         "EOS accounts are those refreshing ageing AVS hardware, and the "

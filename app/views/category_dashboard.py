@@ -451,38 +451,39 @@ def _blocked_accounts(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> Non
     """
     section(exporter.BLOCKED_TITLE, help=glossary.BLOCKED_ACCOUNTS,
             period="Current state — not filtered by the reporting period")
-    st.caption("Accounts stopped on a stated blocking state — **Blocked**, "
-               "**Blocked - Account team**, **Blocked - Customer**, **Blocked - "
-               "Partner / ISD** or **Waiting action on follow up date**. They "
-               "are in **none** of the metrics above, and those metrics are in "
-               "none of these numbers. Cancelled and deferred accounts are out "
-               "of the reported pipeline too, but they are decisions already "
-               "taken rather than work that has stopped, so they are not here.")
+    st.caption("Every account that is neither On-Track nor Completed, grouped "
+               "by why. The blocking Current States — **Blocked**, **Blocked - "
+               "Account team**, **Blocked - Customer**, **Blocked - Partner / "
+               "ISD**, **Waiting action on follow up date** — with **Deferred "
+               "By Customer** and **Cancelled / Archived** broken out by "
+               "Migration Status, since those are decisions rather than "
+               "blockages. They are in **none** of the metrics above, and those "
+               "metrics are in none of these numbers.")
     summary, rows = kpi.blocked_accounts(fact, lasts=waves.last)
     if rows.empty:
-        components.empty_state("No accounts are blocked or waiting — every "
-                               "account here is moving, finished, or closed out.")
+        components.empty_state("Nothing has stopped — every account here is "
+                               "On-Track or Completed.")
         return
     acr = pd.to_numeric(rows.get("total_acr"), errors="coerce").sum()
     components.kpi_row([
-        {"label": "Blocked Accounts", "value": fmt_int(rows["tpid_key"].nunique()),
+        {"label": "Stopped Accounts", "value": fmt_int(rows["tpid_key"].nunique()),
          "tone": "warn", "sub": "not in any metric above"},
         {"label": "ACR Held Up", "value": fmt_currency(acr), "tone": "warn",
          "sub": "summed over those accounts"},
-        {"label": "Current States", "value": fmt_int(len(summary)),
-         "sub": "distinct states they are stopped on"},
+        {"label": "Reasons", "value": fmt_int(len(summary)),
+         "sub": "distinct reasons they are stopped"},
     ])
 
     c1, c2 = st.columns([3, 2])
     with c1:
         picked = drilldown.selectable_chart(
             charts.bar(summary, "category", "count", color_status=True,
-                       title="Accounts by current state"), key=f"{key}_blocked")
+                       title="Accounts by reason"), key=f"{key}_blocked")
     with c2:
         picked += drilldown.selectable_table(
-            summary.rename(columns={"category": "Current State",
+            summary.rename(columns={"category": "Reason",
                                     "count": "Accounts", "acr": "ACR"}),
-            key=f"{key}_blocked_table", bucket_col="Current State")
+            key=f"{key}_blocked_table", bucket_col="Reason")
     drilldown.drilldown(rows.assign(bucket=rows["blocked_state"]), "bucket",
                         picked, key=f"{key}_blocked_rows", what="accounts",
                         unit_col="total_acr",
@@ -502,7 +503,7 @@ def _blocked_accounts(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> Non
             region = pd.crosstab(
                 rows["region_geo"].astype("string").replace({"": pd.NA}).fillna("Unknown"),
                 rows["blocked_state"])
-            st.plotly_chart(charts.heatmap(region, title="WW Region × current state",
+            st.plotly_chart(charts.heatmap(region, title="WW Region × reason",
                                            height=300), width="stretch")
 
 

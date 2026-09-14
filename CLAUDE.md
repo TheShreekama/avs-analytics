@@ -131,34 +131,35 @@ under Streamlit's AppTest in both counting modes.
   nothing lost. `on_track_by_stage` groups by the stage of the **on-track wave itself**.
 - **Where every account sits** (`exporter.reconciliation`, under the pipeline on every
   dashboard and in both exports): each account state, its account count and ACR, and
-  **where that state is reported** — including the three reported nowhere (cancelled,
-  deferred, and accounts with no stated Current State). Rows sum to the report's own
-  account count, because `account_state` puts each account in exactly one. It exists
-  because "the chart shows 32 of my 36 accounts, where are the other four?" is a fair
-  question that a report should answer itself; it also surfaces a state *outside*
-  `kpi.BLOCKED_STATES` (say "Blocked by legal") as "Blocked & waiting accounts (1 of 2)"
-  rather than letting it vanish.
+  **where that state is reported** — On-Track and Completed are charted, everything else is
+  in the stopped-accounts section. Rows sum to the report's own account count, because
+  `account_state` puts each account in exactly one. It exists because "the chart shows 32 of
+  my 36 accounts, where are the other four?" is a fair question a report should answer
+  itself.
 - **Accounts by generation and state** (`exporter.generation_status`, EOS reports only):
-  generation down the side, state across the top — On-Track, Completed and Blocked first,
-  then any other state present, so **every** row totals that generation's accounts and the
-  grid reconciles with New Engagements over all time. A heatmap cell opens its own accounts
-  (`_by_generation_state`, mode `y-x`). Careful in `_generations`: the per-generation wave
-  index is `sub_waves`, because shadowing the report's `waves` silently dropped a whole row
-  from the grid.
-- **Blocked & waiting accounts** (`kpi.blocked_accounts` + `wave_profile`, assembled by
-  `exporter.blocked_tables`, titled `exporter.BLOCKED_TITLE`): accounts whose latest wave's
-  **Current State** is one of `kpi.BLOCKED_STATES` — Blocked, Blocked - Account team,
-  Blocked - Customer, Blocked - Partner / ISD, Waiting action on follow up date — matched
-  through `_state_key` so dash style and case cannot hide one. A section of its own on
-  every dashboard and in both exports, never mixed into the On-Track/Completed metrics,
-  with the Current State as the breakdown (the state *is* the reason) and the export's
-  **Status Summary** on every row (`kpi.BLOCKED_DRILLDOWN_COLUMNS`, a shorter column list
-  so the reason is not twenty columns to the right). **Cancelled and deferred accounts are
-  not in it**: they are outside the reported pipeline too (`kpi.excluded_accounts` is the
-  full complement, and still what makes the partition checkable) but a cancellation is a
-  decision taken, not work that stopped. **New Engagements is the one deliberate
-  exception** to the separation: intake is a historical fact and counts every approved
-  nomination.
+  generation down the side plus an **`ALL_EOS_ROW`** total on top, state across the top —
+  On-Track, Completed and Blocked first, then any other state present — so every row totals
+  the accounts it covers and the grid reconciles with New Engagements over all time. A
+  heatmap cell opens its own accounts (`_by_generation_state`, mode `y-x`), and because an
+  account belongs to **two** cells (its generation's and the total row's) its
+  `data-bucket` carries both, pipe-separated; `inBucket` in the report's script matches any
+  of them. Careful in `_generations`: the per-generation wave index is `sub_waves`, because
+  shadowing the report's `waves` silently dropped a whole row from the grid.
+- **Blocked, deferred & cancelled accounts** (`kpi.blocked_accounts` + `wave_profile`,
+  assembled by `exporter.blocked_tables`, titled `exporter.BLOCKED_TITLE`): **every**
+  account whose `account_state` is in `EXCLUDED_STATES` — so this section and `by_state`
+  (On-Track + Completed) partition the population and the report reconciles. The breakdown
+  is **why** (`kpi.blocked_state_label`, first match wins): `6 - Cancelled / Archived` →
+  "Cancelled / Archived", `5 - Deferred By Customer` → "Deferred By Customer" (the
+  Migration Status wins over the Current State — a deferred account whose state still reads
+  "Blocked - Customer" is deferred), then a `kpi.BLOCKED_STATES` Current State in its
+  canonical spelling (matched through `_state_key`, so dash style and case cannot hide
+  one), then "Not approved", "Not stated", else the cell's own wording. A section of its
+  own on every dashboard and in both exports, never mixed into the On-Track/Completed
+  metrics, with the export's **Status Summary** on every row
+  (`kpi.BLOCKED_DRILLDOWN_COLUMNS`, a shorter column list so the reason is not twenty
+  columns to the right). **New Engagements is the one deliberate exception** to the
+  separation: intake is a historical fact and counts every approved nomination.
 - **Forward-looking metrics** (`kpi.eligible_pipeline_waves`): a wave is eligible when all
   **four** hold, judged per wave —
   (1) `Factory Offering = "AVS Migration Nominations"` **or** `Primary Migration Path`
@@ -251,8 +252,9 @@ under Streamlit's AppTest in both counting modes.
   **`plotly_click`** — Plotly's own event, which works in a plain browser even for pies —
   and shows only matching rows. Modes: `x` (month/category), `label` (pie), `y`
   (horizontal bar), `trace-x` (stacked bar: trace = region, x = stage), `y-x` (heatmap).
-  Bucket strings are computed in Python so the browser only compares strings; the search
-  box and the chart selection go through one filter so neither undoes the other. Neither
+  Bucket strings are computed in Python so the browser only compares strings — a row that
+  belongs to several points carries them pipe-separated and `inBucket` matches any; the
+  search box and the chart selection go through one filter so neither undoes the other. Neither
   the "Supporting detail" block nor the closing "Account records" table survives — with
   every chart carrying its own rows, both were the same accounts once more (and most of
   the file's weight).
