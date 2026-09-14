@@ -613,12 +613,37 @@ def _pipeline(doc: _Builder, spec, pop, waves) -> None:
             fig=charts.bar(stages, "category", "count", horizontal=True),
             rows=stage_rows, buckets=lambda r: list(r["stage"]),
             table_id=_slug("pg", spec.key), mode="y", height=320)
+    body += _reconciliation(spec, pop, waves)
     doc.write(_card(
         "Current pipeline",
         "Every account read across all of its waves, whatever its nomination "
         "date. On-Track and Completed only — blocked, deferred and cancelled "
         "accounts are reported separately, below. Click a slice or bar to "
         "narrow the accounts beneath it.", body))
+
+
+def _reconciliation(spec, pop, waves) -> str:
+    """Where every account sits, so the charts above can be reconciled.
+
+    The answer to "the chart shows 32 of my 36 accounts — where are the other
+    four?": every account resolves to exactly one state, so the rows add up,
+    and the last column says where each state is reported — including the three
+    that are reported nowhere, and why.
+    """
+    rows, accounts = exporter.reconciliation(pop, waves)
+    if rows.empty:
+        return ""
+    printable = rows.copy()
+    printable["ACR"] = printable["ACR"].map(fmt_currency)
+    printable["Accounts"] = printable["Accounts"].map(fmt_int)
+    return _accordion(
+        "Where every account sits",
+        f'<p class="note">All <b>{fmt_int(accounts)}</b> accounts in this '
+        "report, by state. Each account is in exactly one row, so these add up: "
+        "the charts above show the first two rows, and the rest are reported "
+        "where this says.</p>"
+        + _table(printable, _slug("rec", spec.key), numeric={"Accounts", "ACR"}),
+        badge=f"{fmt_int(accounts)} accounts")
 
 
 def _regional(doc: _Builder, spec, waves) -> None:
@@ -763,15 +788,18 @@ def _eos_matrix(doc: _Builder, ctx, pop) -> None:
         "".join(blocks)))
 
 
-def _generations(doc: _Builder, doc_fact, spec, start, end) -> None:
+def _generations(doc: _Builder, doc_fact, spec, start, end, pop=None,
+                 waves=None) -> None:
     """Gen-1 and Gen-2 read against each other, and against the combined report."""
     rows = []
     for category in spec.breakdown:
         sub = segments.population(doc_fact, category)
         if sub.empty:
             continue
-        waves = kpi.wave_index(sub)
-        head = exporter.headline(sub, waves, start, end)
+        # Named apart from the report's own ``waves``: this one belongs to the
+        # generation being tabulated, and the grid below needs the report's.
+        sub_waves = kpi.wave_index(sub)
+        head = exporter.headline(sub, sub_waves, start, end)
         rows.append({
             "Generation": segments.CATEGORY_LABELS[category],
             "Accounts (TPID)": fmt_int(segments.tpid_key(sub).nunique()),
@@ -785,12 +813,52 @@ def _generations(doc: _Builder, doc_fact, spec, start, end) -> None:
     if not rows:
         return
     frame = pd.DataFrame(rows)
+    body = _table(frame, _slug("gen", spec.key),
+                  numeric=set(frame.columns[1:]), row_head=True)
+    body += _generation_status(doc, spec, pop, waves)
     doc.write(_card(
         "By generation",
-        "The two generation dashboards, side by side. Each is a subset of the "
-        "report above, selected by the account's own Gen-1/Gen-2 tag.",
-        _table(frame, _slug("gen", spec.key),
-               numeric=set(frame.columns[1:]), row_head=True)))
+        "The two generations side by side. Each is a subset of the report "
+        "above, selected by the account's own Gen-1/Gen-2 tag.", body))
+
+
+def _generation_status(doc: _Builder, spec, pop, waves) -> str:
+    """Generation against state, as a heatmap that opens its own accounts.
+
+    Read a generation at a time: how much of Gen-1 is finished, how much is
+    still running, how much is stuck.  **Every** state is a column, so each
+    generation's row adds up to the accounts in that generation — the grid
+    reconciles rather than leaving a remainder to hunt for.
+    """
+    grid, rows = exporter.generation_status(pop, waves)
+    if grid.empty:
+        return ""
+    body = _drillable(
+        doc, heading="Accounts by generation and state",
+        fig=charts.heatmap(grid, height=260), rows=rows,
+        buckets=_by_generation_state, table_id=_slug("gs", spec.key),
+        mode="y-x", height=260,
+        label="Accounts — by generation and state")
+    table = grid.copy()
+    table["Total"] = table.sum(axis=1)
+    table = table.reset_index().rename(
+        columns={table.index.name or "index": "Generation", "_generation": "Generation"})
+    body += _accordion(
+        "The counts — generation × state",
+        '<p class="note">Every state is a column, so each row totals the '
+        "accounts in that generation.</p>"
+        + _table(table.map(lambda v: fmt_int(v) if isinstance(v, (int, float)) else v),
+                 _slug("gt", spec.key), numeric=set(table.columns[1:]), row_head=True),
+        badge=f"{fmt_int(len(table))} generations")
+    return body
+
+
+def _by_generation_state(rows: pd.DataFrame) -> list[str]:
+    """The pair a heatmap cell names: the generation and the state."""
+    if "_generation" not in rows.columns:
+        return ["" for _ in range(len(rows))]
+    return [f"{g}{_REGION_STAGE_JOIN}{s}"
+            for g, s in zip(rows["_generation"], rows["state"])]
 
 
 def _blocked(doc: _Builder, spec, pop, waves) -> None:
@@ -959,7 +1027,7 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec
         _offerings(doc, spec, pop)
     _regional(doc, spec, waves)
     if spec.breakdown:
-        _generations(doc, fact, spec, start, end)
+        _generations(doc, fact, spec, start, end, pop, waves)
     if sections.insights:
         _insights(doc, spec, pop)
     # Last, and hidden until asked for: the accounts none of the above counts.
@@ -975,8 +1043,10 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec
 def _method_item(item) -> str:
     """One methodology item: a paragraph, or a rule shown as the rule itself."""
     if isinstance(item, glossary.Rule):
+        plain = (f'<div class="rule-plain"><b>In plain words</b> — '
+                 f"{rich(item.plain)}</div>" if item.plain else "")
         return (f'<div class="rule"><div class="rule-title">{esc(item.title)}'
-                f'</div><pre>{esc(chr(10).join(item.lines))}</pre></div>')
+                f'</div><pre>{esc(chr(10).join(item.lines))}</pre>{plain}</div>')
     return f"<p>{rich(item)}</p>"
 
 

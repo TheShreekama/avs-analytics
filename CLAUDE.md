@@ -129,6 +129,22 @@ under Streamlit's AppTest in both counting modes.
   account resolves to exactly one state, so `by_state` (the reported cut) and
   `excluded_accounts` (`EXCLUDED_STATES`) partition the population — nothing double-counted,
   nothing lost. `on_track_by_stage` groups by the stage of the **on-track wave itself**.
+- **Where every account sits** (`exporter.reconciliation`, under the pipeline on every
+  dashboard and in both exports): each account state, its account count and ACR, and
+  **where that state is reported** — including the three reported nowhere (cancelled,
+  deferred, and accounts with no stated Current State). Rows sum to the report's own
+  account count, because `account_state` puts each account in exactly one. It exists
+  because "the chart shows 32 of my 36 accounts, where are the other four?" is a fair
+  question that a report should answer itself; it also surfaces a state *outside*
+  `kpi.BLOCKED_STATES` (say "Blocked by legal") as "Blocked & waiting accounts (1 of 2)"
+  rather than letting it vanish.
+- **Accounts by generation and state** (`exporter.generation_status`, EOS reports only):
+  generation down the side, state across the top — On-Track, Completed and Blocked first,
+  then any other state present, so **every** row totals that generation's accounts and the
+  grid reconciles with New Engagements over all time. A heatmap cell opens its own accounts
+  (`_by_generation_state`, mode `y-x`). Careful in `_generations`: the per-generation wave
+  index is `sub_waves`, because shadowing the report's `waves` silently dropped a whole row
+  from the grid.
 - **Blocked & waiting accounts** (`kpi.blocked_accounts` + `wave_profile`, assembled by
   `exporter.blocked_tables`, titled `exporter.BLOCKED_TITLE`): accounts whose latest wave's
   **Current State** is one of `kpi.BLOCKED_STATES` — Blocked, Blocked - Account team,
@@ -281,9 +297,13 @@ under Streamlit's AppTest in both counting modes.
   `glossary.REPORT_METHODOLOGY` is the single source rendered by the PDF
   (`pdf_kit.rule_block`), the HTML report (`.rule` / `<pre>`) and the Methodology page
   (`st.code`), so one rule cannot be documented three ways. An item is either a paragraph
-  or a `glossary.Rule(title, lines)` whose lines are **monospaced and aligned as written** —
-  alignment carries the meaning, and a test asserts every rule's trailing comments line up
-  and every line still fits the PDF column.
+  or a `glossary.Rule(title, lines, plain)` whose lines are **monospaced and aligned as
+  written** — alignment carries the meaning, and a test asserts every rule's trailing
+  comments line up and every line still fits the PDF column. `plain` is the same rule in
+  one ordinary sentence, printed under the block as **"In plain words —"**: the sections
+  lead in plain language and define their vocabulary (account, wave, ACR) first, so the
+  methodology can be read by whoever picks the report up and checked by whoever doubts a
+  number.
 - **A generated report names neither the app nor the file it read.** No `Source:` line, no
   dataset on the cover, no app name in the PDF furniture or the HTML footer; the default
   title is `exporter.DEFAULT_TITLE` ("Migration Programme Report").

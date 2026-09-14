@@ -311,6 +311,8 @@ def render() -> None:
             if isinstance(item, glossary.Rule):
                 st.caption(item.title)
                 st.code("\n".join(item.lines), language="text")
+                if item.plain:
+                    st.markdown(f"**In plain words** — {item.plain}")
             else:
                 st.markdown(item)
 
