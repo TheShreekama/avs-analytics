@@ -62,6 +62,13 @@ STATUS_COLORS = {
     # (paused, recoverable), cancelled grey (gone), "Other" neutral.
     "Deferred": "#D97706",
     "Other": "#B0B8C4",
+    # The blocking Current States, keyed as the export writes them, so the
+    # blocked-accounts charts colour by what is actually stopping an account:
+    # every flavour of blocked is red, waiting on a follow-up amber.
+    "Blocked - Account team": "#C4314B",
+    "Blocked - Customer": "#A52A42",
+    "Blocked - Partner / ISD": "#D9475F",
+    "Waiting action on follow up date": "#C77700",
     "Not Started": "#B0B8C4",
     "In Progress": "#50B0E8",
     "Started": "#7AC2F0",

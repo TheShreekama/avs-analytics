@@ -71,6 +71,22 @@ REPORTS: tuple[ReportSpec, ...] = (
               "\"(From AVS)\" offerings. Reported here and nowhere else."),
 )
 
+@dataclass(frozen=True)
+class ReportSections:
+    """Which optional sections a report carries.
+
+    Both are complete pieces of reporting that not every audience wants in the
+    document: the blocked-accounts list is the review's working set, the
+    insights are commentary.  The defaults are the ones the Reports page offers
+    — **blocked in, insights out** — so a report built without asking for
+    either is the one most people want.  Whether a section is *visible* on
+    opening is a separate question, answered by the reader's own checkbox in
+    the HTML report.
+    """
+    blocked: bool = True
+    insights: bool = False
+
+
 #: What a report calls itself when the caller says nothing.  Deliberately about
 #: the subject — the migration programme — and never about the application that
 #: rendered it or the export it was read from: a report circulated to leadership
@@ -178,28 +194,44 @@ def eos_untagged_accounts(fact: pd.DataFrame) -> int:
     return 0 if untagged.empty else int(segments.tpid_key(untagged).nunique())
 
 
-def excluded_tables(pop: pd.DataFrame, waves: kpi.WaveIndex) -> dict:
-    """Everything the excluded-accounts section reports, built once for both renderers.
+#: What the blocked-accounts section is called, everywhere it appears.  Named
+#: for what the reader is looking at — accounts that have stopped moving — not
+#: for the reporting mechanism that leaves them out.
+BLOCKED_TITLE = "Blocked & waiting accounts"
 
-    Accounts whose state is blocked, deferred, cancelled/archived or otherwise
-    unreported — the complement of the On-Track/Completed cut, never mixed into
-    it.  Returns the summary, the WW Region cross-tab, the stated reasons, the
-    wave profile and the underlying rows; a caller renders whichever of them the
-    data actually supports.
+BLOCKED_NOTE = (
+    "Accounts stopped on a stated blocking state — Blocked, Blocked - Account "
+    "team, Blocked - Customer, Blocked - Partner / ISD, or Waiting action on "
+    "follow up date. None of them is in any metric above, and none of those "
+    "metrics is in here. Status Summary carries the programme's own note on "
+    "why each one has stopped."
+)
+
+
+def blocked_tables(pop: pd.DataFrame, waves: kpi.WaveIndex) -> dict:
+    """Everything the blocked-accounts section reports, built once for both renderers.
+
+    The narrow cut (:func:`kpi.blocked_accounts`): accounts whose latest wave
+    reads one of the blocking Current States and whose account state is neither
+    reported (On-Track, Completed) nor closed out (Cancelled, Deferred).  The
+    Current State *is* the reason, so it is the breakdown; the Status Summary
+    column in the rows is the sentence behind it.
+
+    Returns the summary, the WW Region cross-tab, the wave profile, the rows and
+    the two totals; a caller renders whichever of them the data supports.
     """
-    summary, rows = kpi.excluded_accounts(pop, lasts=waves.last)
+    summary, rows = kpi.blocked_accounts(pop, lasts=waves.last)
     if rows.empty:
         return {"summary": summary, "rows": rows, "region": pd.DataFrame(),
-                "reasons": pd.DataFrame(), "waves": pd.DataFrame(), "acr": 0.0,
-                "accounts": 0, "wave_count": 0}
+                "waves": pd.DataFrame(), "acr": 0.0, "accounts": 0,
+                "wave_count": 0}
     region = pd.DataFrame()
     if "region_geo" in rows.columns:
-        region = pd.crosstab(clean(rows["region_geo"]), rows["state"])
+        region = pd.crosstab(clean(rows["region_geo"]), rows["blocked_state"])
     return {
         "summary": summary,
         "rows": rows,
         "region": region,
-        "reasons": kpi.excluded_reasons(rows),
         "waves": kpi.wave_profile(pop, rows),
         "acr": float(pd.to_numeric(rows.get("total_acr"), errors="coerce").sum()),
         "accounts": int(rows["tpid_key"].nunique()),
@@ -336,10 +368,9 @@ def _pipeline_block(pop: pd.DataFrame, waves: kpi.WaveIndex, ss) -> list:
     stages, _ = kpi.on_track_by_stage(pop, lasts=waves.last)
     out = [Paragraph("Current pipeline", ss["H2"]),
            Paragraph("Every account read across all of its waves, whatever its "
-                     "nomination date. On-Track and Completed only — blocked, "
-                     "deferred and cancelled accounts are reported separately, "
-                     "under Accounts outside the reported pipeline.",
-                     ss["Muted"]), kit.spacer(0.15)]
+                     "nomination date. On-Track and Completed only — accounts "
+                     "that have stopped are reported separately, under "
+                     f"{BLOCKED_TITLE}.", ss["Muted"]), kit.spacer(0.15)]
     if states.empty:
         out.append(Paragraph("No On-Track or Completed accounts to report.",
                              ss["Muted"]))
@@ -380,40 +411,39 @@ def _regional_block(waves: kpi.WaveIndex, ss) -> list:
                                     width_cm=16.6)])]
 
 
-def _excluded_block(pop: pd.DataFrame, waves: kpi.WaveIndex, ss) -> list:
-    """Accounts outside the reported pipeline — blocked, deferred, cancelled.
+def _blocked_block(pop: pd.DataFrame, waves: kpi.WaveIndex, ss,
+                   max_rows: int = 60) -> list:
+    """Accounts that have stopped — blocked, or waiting on a follow-up.
 
-    A section of its own, never folded into the metrics above it: these accounts
-    are neither delivering nor delivered, so counting them anywhere in the
-    On-Track/Completed story would misstate both.  What they *are* is where a
-    programme review spends its time, so everything the export supports about
-    them is reported here.
+    A section of its own, never folded into the metrics above it: an account
+    nobody is moving is neither delivering nor delivered, so counting it in the
+    On-Track/Completed story would misstate both.  It is also where a programme
+    review spends its time, so the accounts are listed by name with the
+    programme's own Status Summary against each — the reason, in the words
+    whoever is working the account wrote.
     """
-    tables = excluded_tables(pop, waves)
-    out = [Paragraph("Accounts outside the reported pipeline", ss["H2"]),
-           Paragraph("Blocked, deferred, cancelled / archived and waiting "
-                     "accounts — every account whose state is neither On-Track "
-                     "nor Completed. They are excluded from every metric above "
-                     "and reported only here, so nothing is counted twice and "
-                     "nothing is dropped.", ss["Muted"]), kit.spacer(0.15)]
+    tables = blocked_tables(pop, waves)
+    out = [Paragraph(BLOCKED_TITLE, ss["H2"]),
+           Paragraph(_esc(BLOCKED_NOTE), ss["Muted"]), kit.spacer(0.15)]
     if tables["rows"].empty:
-        out.append(Paragraph("No accounts fall outside the reported pipeline — "
-                             "every account is On-Track or Completed.", ss["Body2"]))
+        out.append(Paragraph("No accounts are blocked or waiting — every account "
+                             "here is moving, finished, or closed out.",
+                             ss["Body2"]))
         return out
 
     out += [kit.kpi_cards([
-        ("Excluded Accounts", fmt_int(tables["accounts"]), "not in any metric above"),
+        ("Blocked Accounts", fmt_int(tables["accounts"]), "not in any metric above"),
         ("ACR Held Up", fmt_currency(tables["acr"]), "sum over those accounts"),
         ("Waves Behind Them", fmt_int(tables["wave_count"]),
          "every wave of those accounts"),
     ], ss, per_row=3), kit.spacer(0.25)]
 
-    states = tables["summary"].rename(columns={"category": "State",
+    states = tables["summary"].rename(columns={"category": "Current State",
                                                "count": "Accounts", "acr": "ACR"})
     states["ACR"] = states["ACR"].map(fmt_currency)
     states["Accounts"] = states["Accounts"].map(fmt_int)
     out.append(KeepTogether([
-        Paragraph("By state", ss["H3"]),
+        Paragraph("By current state", ss["H3"]),
         kit.df_table(states, ss, col_widths=[8 * cm, 3 * cm, 3.5 * cm],
                      align_right=[1, 2], font_size=8)]))
 
@@ -423,18 +453,71 @@ def _excluded_block(pop: pd.DataFrame, waves: kpi.WaveIndex, ss) -> list:
                               kit.image(pc.heatmap_png(tables["region"],
                                                        height_px=260),
                                         width_cm=16.6)])]
-    for title, frame, first_col in (("Stated reason", tables["reasons"], "Reason"),
-                                    ("Waves behind these accounts", tables["waves"],
-                                     "Waves")):
-        if frame is None or frame.empty:
-            continue
-        printable = frame.rename(columns={"category": first_col, "count": "Accounts"})
-        printable["Accounts"] = printable["Accounts"].map(fmt_int)
+    if not tables["waves"].empty:
+        profile = tables["waves"].rename(columns={"category": "Waves",
+                                                  "count": "Accounts"})
+        profile["Accounts"] = profile["Accounts"].map(fmt_int)
         out += [kit.spacer(0.25),
-                KeepTogether([Paragraph(title, ss["H3"]),
-                              kit.df_table(printable, ss,
+                KeepTogether([Paragraph("Waves behind these accounts", ss["H3"]),
+                              kit.df_table(profile, ss,
                                            col_widths=[11 * cm, 3.5 * cm],
                                            align_right=[1], font_size=8)])]
+    out += [kit.spacer(0.25), *_blocked_accounts_table(tables["rows"], ss, max_rows)]
+    return out
+
+
+#: The blocked list, as (source column, header, relative width).  Status Summary
+#: takes the space three other columns would, because it is the column that
+#: answers the question the section is asking.
+BLOCKED_COLUMNS = [
+    ("tpid", "TPID", 1.6),
+    ("customer_name", "Customer", 3.2),
+    ("region_geo", "WW Region", 2.0),
+    ("blocked_state", "Current State", 2.6),
+    ("assigned_pm", "Factory PM", 2.4),
+    ("total_acr", "ACR", 1.6),
+    ("status_summary", "Status Summary", 7.0),
+]
+
+
+#: How much of a Status Summary the printed table carries before it is cut.
+BLOCKED_SUMMARY_CHARS = 320
+
+
+def _shorten(value, limit: int = BLOCKED_SUMMARY_CHARS) -> str:
+    """A long note cut at a word boundary, marked so the cut is visible."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    text = " ".join(str(value).split())
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0] + " …"
+
+
+def _blocked_accounts_table(rows: pd.DataFrame, ss, max_rows: int) -> list:
+    """The blocked accounts by name, each with the note explaining why."""
+    if rows.empty:
+        return []
+    ordered = rows.assign(
+        _acr=pd.to_numeric(rows.get("total_acr"), errors="coerce").fillna(0)
+    ).sort_values(["blocked_state", "_acr"], ascending=[True, False])
+    shown = ordered.head(max_rows).copy()
+    # A Status Summary runs to whatever length whoever wrote it needed; on a
+    # fixed page one of them can take the room ten accounts would.  The HTML
+    # report carries them whole — this is the printed extract.
+    if "status_summary" in shown.columns:
+        shown["status_summary"] = shown["status_summary"].map(_shorten)
+    frame = format_accounts(shown, BLOCKED_COLUMNS)
+    weights = [w for _, _, w in BLOCKED_COLUMNS]
+    available = kit.CONTENT_WIDTH[kit.PORTRAIT]
+    widths = [available * w / sum(weights) for w in weights]
+    out = [Paragraph("The accounts, and why", ss["H3"])]
+    if len(ordered) > max_rows:
+        out.append(Paragraph(
+            f"Showing the {fmt_int(max_rows)} largest of {fmt_int(len(ordered))} "
+            f"by ACR, grouped by state.", ss["Muted"]))
+    out.append(kit.df_table(frame, ss, col_widths=widths, align_right=[5],
+                            font_size=6.5))
     return out
 
 
@@ -551,7 +634,8 @@ def _generation_pipeline(fact: pd.DataFrame, category: str, ss) -> list:
 
 
 def _report_section(fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
-                    period_label: str, with_drilldown: bool) -> list:
+                    period_label: str, with_drilldown: bool,
+                    sections: ReportSections) -> list:
     pop = segments.population(fact, spec.category)
     links = [("View drill-down →", f"dd_{spec.key}")] if with_drilldown else []
     links.append(("Contents", "toc"))
@@ -587,18 +671,21 @@ def _report_section(fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
     if spec.key == "native":
         blocks.append(_offering_block(pop, ss))
     blocks.append(_regional_block(waves, ss))
-    blocks.append(_excluded_block(pop, waves, ss))
+    if sections.blocked:
+        blocks.append(_blocked_block(pop, waves, ss))
     if spec.breakdown:
         blocks.append(_generation_block(fact, spec, start, end, ss))
     for block in blocks:
         if block:
             story += [*block, kit.spacer(0.35)]
-    story += [Paragraph("Insights", ss["H2"]),
-              Paragraph("Derived from this report's own population by "
-                        "deterministic rules — no model, no estimate: each one "
-                        "states the figures it is read from.", ss["Muted"]),
-              kit.spacer(0.15),
-              *_insight_lines(pop, ss)]
+    if sections.insights:
+        story += [Paragraph("Insights", ss["H2"]),
+                  Paragraph("Derived from this report's own population by "
+                            "deterministic rules — no model, no estimate: each "
+                            "one states the figures it is read from.",
+                            ss["Muted"]),
+                  kit.spacer(0.15),
+                  *_insight_lines(pop, ss)]
     story.append(kit.page_break())
     return story
 
@@ -925,6 +1012,7 @@ def build_story(ctx, where: str = "", scope_label: str = "All data",
                 date_window: tuple | None = None,
                 drilldown: bool = True,
                 appendices: list[str] | None = None,
+                sections: ReportSections | None = None,
                 max_drilldown_rows: int = MAX_DRILLDOWN_ROWS) -> list:
     """Assemble the report as ReportLab flowables — cover, contents, both parts.
 
@@ -934,6 +1022,7 @@ def build_story(ctx, where: str = "", scope_label: str = "All data",
     specs = [_BY_KEY[k] for k in (reports if reports is not None else REPORT_KEYS)
              if k in _BY_KEY]
     chosen = [a for a in (appendices or []) if a in _APPENDIX_FN]
+    sections = sections or ReportSections()
     start, end = date_window or (None, None)
     ss = kit.styles()
     fact = analytics.select_all(ctx.con, where, table="fact")
@@ -948,7 +1037,7 @@ def build_story(ctx, where: str = "", scope_label: str = "All data",
                        "trends, current pipeline, regional cut and insights.", ss)
         for spec in specs:
             story += _report_section(fact, spec, ss, start, end, period_label,
-                                     drilldown)
+                                     drilldown, sections)
 
     if specs and drilldown:
         story += _part("part_detail", "Part 2 — Supporting Detail",

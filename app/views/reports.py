@@ -69,6 +69,24 @@ def render() -> None:
                  "this many the table is truncated with a note — export the full "
                  "set as CSV below.")
 
+    subheading("Optional sections",
+               help="Two sections not every audience wants in the document. "
+                    "Whether a section is *visible* when the HTML report opens "
+                    "is the reader's own choice — each one carries its own "
+                    "checkbox in the file.")
+    s1, s2 = st.columns(2)
+    include_blocked = s1.checkbox(
+        f"{exporter.BLOCKED_TITLE} section", value=True, key="rep_blocked",
+        help="Accounts stopped on a blocking Current State, with the ACR they "
+             "hold up and the Status Summary explaining each one. Reported "
+             "apart from every other metric.")
+    include_insights = s2.checkbox(
+        "Insights section", value=False, key="rep_insights",
+        help="The deterministic findings — pipeline exposure, bottlenecks, "
+             "delays, wave and regional patterns — written out per report.")
+    sections = exporter.ReportSections(blocked=include_blocked,
+                                       insights=include_insights)
+
     subheading("Appendix")
     appendices: list[str] = []
     for key, label in exporter.APPENDIX_LIBRARY:
@@ -88,10 +106,14 @@ def render() -> None:
 
     # -------------------------------------------------------------- generate
     section("3 · Generate")
+    extras = ", ".join(name for name, on in
+                       ((exporter.BLOCKED_TITLE.lower(), include_blocked),
+                        ("insights", include_insights)) if on) or "none"
     st.caption(f"**{scope_label}** · **{fmt_int(n)}** {unit.lower()} · period "
                f"**{period_label}** · as-of {ctx.as_of:%d %b %Y} · "
                f"{len(selected)} report(s)"
-               f"{' + drill-down' if drilldown and selected else ''}.")
+               f"{' + drill-down' if drilldown and selected else ''} · "
+               f"optional sections: {extras}.")
     st.caption("Every figure is counted per account, read across all of its "
                "waves, exactly as the Status Report pages count it — the "
                "sidebar's counting mode does not change the report. Each report "
@@ -101,7 +123,8 @@ def render() -> None:
     if not ready:
         st.info("Tick at least one report above.")
     kw = dict(title=title or exporter.DEFAULT_TITLE, subtitle=subtitle,
-              period_label=period_label, date_window=window, appendices=appendices)
+              period_label=period_label, date_window=window,
+              appendices=appendices, sections=sections)
     stamp = f"{datetime.now():%Y%m%d_%H%M}"
 
     pdf_col, html_col = st.columns(2)

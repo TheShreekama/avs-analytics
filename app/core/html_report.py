@@ -30,7 +30,7 @@ from plotly.offline import get_plotlyjs
 from ..config import FY_START_MONTH, EOS_MATRIX_START_FY
 from ..ui import charts
 from . import (analytics, exporter, glossary, html_style,
-               insights as insights_mod, kpi, metrics, segments)
+               insights as insights_mod, kpi, metrics, schema, segments)
 from .metrics import fmt_currency, fmt_int
 
 #: Plotly config for every figure: interactive, but without the "download plot"
@@ -79,6 +79,31 @@ def rich(text) -> str:
 
 def _slug(*parts: str) -> str:
     return "-".join(str(p) for p in parts if p)
+
+
+#: Canonical key -> the header a reader should see.  The schema already names
+#: every field for the mapping screen; a report that prints "customer_name" is
+#: showing its own plumbing.
+_COLUMN_LABELS = {f.key: f.label for f in schema.CANONICAL_FIELDS}
+_COLUMN_LABELS.update({
+    "migration_status_label": "Migration Status", "region_geo": "WW Region",
+    "migration_category": "Category", "generation": "Generation",
+    "source_platform": "From", "target_platform": "To",
+    "blocked_state": "Current State", "phase": kpi.LATEST_WAVE_COLUMN,
+})
+
+
+def _label(column) -> str:
+    text = str(column)
+    return _COLUMN_LABELS.get(text, text.replace("_", " ").title()
+                              if text.islower() or "_" in text else text)
+
+
+def _accounts_frame(rows: pd.DataFrame,
+                    columns: list[str] | None = None) -> pd.DataFrame:
+    """The drill-down columns of *rows*, headed the way a reader reads them."""
+    frame = kpi.drilldown_frame(rows, columns=columns)
+    return frame.rename(columns={c: _label(c) for c in frame.columns})
 
 
 @dataclass(frozen=True)
@@ -281,7 +306,8 @@ def _accordion(title: str, body: str, badge: str = "", open_: bool = False,
 
 
 def _accounts_panel(title: str, rows: pd.DataFrame, table_id: str, *,
-                    buckets=None, limit: int = 800, open_: bool = False) -> str:
+                    buckets=None, limit: int = 800, open_: bool = False,
+                    columns: list[str] | None = None) -> str:
     """The accounts behind a chart, in an accordion the chart can filter.
 
     ``buckets`` is a callable taking the (truncated) record frame and returning
@@ -291,7 +317,7 @@ def _accounts_panel(title: str, rows: pd.DataFrame, table_id: str, *,
     if rows is None or getattr(rows, "empty", True):
         return _accordion(title, '<p class="empty">No accounts behind this.</p>',
                           badge="0")
-    frame = kpi.drilldown_frame(rows)
+    frame = _accounts_frame(rows, columns)
     if frame.empty:
         return _accordion(title, '<p class="empty">No accounts behind this.</p>',
                           badge="0")
@@ -328,7 +354,7 @@ def _accounts_body(rows: pd.DataFrame, table_id: str, limit: int = 800
     """The searchable accounts table on its own, plus how many rows it stands for."""
     if rows is None or getattr(rows, "empty", True):
         return '<p class="empty">No accounts behind this.</p>', 0
-    frame = kpi.drilldown_frame(rows)
+    frame = _accounts_frame(rows)
     if frame.empty:
         return '<p class="empty">No accounts behind this.</p>', 0
     total = len(frame)
@@ -374,13 +400,19 @@ def _tile_accounts(group: str, panes: list[tuple[str, str, pd.DataFrame]]) -> st
 
 def _drillable(doc: _Builder, *, heading: str, fig, rows: pd.DataFrame,
                buckets, table_id: str, mode: str = "x", height: int = 300,
-               currency: bool = False, label: str = "") -> str:
-    """A chart wired to the accounts beneath it — the report's unit of drill-down."""
+               currency: bool = False, label: str = "",
+               detail: bool = False) -> str:
+    """A chart wired to the accounts beneath it — the report's unit of drill-down.
+
+    ``detail`` switches the table to the blocked-accounts columns, which lead
+    with why each account has stopped rather than with how it is classified.
+    """
+    columns = kpi.BLOCKED_DRILLDOWN_COLUMNS if detail else None
     return (f'<h4 class="sub">{esc(heading)}</h4>'
             + doc.figure(fig, height=height, currency=currency,
                          drill=table_id, mode=mode)
             + _accounts_panel(label or f"Underlying accounts — {heading}",
-                              rows, table_id, buckets=buckets))
+                              rows, table_id, buckets=buckets, columns=columns))
 
 
 def _optional_card(card_id: str, title: str, note: str, body: str,
@@ -486,7 +518,7 @@ def _summary_row(doc: _Builder, spec, pop, waves, start, end,
     for label, key, value, unit in metrics_shown:
         table_id = _slug("kpi", spec.key, slug, key)
         records = head[key].records
-        count = len(kpi.drilldown_frame(records)) if not getattr(
+        count = len(_accounts_frame(records)) if not getattr(
             records, "empty", True) else 0
         panes.append((label, table_id, records))
         tiles.append(_Tile(label, value, unit, pane=table_id,
@@ -732,80 +764,75 @@ def _generations(doc: _Builder, doc_fact, spec, start, end) -> None:
                numeric=set(frame.columns[1:]), row_head=True)))
 
 
-def _excluded(doc: _Builder, spec, pop, waves) -> None:
-    """Blocked, deferred, cancelled and waiting accounts — off by default.
+def _blocked(doc: _Builder, spec, pop, waves) -> None:
+    """Accounts that have stopped — blocked, or waiting on a follow-up.
 
     Kept strictly apart from the metrics above: none of these accounts is in a
     headline tile, a trend, the state chart or the regional cut, and none of
     those numbers is in here.  It is hidden behind a checkbox because a
     management report opens on what is being delivered; the accounts nobody is
-    delivering are one click away, for the review that goes looking for them.
+    moving are one click away, for the review that goes looking for them.
+
+    The breakdown is the **Current State itself** — the state is the reason —
+    and every account is listed with the programme's own **Status Summary**
+    against it, which is the sentence explaining what it is waiting on.
     """
-    tables = exporter.excluded_tables(pop, waves)
-    note = ("Every account whose state is neither On-Track nor Completed. These "
-            "accounts are excluded from every metric above — the tiles, the "
-            "trends, the pipeline and the regional cut — and reported only "
-            "here, so nothing is counted twice and nothing is dropped.")
-    label = "Show blocked, deferred and cancelled accounts"
+    tables = exporter.blocked_tables(pop, waves)
+    label = "Show blocked & waiting accounts"
+    card_id = _slug("optx", spec.key)
     if tables["rows"].empty:
         doc.write(_optional_card(
-            _slug("optx", spec.key), "Accounts outside the reported pipeline",
-            note, '<p class="empty">No accounts fall outside the reported '
-            "pipeline — every account here is On-Track or Completed.</p>", label))
+            card_id, exporter.BLOCKED_TITLE, exporter.BLOCKED_NOTE,
+            '<p class="empty">No accounts are blocked or waiting — every account '
+            "here is moving, finished, or closed out.</p>", label))
         return
 
-    tiles = [_Tile("Excluded accounts", fmt_int(tables["accounts"]),
-                   "not in any metric above"),
-             _Tile("ACR held up", fmt_currency(tables["acr"]),
-                   "summed over those accounts"),
-             _Tile("Waves behind them", fmt_int(tables["wave_count"]),
-                   "every wave of those accounts")]
-    body = _kpi_tiles(tiles)
+    body = _kpi_tiles([
+        _Tile("Blocked accounts", fmt_int(tables["accounts"]),
+              "not in any metric above"),
+        _Tile("ACR held up", fmt_currency(tables["acr"]),
+              "summed over those accounts"),
+        _Tile("Waves behind them", fmt_int(tables["wave_count"]),
+              "every wave of those accounts")])
 
     states = tables["summary"]
+    by_state = lambda rows: list(rows["blocked_state"])          # noqa: E731
     body += _drillable(
-        doc, heading="Accounts by excluded state",
+        doc, heading="Accounts by current state",
         fig=charts.bar(states, "category", "count", color_status=True),
-        rows=tables["rows"], buckets=lambda r: list(r["state"]),
+        rows=tables["rows"], buckets=by_state,
         table_id=_slug("xs", spec.key), mode="x", height=320,
-        label="Accounts — by state")
+        label="Accounts — by current state", detail=True)
     body += _drillable(
-        doc, heading="ACR held up by state",
+        doc, heading="ACR held up by current state",
         fig=charts.bar(states, "category", "acr", currency=True,
                        color_status=True),
-        rows=tables["rows"], buckets=lambda r: list(r["state"]),
+        rows=tables["rows"], buckets=by_state,
         table_id=_slug("xa", spec.key), mode="x", height=320, currency=True,
-        label="Accounts — by the ACR they hold up")
+        label="Accounts — by the ACR they hold up", detail=True)
     if not tables["region"].empty:
         body += _drillable(
-            doc, heading="WW Region × excluded state",
-            fig=charts.heatmap(tables["region"]), rows=_region_state_rows(tables["rows"]),
-            buckets=_by_region_state, table_id=_slug("xr", spec.key),
-            mode="y-x", height=360, label="Accounts — by region and state")
-    for title, frame, first_col, slug in (
-            ("Stated reason", tables["reasons"], "Reason", "xw"),
-            ("Waves behind these accounts", tables["waves"], "Waves", "xv")):
-        if frame is None or frame.empty:
-            continue
-        printable = frame.rename(columns={"category": first_col, "count": "Accounts"})
-        printable["Accounts"] = printable["Accounts"].map(fmt_int)
-        body += (f'<h4 class="sub">{esc(title)}</h4>'
-                 + _table(printable, _slug(slug, spec.key), numeric={"Accounts"}))
-    body += ('<p class="note">A cancelled or deferred account is named by its '
-             "Migration Status — the column that took it out — and every other "
-             "by its Current State, which is where the reason lives. Nothing is "
-             "inferred: an account with neither reads <b>Not stated</b>.</p>")
-    doc.write(_optional_card(
-        _slug("optx", spec.key), "Accounts outside the reported pipeline",
-        note, body, label))
+            doc, heading="WW Region × current state",
+            fig=charts.heatmap(tables["region"]),
+            rows=_region_state_rows(tables["rows"]), buckets=_by_region_state,
+            table_id=_slug("xr", spec.key), mode="y-x", height=360,
+            label="Accounts — by region and state", detail=True)
+    if not tables["waves"].empty:
+        profile = tables["waves"].rename(columns={"category": "Waves",
+                                                  "count": "Accounts"})
+        profile["Accounts"] = profile["Accounts"].map(fmt_int)
+        body += ('<h4 class="sub">Waves behind these accounts</h4>'
+                 + _table(profile, _slug("xv", spec.key), numeric={"Accounts"}))
+    doc.write(_optional_card(card_id, exporter.BLOCKED_TITLE,
+                             exporter.BLOCKED_NOTE, body, label))
 
 
 def _region_state_rows(rows: pd.DataFrame) -> pd.DataFrame:
-    """Excluded accounts tagged with the region/state pair a heatmap cell names."""
+    """Blocked accounts tagged with the region/state pair a heatmap cell names."""
     if rows.empty or "region_geo" not in rows.columns:
         return rows
     return rows.assign(_region=exporter.clean(rows["region_geo"]),
-                       _state=rows["state"])
+                       _state=rows["blocked_state"])
 
 
 def _by_region_state(rows: pd.DataFrame) -> list[str]:
@@ -837,8 +864,15 @@ def _this_fy(ctx, start, end) -> tuple[tuple | None, str]:
     """The fiscal year the as-of date sits in — unless that *is* the window.
 
     Mirrors the dashboard's Executive Summary, which puts a This-FY row above
-    the selected period whenever they differ, so a month's numbers keep the year
-    they sit in.  Returns ``(None, "")`` when the report already covers This FY.
+    the selected period whenever the two differ, so a month's numbers keep the
+    year they sit in.  Returns ``(None, "")`` only when the report already
+    covers exactly This FY.
+
+    **An unbounded period is not This FY.**  "All time" resolves to no window at
+    all, and reading that as "nothing to compare against" is what used to drop
+    the row from the report while the dashboard — which decides on the preset,
+    not on the dates — still showed it.  All time spans several fiscal years, so
+    the year you are in is exactly the context it loses.
     """
     span = metrics.date_preset_range(ctx.as_of, "This FY", FY_START_MONTH)
     if not span:
@@ -847,7 +881,7 @@ def _this_fy(ctx, start, end) -> tuple[tuple | None, str]:
     same = (start is not None and end is not None
             and pd.Timestamp(start).date() == fy_start
             and pd.Timestamp(end).date() == fy_end)
-    if same or (start is None and end is None):
+    if same:
         return None, ""
     label = (f"This FY ({metrics.fiscal_year_label(fy_start, FY_START_MONTH)}) — "
              f"{fy_start:%d %b %Y} → {fy_end:%d %b %Y}")
@@ -855,7 +889,7 @@ def _this_fy(ctx, start, end) -> tuple[tuple | None, str]:
 
 
 def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec,
-            start, end, period_label: str,
+            start, end, period_label: str, sections: "exporter.ReportSections",
             fy_window=None, fy_label: str = "") -> None:
     pop = segments.population(fact, spec.category)
     anchor = f"rpt-{spec.key}"
@@ -894,9 +928,11 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec
     _regional(doc, spec, waves)
     if spec.breakdown:
         _generations(doc, fact, spec, start, end)
-    _insights(doc, spec, pop)
+    if sections.insights:
+        _insights(doc, spec, pop)
     # Last, and hidden until asked for: the accounts none of the above counts.
-    _excluded(doc, spec, pop, waves)
+    if sections.blocked:
+        _blocked(doc, spec, pop, waves)
     # No account list closes the report: every chart above already opens the
     # accounts it was drawn from, so a final table of all of them was the same
     # rows once more — and the bulk of the file.
@@ -905,22 +941,26 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec
 
 
 def _methodology(doc: _Builder) -> None:
-    """How every figure above was calculated, in the report itself.
+    """How every figure above was calculated — behind a checkbox, like the rest.
 
     The same text the PDF prints and the Methodology page shows
     (:data:`app.core.glossary.REPORT_METHODOLOGY`) — one source, so a rule
-    cannot be documented three different ways.
+    cannot be documented three ways.  It is reference material rather than
+    reporting, so it is **opt-in and deliberately not in the contents**: a
+    reader who wants the rules ticks the box at the end; nobody navigating the
+    report has to scroll past it.
     """
-    doc.anchor("methodology", "Methodology & logic")
+    blocks = "".join(
+        f'<h4 class="sub">{esc(heading)}</h4><div class="prose">'
+        + "".join(f"<p>{rich(text)}</p>" for text in paragraphs) + "</div>"
+        for heading, paragraphs in glossary.REPORT_METHODOLOGY)
     doc.write('<section class="report" id="methodology">'
-              '<div class="report-head"><h2>Methodology &amp; logic</h2>'
-              "<p>How every figure in this report is calculated — the rules as "
-              "implemented, not as intended.</p></div>")
-    for heading, paragraphs in glossary.REPORT_METHODOLOGY:
-        body = "".join(f"<p>{rich(text)}</p>" for text in paragraphs)
-        doc.write(_card(heading, "", f'<div class="prose">{body}</div>'))
-    doc.write('<p class="toplink"><a href="#top">↑ Back to contents</a></p>'
-              "</section>")
+              + _optional_card(
+                  "opt-methodology", "Methodology & logic",
+                  "How every figure in this report is calculated — the rules as "
+                  "implemented, not as intended.", blocks,
+                  "Show methodology & logic")
+              + "</section>")
 
 
 def _inconsistency(doc: _Builder, ctx) -> None:
@@ -940,7 +980,9 @@ def _inconsistency(doc: _Builder, ctx) -> None:
                                      badge="0"))
             continue
         # ``plain`` for the same reason as the account table: ``_table`` escapes.
-        shown = frame.head(500).map(plain)
+        # Headers are named the way the rest of the report names them.
+        shown = frame.head(500).map(plain).rename(
+            columns={c: _label(c) for c in frame.columns})
         blocks.append(_accordion(
             label, _searchable_table(shown, _slug("apx", name)),
             badge=f"{fmt_int(len(frame))} rows"))
@@ -955,7 +997,8 @@ def build_html_report(ctx, where: str = "", scope_label: str = "All data",
                       period_label: str = "All dates in the dataset",
                       date_window: tuple | None = None,
                       all_time_where: str | None = None,
-                      appendices: list[str] | None = None) -> bytes:
+                      appendices: list[str] | None = None,
+                      sections: "exporter.ReportSections | None" = None) -> bytes:
     """Render the whole report as one self-contained HTML file.
 
     Takes the same arguments as :func:`app.core.exporter.build_report` and
@@ -972,6 +1015,7 @@ def build_html_report(ctx, where: str = "", scope_label: str = "All data",
              for k in (reports if reports is not None else exporter.REPORT_KEYS)
              if k in exporter._BY_KEY]
     chosen = [a for a in (appendices or []) if a in dict(exporter.APPENDIX_LIBRARY)]
+    sections = sections or exporter.ReportSections()
     start, end = date_window or (None, None)
     fy_window, fy_label = _this_fy(ctx, start, end)
     fact = analytics.select_all(ctx.con, where, table="fact")
@@ -981,7 +1025,7 @@ def build_html_report(ctx, where: str = "", scope_label: str = "All data",
     doc = _Builder(body=[], scripts=[], toc=[])
     for spec in specs:
         _report(doc, ctx, fact, all_time, spec, start, end, period_label,
-                fy_window, fy_label)
+                sections, fy_window, fy_label)
     if specs:
         _methodology(doc)
     if "inconsistency" in chosen:

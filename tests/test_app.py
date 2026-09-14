@@ -271,11 +271,12 @@ def test_broad_categories_carry_a_regional_breakdown(page):
 
 @pytest.mark.parametrize("page", ["category_dashboard.all_avs",
                                   "category_dashboard.avs_native"])
-def test_excluded_accounts_are_reported_apart_from_the_pipeline(page):
-    """Blocked, deferred and cancelled accounts get a section of their own."""
+def test_blocked_accounts_are_reported_apart_from_the_pipeline(page):
+    """Accounts stopped on a blocking Current State get a section of their own."""
+    from app.core import exporter
     at = _render(page, "Customer (deduplicated)")
     assert not at.exception, f"{page} raised: {at.exception}"
-    assert "Accounts outside the reported pipeline" in _sections(at), _sections(at)
+    assert exporter.BLOCKED_TITLE in _sections(at), _sections(at)
 
 
 @pytest.mark.parametrize("page", ["category_dashboard.eos_all",

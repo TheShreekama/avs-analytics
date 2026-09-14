@@ -1378,7 +1378,7 @@ def state_fact():
         "Migration Status": s, "Nom. Approval Date": a, "Nom. Created Date": a,
         "Actual End Date": e, "Planned End Date": pe, "Total Cores": c,
         "Total ACR": acr, "Current State": cs, "WW Region": r,
-        "Nomination Status": "Approved",
+        "Status Summary": f"Latest note on {n}", "Nomination Status": "Approved",
         "Primary Migration Path": "AV36/AV36P/AV52 - EOS",
     } for t, n, k, w, g, s, a, e, pe, c, acr, cs, r in _STATE_ROWS]).astype("string")
     mp = mapping.resolve_mapping(list(raw.columns))
@@ -1432,23 +1432,83 @@ def test_every_account_lands_in_exactly_one_state(state_fact):
             == state_fact["tpid_key"].nunique())
 
 
-def test_excluded_accounts_report_what_the_data_supports(state_fact):
-    summary, rows = kpi.excluded_accounts(state_fact)
+def test_excluded_accounts_partition_the_population(state_fact):
+    """The full complement of the reported cut — what nothing above counts."""
+    summary, _rows = kpi.excluded_accounts(state_fact)
     counts = dict(zip(summary["category"], summary["count"]))
     assert counts == {kpi.STATE_BLOCKED: 1, kpi.STATE_DEFERRED: 1,
                       kpi.STATE_CANCELLED: 1}
     assert float(summary["acr"].sum()) == 2_400_000 + 300_000 + 90_000
-    # A cancelled or deferred account is named by the status that took it out;
-    # everything else by its Current State.  Never by a contradicting column:
-    # Delta and Epsilon both read "On Track" while being deferred / cancelled.
-    reasons = set(kpi.excluded_reasons(rows)["category"])
-    assert reasons == {"Blocked - Customer", "Deferred By Customer",
-                       "Cancelled / Archived"}
-    assert "On Track" not in reasons
+
+
+def test_the_blocked_section_reports_only_the_stated_blocking_states(state_fact):
+    """Blocked variants and "Waiting action on follow up date" — nothing else.
+
+    Gamma is blocked; Delta (deferred) and Epsilon (cancelled) are out of the
+    reported pipeline too, but a decision already taken is not a blockage, and
+    both read "On Track" in Current State anyway.
+    """
+    summary, rows = kpi.blocked_accounts(state_fact)
+    assert list(summary["category"]) == ["Blocked - Customer"]
+    assert _tpids(rows) == ["3"]
+    assert float(summary["acr"].sum()) == 2_400_000
+    assert set(rows["blocked_state"]) == {"Blocked - Customer"}
     assert list(kpi.wave_profile(state_fact, rows)["category"]) == ["1 wave"]
+    # The note explaining the account leads the table rather than trailing it.
+    columns = list(kpi.drilldown_frame(rows, columns=kpi.BLOCKED_DRILLDOWN_COLUMNS))
+    assert "status_summary" in columns
+    assert columns.index("blocked_state") < 5      # the reason, up front
+    assert len(columns) < len(kpi.DRILLDOWN_COLUMNS)
 
 
-def test_excluded_accounts_are_in_none_of_the_delivery_metrics(state_fact):
+@pytest.mark.parametrize("state,included", [
+    ("Blocked", True),
+    ("Blocked - Account team", True),
+    ("Blocked - Customer", True),
+    ("Blocked - Partner / ISD", True),
+    ("blocked – partner/isd", True),          # en dash, no spaces, lower case
+    ("Waiting action on follow up date", True),
+    ("On Track", False),
+    ("Done", False),
+    ("Waiting", False),                       # not the stated waiting state
+    ("", False),
+])
+def test_only_the_listed_current_states_count_as_blocked(state, included):
+    row = {"TPID": "9", "Customer Name": "Solo", "Task ID": "s1",
+           "Phase": "Wave 1", "Tags": "x", "WW Region": "EMEA",
+           "Migration Status": "2 - Executing Pre-Requisites",
+           "Nomination Status": "Approved", "Nom. Approval Date": "2026-01-05",
+           "Nom. Created Date": "2026-01-05", "Current State": state,
+           "Status Summary": "why it is where it is",
+           "Total Cores": "10", "Total ACR": "$1,000",
+           "Primary Migration Path": "Onprem to AVS"}
+    mp = mapping.resolve_mapping(list(row))
+    frame, _ = cleaning.build_fact_frame(pd.DataFrame([row]).astype("string"), mp,
+                                        pd.Timestamp("2026-03-01"))
+    _summary, rows = kpi.blocked_accounts(frame)
+    assert (not rows.empty) is included, (state, rows)
+
+
+def test_a_cancelled_account_is_not_reported_as_blocked():
+    """Its Current State still says Blocked; the cancellation is the fact."""
+    row = {"TPID": "9", "Customer Name": "Solo", "Task ID": "s1",
+           "Phase": "Wave 1", "Tags": "x", "WW Region": "EMEA",
+           "Migration Status": "6 - Cancelled / Archived",
+           "Nomination Status": "Approved", "Nom. Approval Date": "2026-01-05",
+           "Nom. Created Date": "2026-01-05",
+           "Current State": "Blocked - Customer", "Status Summary": "note",
+           "Total Cores": "10", "Total ACR": "$1,000",
+           "Primary Migration Path": "Onprem to AVS"}
+    mp = mapping.resolve_mapping(list(row))
+    frame, _ = cleaning.build_fact_frame(pd.DataFrame([row]).astype("string"), mp,
+                                        pd.Timestamp("2026-03-01"))
+    assert kpi.blocked_accounts(frame)[1].empty
+    # …and it is still out of the reported pipeline, as a cancellation.
+    _summary, excluded = kpi.excluded_accounts(frame)
+    assert list(excluded["state"]) == [kpi.STATE_CANCELLED]
+
+
+def test_blocked_accounts_are_in_none_of_the_delivery_metrics(state_fact):
     """Requirement: kept completely separate from On-Track / Completed.
 
     Every metric that reads an account's *state* — completions, on-track
@@ -1592,22 +1652,44 @@ def test_money_in_tooltips_is_written_in_k_and_m(state_doc):
     assert body                                    # the report did render
 
 
-def test_the_excluded_section_is_present_but_hidden_by_default(state_doc):
-    """Requirement 7: generated, off by default, and no application needed."""
+def test_the_optional_sections_are_present_but_hidden_by_default(state_doc):
+    """Generated, off by default, and needing no application to open."""
     import re
     body = _main(state_doc)
     toggles = re.findall(
-        r'<input type="checkbox" class="opt-toggle" id="(optx-[^"]+)"([^>]*)>', body)
-    assert [t for t, _ in toggles] == ["optx-avs", "optx-eos"]
+        r'<input type="checkbox" class="opt-toggle" id="([^"]+)"([^>]*)>', body)
+    assert [t for t, _ in toggles] == ["optx-avs", "optx-eos", "opt-methodology"]
     for _id, attrs in toggles:
         assert "checked" not in attrs              # unticked when the file opens
     # Hidden by a CSS rule on the checkbox itself, so it is hidden from the
     # first paint with no script having run.
     assert ".opt-toggle:not(:checked) ~ .opt-body" in state_doc
-    assert "Accounts outside the reported pipeline" in body
-    assert "Show blocked, deferred and cancelled accounts" in body
-    # The data is there, waiting: counts, ACR, reasons and the accounts.
-    assert "ACR held up" in body and "Stated reason" in body
+    assert "Blocked &amp; waiting accounts" in body
+    assert "Show blocked &amp; waiting accounts" in body
+    assert "Show methodology &amp; logic" in body
+    # The data is there, waiting: counts, ACR and the accounts themselves.
+    assert "ACR held up" in body and "Accounts by current state" in body
+
+
+def test_the_blocked_accounts_table_carries_the_status_summary(state_doc):
+    """The reason an account has stopped, in the programme's own words."""
+    body = _main(state_doc)
+    blocked = body.split('id="optx-eos-body"', 1)[1]
+    assert "<th>Status Summary</th>" in blocked
+    # …and only in a blocked section: everything before the first one — tiles,
+    # trends, pipeline, regional — must not carry a paragraph per row.
+    assert body.split('id="optx-avs"', 1)[0].count("<th>Status Summary</th>") == 0
+    # Headers read as names throughout, not as column keys.
+    assert "<th>Customer Name</th>" in body and "<th>customer_name</th>" not in body
+
+
+def test_methodology_is_opt_in_and_out_of_the_contents(state_doc):
+    """Reference material, not a destination: it has no contents entry."""
+    body = _main(state_doc)
+    assert 'id="methodology"' in body
+    nav = state_doc.split("<nav", 1)[1].split("</nav>", 1)[0]
+    assert 'href="#methodology"' not in nav
+    assert "Methodology" not in nav
 
 
 def test_the_report_states_its_own_methodology(state_doc):
@@ -1668,12 +1750,12 @@ def test_programme_insights_are_supported_by_the_data(state_fact):
     from app.core import insights as ins
     items = ins.programme_insights(state_fact)
     by_category = {i.category for i in items}
-    assert {"Pipeline", "Excluded", "Bottleneck", "Delays", "Waves", "EOS"} \
+    assert {"Pipeline", "Blocked", "Bottleneck", "Delays", "Waves", "EOS"} \
         <= by_category, by_category
     text = " ".join(i.detail for i in items)
     # Each figure quoted is one the metrics above produce.
     assert "$525K" in text or "$525.0K" in text        # the ACR pipeline
-    assert "of 6 accounts (50%)" in text               # the excluded accounts
+    assert "of 6 accounts (17%)" in text               # the one blocked account
     assert "no Gen1/Gen2 tag" in text                  # the untagged EOS account
     # The classification rule reports its own count.
     assert "another wave still on track" in text
@@ -1684,7 +1766,78 @@ def test_an_insight_with_nothing_to_say_says_nothing(state_fact):
     from app.core import insights as ins
     clean_slice = state_fact[state_fact["tpid"].astype(str) == "1"]
     items = ins.programme_insights(clean_slice)
-    assert not [i for i in items if i.category == "Excluded"]
+    assert not [i for i in items if i.category == "Blocked"]
     assert not [i for i in items if i.category == "Pipeline"]
     # …and an empty frame produces nothing at all rather than raising.
     assert ins.programme_insights(state_fact.head(0)) == []
+
+
+# --------------------------------------------------------------------------- #
+# The This-FY row, and the optional sections
+# --------------------------------------------------------------------------- #
+def _tile_rows(doc: str) -> set:
+    import re
+    return set(re.findall(r'data-tile-group="(kpis-[^"]+)"', _main(doc)))
+
+
+def test_every_period_other_than_this_fy_gets_a_this_fy_row(state_ctx):
+    """Including **All time**, which resolves to no window at all.
+
+    The dashboard decides on the preset, so it always showed the row; the report
+    decided on the dates and read "no window" as "nothing to compare against" —
+    which is exactly when the fiscal year you are in is the missing context.
+    """
+    from app.core import html_report
+
+    all_time = html_report.build_html_report(
+        state_ctx, reports=["avs"], period_label="All dates in the dataset")
+    assert _tile_rows(all_time.decode()) == {"kpis-avs", "kpis-avs-fy"}
+    assert "Two periods:" in all_time.decode()
+
+    month = html_report.build_html_report(
+        state_ctx, reports=["avs"], period_label="01 Nov 2025 → 30 Nov 2025",
+        date_window=(pd.Timestamp("2025-11-01"), pd.Timestamp("2025-11-30")))
+    assert _tile_rows(month.decode()) == {"kpis-avs", "kpis-avs-fy"}
+
+    # Selecting This FY itself is the one case with nothing to put above it.
+    span = metrics.date_preset_range(state_ctx.as_of, "This FY", 7)
+    same = html_report.build_html_report(
+        state_ctx, reports=["avs"], period_label="This FY",
+        date_window=(span[0], span[1]))
+    assert _tile_rows(same.decode()) == {"kpis-avs"}
+    assert "Two periods:" not in same.decode()
+
+
+def test_the_optional_sections_default_to_blocked_in_insights_out(state_ctx):
+    """What the Reports page offers, as the library's own default."""
+    from app.core import exporter as exp, html_report
+
+    sections = exp.ReportSections()
+    assert (sections.blocked, sections.insights) == (True, False)
+
+    doc = html_report.build_html_report(state_ctx, reports=["avs"]).decode()
+    body = _main(doc)
+    assert 'id="optx-avs"' in body                 # the blocked section's card
+    assert '<h3 class="block">Insights</h3>' not in body
+
+
+@pytest.mark.parametrize("blocked,insights", [(True, True), (True, False),
+                                              (False, True), (False, False)])
+def test_each_optional_section_is_included_only_when_asked_for(
+        state_ctx, blocked, insights):
+    from app.core import exporter as exp, html_report
+
+    sections = exp.ReportSections(blocked=blocked, insights=insights)
+    body = _main(html_report.build_html_report(
+        state_ctx, reports=["avs"], sections=sections).decode())
+    # The section's own card, not its title: the methodology names the section
+    # too, and would answer for it.
+    assert ('id="optx-avs"' in body) is blocked
+    assert ('<h3 class="block">Insights</h3>' in body) is insights
+
+    # The PDF answers to the same selector.  Its marker is the section's note,
+    # which likewise appears nowhere else.
+    text = _flowable_text(exp.build_story(state_ctx, reports=["avs"],
+                                          sections=sections))
+    assert ("Accounts stopped on a stated blocking state" in text) is blocked
+    assert ("Derived from this report's own population" in text) is insights

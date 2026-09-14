@@ -148,11 +148,14 @@ def selectable_table(df: pd.DataFrame, key: str, bucket_col: str) -> list[str]:
 
 def drilldown(records: pd.DataFrame, bucket_col: str, selected: list[str], *,
               key: str, what: str = "records", unit_col: str | None = None,
-              max_rows: int | None = None) -> None:
+              max_rows: int | None = None,
+              columns: list[str] | None = None) -> None:
     """Show the rows behind the selected chart points (all rows when none picked).
 
     ``bucket_col`` is the column matching the chart's x-axis / label, so a click
     on "2026-07" or "Executing Migration" filters straight to those records.
+    ``columns`` overrides the drill-down column list for a table answering a
+    different question — the blocked accounts lead with why each one stopped.
     """
     table = records
     if selected and records is not None and bucket_col in getattr(records, "columns", []):
@@ -163,7 +166,7 @@ def drilldown(records: pd.DataFrame, bucket_col: str, selected: list[str], *,
     else:
         caption = "Click a bar, slice or table row above to drill into it"
 
-    frame = kpi.drilldown_frame(table)
+    frame = kpi.drilldown_frame(table, columns=columns)
     with st.expander(f"🔎 Underlying {what} ({fmt_int(len(frame))} rows)",
                      expanded=bool(selected)):
         st.caption(caption)
