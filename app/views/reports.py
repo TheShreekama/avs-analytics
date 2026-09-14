@@ -78,9 +78,13 @@ def render() -> None:
     # ------------------------------------------------------------ cover text
     section("2 · Cover")
     c1, c2 = st.columns(2)
-    title = c1.text_input("Report title", value="AVS Migration Analytics",
+    title = c1.text_input("Report title", value=exporter.DEFAULT_TITLE,
                           key="rep_title")
-    subtitle = c2.text_input("Subtitle", value="Management Report", key="rep_subtitle")
+    subtitle = c2.text_input("Subtitle", value=exporter.DEFAULT_SUBTITLE,
+                             key="rep_subtitle")
+    st.caption("The report is about the programme, not about this application: "
+               "neither the app nor the file the data came from is named "
+               "anywhere in the generated PDF or HTML.")
 
     # -------------------------------------------------------------- generate
     section("3 · Generate")
@@ -88,13 +92,15 @@ def render() -> None:
                f"**{period_label}** · as-of {ctx.as_of:%d %b %Y} · "
                f"{len(selected)} report(s)"
                f"{' + drill-down' if drilldown and selected else ''}.")
-    st.caption("Every figure is counted per account at its latest wave, exactly as "
-               "the Status Report pages count it — the sidebar's "
-               "counting mode does not change the report.")
+    st.caption("Every figure is counted per account, read across all of its "
+               "waves, exactly as the Status Report pages count it — the "
+               "sidebar's counting mode does not change the report. Each report "
+               "closes with a **Methodology & logic** section stating every rule "
+               "it applied.")
     ready = bool(selected or appendices)
     if not ready:
         st.info("Tick at least one report above.")
-    kw = dict(title=title or "AVS Migration Analytics", subtitle=subtitle,
+    kw = dict(title=title or exporter.DEFAULT_TITLE, subtitle=subtitle,
               period_label=period_label, date_window=window, appendices=appendices)
     stamp = f"{datetime.now():%Y%m%d_%H%M}"
 

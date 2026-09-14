@@ -89,8 +89,11 @@ under Streamlit's AppTest in both counting modes.
 
 - **Migration categories** (`segments.population`): `all_avs` = target platform is AVS
   (on-prem / VMG / AWS-VMC / AVS-to-AVS / EOS) **plus every EOS account**, whatever its
-  own path says; `avs_native` = `is_from_avs`; the three EOS
-  categories = the EOS population split by generation. There is only ever **one dataset**.
+  own path says; `avs_native` = `is_from_avs`; `eos_all` = **Gen-1 ∪ Gen-2 only**.
+  An EOS-by-path account with no generation tag (`eos_unclassified`) is **excluded from
+  every EOS report** — EOS is reported by generation, and an ungenerationed account would
+  make the combined total disagree with the sum of its blocks — but it stays in `all_avs`
+  and is listed on Data Inconsistency. There is only ever **one dataset**.
   **An account is EOS when ANY of its waves carries an "AVS Migration - Gen1/Gen2" tag**
   (that tag sets both scope and generation); with no tag on any wave, an
   "AV36/AV36P/AV52 - EOS" path/offering is the fallback (`segments.eos_population`) and the
@@ -104,10 +107,31 @@ under Streamlit's AppTest in both counting modes.
   Migration - Gen1"); Gen-1 wins if both appear. No tag → Unclassified (and not EOS).
   Host SKUs are no longer part of the classification.
 - **Metric rules** (`core/kpi.py`, all with `records` for drill-down): new engagements =
-  unique TPIDs by **Wave-1** approval date; migration ends = unique TPIDs whose **latest**
-  wave is `7 - Completed` (Wave 7 done + Wave 8 open ⇒ not counted), dated by actual end;
-  hosts migrated = **sum of Total Cores** over completed records (never a TPID count);
-  Cumulative is the final column and runs over the displayed months only.
+  unique TPIDs by **Wave-1** approval date; migration ends = unique TPIDs classified
+  Completed, dated by actual end; hosts migrated = **sum of Total Cores** over completed
+  records (never a TPID count, and deliberately wave-level — a completed wave deployed its
+  nodes whatever the account's state is now); Cumulative is the final column and runs over
+  the displayed months only.
+- **Account state** (`kpi.account_state`, read across **all** of an account's waves, first
+  match wins): **On-Track** = ANY wave in flight (status 1-4) whose Current State reads On
+  Track (blank falls back to the status); **Completed** = latest wave `7 - Completed` AND
+  no wave on track; then Cancelled → Blocked → Deferred → Other from the latest wave. So
+  "latest wave completed + earlier wave on track" is **On-Track**, not Completed. Every
+  account resolves to exactly one state, so `by_state` (the reported cut) and
+  `excluded_accounts` (`EXCLUDED_STATES`) partition the population — nothing double-counted,
+  nothing lost. `on_track_by_stage` groups by the stage of the **on-track wave itself**.
+- **Accounts outside the reported pipeline** (`kpi.excluded_accounts`, plus
+  `excluded_reasons` / `wave_profile`, assembled by `exporter.excluded_tables`): blocked,
+  deferred, cancelled and waiting accounts, reported in a section of their own on every
+  dashboard and in both exports — never mixed into the On-Track/Completed metrics. The
+  stated reason reads Migration Status for cancelled/deferred accounts (the column that
+  took them out) and Current State for the rest. **New Engagements is the one deliberate
+  exception**: intake is a historical fact and counts every approved nomination.
+- **Forward-looking metrics** (`kpi.eligible_pipeline_waves`): a wave is eligible when all
+  three hold — status not 7/5/6 (completed, deferred, cancelled), nomination **approved**,
+  Current State not containing *Blocked*. `acr_pipeline` sums Total ACR over them (every
+  report); `nodes_planned` sums Total Cores (**EOS reports only**,
+  `exporter.shows_nodes_planned`). Neither is period-bound.
 - **Terminology.** "AV36 EOS" is called **EOS Migration** everywhere in the UI. The
   AVS → Azure Native page labels the Total Cores metric **Cores Migrated**; the AVS
   categories call it **Hosts Migrated** (same column, different noun).
@@ -161,7 +185,10 @@ under Streamlit's AppTest in both counting modes.
   Migration" into the axis label **"Stage 4"** plus a key `[("Stage 4", "Executing
   Migration"), …]`; five full status names on one axis leave the plot a sliver.
   `exporter.region_status` returns `(status×region, region×status, legend)` and both
-  renderers print the key under the charts.
+  renderers print the key under the chart. **The regional cut draws one chart — the
+  heatmap.** The stacked bar carried the same numbers; the pivot survives only as the
+  PDF drill-down's matrix, and the dashboard's selection moved to a region × stage
+  summary table (a heatmap cell cannot be clicked in Streamlit).
 - **A pie cannot be clicked in Streamlit.** `st.plotly_chart(on_select=...)` returns an
   empty `points` list for pie/donut/sunburst traces whatever the `selection_mode` —
   verified in a browser — so the by-state doughnut is filtered by
@@ -192,6 +219,23 @@ under Streamlit's AppTest in both counting modes.
 - **Nodes vs Cores.** `html_report._unit_noun`: the AVS motions deploy **Nodes**, only
   `(From AVS)` moves **Cores**. One noun per report, used by the tiles and the trend
   titles so the two cannot disagree.
+- **Money reads in K/M everywhere, tooltips included.** `metrics.fmt_compact_currency`
+  ($12.5K / $125K / $1.25M) is computed in Python and carried on the trace as
+  `customdata`, because Plotly's own SI format writes a lowercase "k" and no symbol —
+  pass `currency=True` to `charts.trend_chart` / `bar` / `donut` / `fy_lines` (the factory
+  writes the hover, `html_report._Builder.figure` the axis; omitting it on the factory
+  leaves an axis reading $1.2M above a tooltip reading 1,250,000).
+- **The opt-in section.** The excluded-accounts block in the HTML report is a
+  `_optional_card`: a real checkbox plus `.opt-toggle:not(:checked) ~ .opt-body
+  { display: none }`, so it is hidden from the first paint with **no script having run** —
+  which is what makes it work in a file opened offline. The script only re-measures
+  Plotly on reveal (a chart laid out hidden is zero wide). Default unticked.
+- **Each report states its own methodology.** `glossary.REPORT_METHODOLOGY` is the single
+  source rendered by the PDF, the HTML report and the Methodology page, so one rule cannot
+  be documented three ways.
+- **A generated report names neither the app nor the file it read.** No `Source:` line, no
+  dataset on the cover, no app name in the PDF furniture or the HTML footer; the default
+  title is `exporter.DEFAULT_TITLE` ("Migration Programme Report").
 - **Drill-down.** Charts use a category x-axis and `drilldown.normalize_bucket` so a
   Plotly month label ("2026-06-01") matches the record's period ("2026-06"); summary
   tables are `st.dataframe(on_select=...)` rows that select the same bucket.

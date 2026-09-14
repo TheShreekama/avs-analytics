@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 
 from ..config import CATEGORICAL_SEQUENCE, PALETTE, STATUS_COLORS
+from ..core.metrics import fmt_compact_currency
 
 _FONT = dict(family="Segoe UI, sans-serif", color=PALETTE["ink"], size=13)
 
@@ -38,42 +39,71 @@ def _base_layout(fig: go.Figure, height: int = 360, title: str | None = None,
     return fig
 
 
+def money_labels(values) -> list[str]:
+    """Money values as the short strings a tooltip should show — $12.5K, $1.25M.
+
+    Computed in Python rather than left to a Plotly number format, because
+    Plotly's SI notation writes a lowercase "k" and no currency symbol: a hover
+    reading "1250000" or "1.25k" is not what the tiles and tables say, and a
+    report that writes the same amount two ways is a report someone has to
+    reconcile.  Passed to a trace as ``customdata`` and read back by its
+    ``hovertemplate``.
+    """
+    return [fmt_compact_currency(v) for v in pd.Series(list(values)).tolist()]
+
+
 def _color_for(values) -> list[str]:
     return [STATUS_COLORS.get(str(v), CATEGORICAL_SEQUENCE[i % len(CATEGORICAL_SEQUENCE)])
             for i, v in enumerate(values)]
 
 
 def donut(df: pd.DataFrame, names: str, values: str, title: str | None = None,
-          height: int = 340) -> go.Figure:
+          height: int = 340, currency: bool = False) -> go.Figure:
+    """A doughnut.  ``currency`` writes the slice values as money ($1.25M)."""
     fig = go.Figure(go.Pie(
         labels=df[names], values=df[values], hole=0.62,
         marker=dict(colors=_color_for(df[names]), line=dict(color="white", width=2)),
         textinfo="percent", textfont=dict(size=12),
-        hovertemplate="%{label}: %{value} (%{percent})<extra></extra>",
+        customdata=money_labels(df[values]) if currency else None,
+        hovertemplate=("%{label}: %{customdata} (%{percent})<extra></extra>"
+                       if currency else "%{label}: %{value} (%{percent})<extra></extra>"),
     ))
-    total = int(df[values].sum())
-    fig.add_annotation(text=f"<b>{total:,}</b><br>total", showarrow=False,
+    total = df[values].sum()
+    centre = fmt_compact_currency(total) if currency else f"{int(total):,}"
+    fig.add_annotation(text=f"<b>{centre}</b><br>total", showarrow=False,
                        font=dict(size=16, color=PALETTE["ink"]))
     return _base_layout(fig, height, title)
 
 
 def bar(df: pd.DataFrame, x: str, y: str, title: str | None = None, horizontal: bool = False,
-        color_status: bool = False, height: int = 360, text: bool = True) -> go.Figure:
+        color_status: bool = False, height: int = 360, text: bool = True,
+        currency: bool = False) -> go.Figure:
+    """A bar chart.  ``currency`` writes the values — bar labels, hover and the
+    value axis alike — as money in K/M rather than as raw numbers."""
     colors = _color_for(df[x if horizontal else x]) if color_status else PALETTE["primary"]
+    money = money_labels(df[y]) if currency else None
+    labels = (money if currency else df[y]) if text else None
     if horizontal:
         fig = go.Figure(go.Bar(
             y=df[x], x=df[y], orientation="h", marker_color=colors,
-            text=df[y] if text else None, textposition="outside",
-            hovertemplate="%{y}: %{x}<extra></extra>"))
+            text=labels, textposition="outside", customdata=money,
+            hovertemplate=("%{y}: %{customdata}<extra></extra>" if currency
+                           else "%{y}: %{x}<extra></extra>")))
         fig.update_yaxes(autorange="reversed")
         fig = _base_layout(fig, height, title, showlegend=False, int_y=False)
-        fig.update_xaxes(tickformat=",d")   # value axis is horizontal here
+        # value axis is horizontal here
+        fig.update_xaxes(**(dict(tickprefix="$", tickformat="~s") if currency
+                            else dict(tickformat=",d")))
         return fig
     fig = go.Figure(go.Bar(
         x=df[x], y=df[y], marker_color=colors,
-        text=df[y] if text else None, textposition="outside",
-        hovertemplate="%{x}: %{y}<extra></extra>"))
-    return _base_layout(fig, height, title, showlegend=False)
+        text=labels, textposition="outside", customdata=money,
+        hovertemplate=("%{x}: %{customdata}<extra></extra>" if currency
+                       else "%{x}: %{y}<extra></extra>")))
+    fig = _base_layout(fig, height, title, showlegend=False, int_y=not currency)
+    if currency:
+        fig.update_yaxes(tickprefix="$", tickformat="~s")
+    return fig
 
 
 def stacked_bar(pivot: pd.DataFrame, title: str | None = None, height: int = 380,
@@ -128,14 +158,17 @@ def line(df: pd.DataFrame, x: str, y: str, title: str | None = None, height: int
 
 
 def add_line(fig: go.Figure, df: pd.DataFrame, x: str, y: str, area: bool = False,
-             markers: bool = True, color: str | None = None, name: str = "") -> None:
+             markers: bool = True, color: str | None = None, name: str = "",
+             currency: bool = False) -> None:
     color = color or PALETTE["primary"]
     fig.add_scatter(
         x=df[x], y=df[y], mode="lines+markers" if markers else "lines", name=name,
         line=dict(color=color, width=2.5), marker=dict(size=6),
         fill="tozeroy" if area else None,
         fillcolor=_rgba(color, 0.12) if area else None,
-        hovertemplate=f"{name}: %{{y}}<extra></extra>")
+        customdata=money_labels(df[y]) if currency else None,
+        hovertemplate=(f"{name}: %{{customdata}}<extra></extra>" if currency
+                       else f"{name}: %{{y}}<extra></extra>"))
 
 
 def multi_line(df: pd.DataFrame, x: str, series_col: str, y: str, title: str | None = None,
@@ -161,7 +194,7 @@ def fy_lines(df: pd.DataFrame, x: str, series_col: str, y: str, x_order: list[st
     for i, key in enumerate(sorted(df[series_col].unique())):
         g = df[df[series_col] == key]
         add_line(fig, g, x, y, color=CATEGORICAL_SEQUENCE[i % len(CATEGORICAL_SEQUENCE)],
-                 name=str(key))
+                 name=str(key), currency=currency)
     fig = _base_layout(fig, height, title, int_y=not currency)
     fig.update_xaxes(type="category", categoryorder="array", categoryarray=x_order)
     if currency:
@@ -222,16 +255,21 @@ def trend_chart(df: pd.DataFrame, x: str, value_col: str, cumulative_col: str | 
     hands the period back exactly as written ("2026-06") instead of re-parsing it
     into a date.
     """
-    money = "$%{y:,.0f}" if currency else "%{y:,.0f}"
+    # Money hovers read the tiles' own notation ($1.25M) rather than Plotly's
+    # raw number: the same amount must not read two ways in one report.
+    value = "%{customdata}" if currency else "%{y:,.0f}"
     fig = go.Figure()
     fig.add_bar(x=df[x], y=df[value_col], name=value_col,
                 marker_color=PALETTE["primary"],
-                hovertemplate=f"%{{x}}<br>{value_col}: {money}<extra></extra>")
+                customdata=money_labels(df[value_col]) if currency else None,
+                hovertemplate=f"%{{x}}<br>{value_col}: {value}<extra></extra>")
     if cumulative_col and cumulative_col in df.columns:
         fig.add_scatter(x=df[x], y=df[cumulative_col], name=cumulative_col, yaxis="y2",
                         mode="lines+markers", line=dict(color=PALETTE["good"], width=2.5),
                         marker=dict(size=6),
-                        hovertemplate=f"%{{x}}<br>{cumulative_col}: {money}<extra></extra>")
+                        customdata=(money_labels(df[cumulative_col]) if currency
+                                    else None),
+                        hovertemplate=f"%{{x}}<br>{cumulative_col}: {value}<extra></extra>")
     _base_layout(fig, height, title, showlegend=True, int_y=not currency)
     fig.update_xaxes(type="category")
     axis_fmt = dict(tickprefix="$", tickformat="~s") if currency else dict(tickformat=",d")

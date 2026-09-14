@@ -23,9 +23,18 @@ _CHECK_HELP = {
     ),
     "eos_path_without_tag": (
         "Waves on the AV36/AV36P/AV52 - EOS migration path whose account carries no "
-        "generation tag on any wave. In scope through the path — they still count "
-        "on the EOS Migration dashboard — but no generation can be reported, so they "
-        "are never folded into Gen-1 or Gen-2. Add the tag at source to fix it."
+        "generation tag on any wave. In scope through the path, but with no "
+        "generation to report — so they are never folded into Gen-1 or Gen-2, and "
+        "EOS reporting leaves them out altogether. Add the tag at source to fix it."
+    ),
+    "eos_unclassified": (
+        "Accounts in EOS scope by migration path that carry no 'AVS Migration - "
+        "Gen1/Gen2' tag on any wave, one row each. EOS is reported by generation, "
+        "so these accounts are EXCLUDED from every EOS total, chart, calculation "
+        "and insight — they would otherwise make the combined figure disagree "
+        "with the sum of its two generation blocks. They are not discarded: they "
+        "remain All AVS Migrations accounts, they are listed here, and adding the "
+        "tag at source brings them straight into EOS reporting."
     ),
     "bad_date": (
         "Values in a date column that could not be read as a date. Excel serial "
@@ -137,6 +146,7 @@ def _apply_window(fact: pd.DataFrame, date_filter: dict | None) -> pd.DataFrame:
 _LABELS = {
     "tagged_without_eos_path": "Tagged Gen-1/Gen-2, no EOS path",
     "eos_path_without_tag": "EOS path, no generation tag",
+    "eos_unclassified": "EOS accounts excluded from EOS reporting (no generation tag)",
     "bad_date": "Unreadable date values",
     "date_order": "Dates out of order",
     "bad_segment": "Invalid Customer Segment",
@@ -162,6 +172,14 @@ def _collect(ctx, fact: pd.DataFrame, scoped: pd.DataFrame) -> list[tuple[str, p
     # Classification: always over the whole file, since membership is per account.
     for key, frame in segments.eos_consistency(fact).items():
         checks.append((_LABELS[key], frame))
+
+    # The accounts EOS reporting cannot include, one row each.  Listed as their
+    # own check because that exclusion is a reporting consequence, not just a
+    # missing cell: this page is where they are accounted for.
+    untagged = segments.population(fact, segments.CAT_EOS_UNCLASSIFIED)
+    if not untagged.empty:
+        untagged = untagged.groupby("tpid_key", as_index=False).first()
+    checks.append((_LABELS["eos_unclassified"], untagged))
 
     # Data-quality flags raised during cleaning, resolved back to their rows.
     cols = [c for c in ("tpid", "customer_name", "phase", "migration_path",

@@ -259,13 +259,38 @@ def _sections(at: AppTest) -> list[str]:
             for m in at.markdown if 'class="avs-section"' in m.value]
 
 
-@pytest.mark.parametrize("page", ["category_dashboard.eos_all",
-                                  "category_dashboard.all_avs",
+@pytest.mark.parametrize("page", ["category_dashboard.all_avs",
                                   "category_dashboard.avs_native"])
 def test_broad_categories_carry_a_regional_breakdown(page):
+    """The EOS page carries it too, when the file has generation-tagged accounts;
+    the bundled sample has none, so it is covered by the report tests instead."""
     at = _render(page, "Customer (deduplicated)")
     assert not at.exception, f"{page} raised: {at.exception}"
     assert "Regional breakdown" in _sections(at), _sections(at)
+
+
+@pytest.mark.parametrize("page", ["category_dashboard.all_avs",
+                                  "category_dashboard.avs_native"])
+def test_excluded_accounts_are_reported_apart_from_the_pipeline(page):
+    """Blocked, deferred and cancelled accounts get a section of their own."""
+    at = _render(page, "Customer (deduplicated)")
+    assert not at.exception, f"{page} raised: {at.exception}"
+    assert "Accounts outside the reported pipeline" in _sections(at), _sections(at)
+
+
+@pytest.mark.parametrize("page", ["category_dashboard.eos_all",
+                                  "category_dashboard.eos_gen1"])
+def test_an_empty_eos_page_names_the_untagged_accounts_it_excludes(page):
+    """The sample's only EOS-path account carries no generation tag.
+
+    EOS is reported by generation, so it is excluded — and the page has to say
+    so, or an empty EOS report reads as a broken one.
+    """
+    at = _render(page, "Customer (deduplicated)")
+    assert not at.exception, f"{page} raised: {at.exception}"
+    text = " ".join(m.value for m in at.markdown)
+    assert "no" in text and "Gen1/Gen2" in text, text[-400:]
+    assert "Data Inconsistency" in text
 
 
 def test_offering_and_target_lives_only_on_the_avs_native_page():

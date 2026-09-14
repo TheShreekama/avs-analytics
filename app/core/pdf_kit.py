@@ -26,7 +26,7 @@ from reportlab.platypus import (BaseDocTemplate, Flowable, Frame, Image, NextPag
                                 TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-from ..config import APP_NAME, APP_VERSION, PALETTE
+from ..config import PALETTE
 
 PORTRAIT = "portrait"
 LANDSCAPE = "landscape"
@@ -161,11 +161,14 @@ class ReportDoc(BaseDocTemplate):
     document that actually comes out, however much the content grows.
     """
 
-    def __init__(self, buf, header_title: str, **kw):
+    def __init__(self, buf, header_title: str, brand: str = "", **kw):
         super().__init__(buf, pagesize=A4, topMargin=_TOP_MARGIN,
                          bottomMargin=_BOTTOM_MARGIN, leftMargin=_MARGIN,
                          rightMargin=_MARGIN, **kw)
         self.header_title = header_title
+        # The running header names the report, never the application that
+        # rendered it: a circulated report is about its subject.
+        self.brand = brand or header_title
         self.total_pages = 0
         self._section = ""
         portrait_frame = Frame(_MARGIN, _BOTTOM_MARGIN, A4[0] - 2 * _MARGIN,
@@ -203,7 +206,7 @@ class ReportDoc(BaseDocTemplate):
         canvas.rect(0, h - 0.95 * cm, w, 0.95 * cm, fill=1, stroke=0)
         canvas.setFillColor(colors.white)
         canvas.setFont("Helvetica-Bold", 9)
-        canvas.drawString(_MARGIN, h - 0.62 * cm, APP_NAME)
+        canvas.drawString(_MARGIN, h - 0.62 * cm, self.brand)
         canvas.setFont("Helvetica", 8)
         canvas.drawRightString(w - _MARGIN, h - 0.62 * cm, self.header_title)
 
@@ -213,8 +216,7 @@ class ReportDoc(BaseDocTemplate):
         canvas.setFillColor(MUTED)
         canvas.setFont("Helvetica", 7)
         canvas.drawString(_MARGIN, 0.68 * cm,
-                          f"{APP_NAME} v{APP_VERSION} · generated "
-                          f"{datetime.now():%d %b %Y %H:%M}")
+                          f"Generated {datetime.now():%d %b %Y %H:%M}")
         if self._section:
             canvas.drawCentredString(w / 2, 0.68 * cm, self._section)
         total = f" of {self.total_pages}" if self.total_pages else ""
@@ -222,7 +224,7 @@ class ReportDoc(BaseDocTemplate):
         canvas.restoreState()
 
 
-def build(make_story, header_title: str, doc_title: str) -> bytes:
+def build(make_story, header_title: str, doc_title: str, brand: str = "") -> bytes:
     """Render the document, resolving contents page numbers and the page total.
 
     ``make_story`` is called once per build and must return a *fresh* list of
@@ -234,8 +236,8 @@ def build(make_story, header_title: str, doc_title: str) -> bytes:
     length.
     """
     def _doc(buf) -> ReportDoc:
-        return ReportDoc(buf, header_title, title=doc_title, author=APP_NAME,
-                         subject=header_title)
+        return ReportDoc(buf, header_title, brand=brand or doc_title,
+                         title=doc_title, author=doc_title, subject=header_title)
 
     probe = _doc(io.BytesIO())
     probe.multiBuild(make_story())

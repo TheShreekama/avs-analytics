@@ -11,8 +11,10 @@ Three orthogonal classifications drive every dashboard:
   waves carries an "AVS Migration - Gen1" or "AVS Migration - Gen2" tag; that tag
   also fixes its generation.  With no generation tag on any wave, the offering
   falls back to deciding it: a migration path (or offering) reading
-  "AV36/AV36P/AV52 - EOS" puts the account in scope with no generation.  There is
-  one dataset: nothing here depends on a second worksheet.
+  "AV36/AV36P/AV52 - EOS" puts the account in scope with no generation — and
+  **the EOS reports leave it out**, because EOS is reported by generation.  It
+  is still an AVS migration and is still listed under Data Inconsistency.  There
+  is one dataset: nothing here depends on a second worksheet.
 * **Generation** — Gen-1 / Gen-2 / Unclassified, decided per **TPID** from the Tags
   of *all* its waves (host SKUs as a fallback) — never per wave, never by name.
 
@@ -47,10 +49,13 @@ CATEGORY_LABELS = {
 }
 
 #: EOS accounts in scope through their migration path with no generation tag.
-#: They are *inside* CAT_EOS_ALL and counted there; they no longer get a report
-#: of their own, because the Data Inconsistency page is where that disagreement
-#: belongs.  ``population(fact, CAT_EOS_UNCLASSIFIED)`` still selects them, and
-#: this is the label a drill-down row carries.
+#: They are **outside** every EOS report: an account whose generation nobody
+#: recorded cannot be reported as Gen-1 or Gen-2, and counting it in the
+#: combined total alone would make that total disagree with its own parts.  They
+#: are not discarded — ``population(fact, CAT_EOS_UNCLASSIFIED)`` still selects
+#: them, they stay inside All AVS Migrations, and Data Inconsistency lists them
+#: so the missing tag can be fixed at source.  This is the label a drill-down
+#: row carries.
 UNCLASSIFIED_LABEL = "EOS Migration — No generation tag"
 
 # --------------------------------------------------------------------------- #
@@ -253,7 +258,14 @@ def population(fact: pd.DataFrame, category: str) -> pd.DataFrame:
         # generation to report — kept visible, never folded into Gen-1 or Gen-2.
         return onboarding[onboarding["is_eos_population"].astype(bool)
                           & (onboarding["generation"] == GEN_UNCLASSIFIED)]
-    return onboarding[onboarding["is_eos_population"].astype(bool)]
+    # CAT_EOS_ALL — Gen-1 and Gen-2 only.  An account in EOS scope by migration
+    # path with no generation tag on any wave is deliberately **not** here: EOS
+    # is reported by generation, so an ungenerationed account would inflate the
+    # combined total past the sum of its two blocks and land in neither.  It
+    # keeps its place in All AVS Migrations and is listed under Data
+    # Inconsistency; see ``UNCLASSIFIED_LABEL``.
+    return onboarding[onboarding["is_eos_population"].astype(bool)
+                      & onboarding["generation"].isin((GEN_1, GEN_2))]
 
 
 def category_summary(fact: pd.DataFrame) -> pd.DataFrame:

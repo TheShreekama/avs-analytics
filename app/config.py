@@ -58,6 +58,10 @@ STATUS_COLORS = {
     "Delayed": "#D97706",
     "Blocked": "#C4314B",
     "Cancelled": "#8A8886",
+    # The states the reports exclude read at a glance: deferred is amber
+    # (paused, recoverable), cancelled grey (gone), "Other" neutral.
+    "Deferred": "#D97706",
+    "Other": "#B0B8C4",
     "Not Started": "#B0B8C4",
     "In Progress": "#50B0E8",
     "Started": "#7AC2F0",

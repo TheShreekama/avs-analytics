@@ -68,6 +68,45 @@ ACR_CLAIMED = (
 # --------------------------------------------------------------------------- #
 # Sections
 # --------------------------------------------------------------------------- #
+ACR_PIPELINE = (
+    "The ACR carried by every ELIGIBLE WAVE — the approved, unblocked, "
+    "unfinished work, and therefore the commercial value still to land.\n"
+    "Eligibility is judged per WAVE, and all three conditions must hold: the "
+    "wave's latest Migration Status is NOT '7 - Completed', '5 - Deferred by "
+    "Customer' or '6 - Cancelled / Archived'; the nomination is APPROVED; and "
+    "its Current State does NOT contain 'Blocked'. Any single exclusion drops "
+    "the wave.\n"
+    "It is a snapshot of where things stand: the reporting period does not "
+    "narrow it. Distinct from ACR Claimed, which is value already realised by "
+    "waves that ended inside the period — a wave is in one or the other, never "
+    "both."
+)
+
+NODES_PLANNED = (
+    "The deployment still to come: the sum of TOTAL CORES over the same "
+    "eligible waves the ACR Pipeline is built from — status not completed, "
+    "deferred or cancelled; nomination approved; Current State not blocked.\n"
+    "Reported as NODES because that is what the AVS motions deploy, from the "
+    "Total Cores column that records them. Read against Hosts Migrated, which "
+    "is the deployment already delivered.\n"
+    "Shown on the EOS reports only — that programme is the one that plans a "
+    "node refresh."
+)
+
+EXCLUDED_ACCOUNTS = (
+    "Accounts whose state is neither On-Track nor Completed: blocked, "
+    "deferred, cancelled / archived, or waiting on a follow-up.\n"
+    "They are reported HERE AND NOWHERE ELSE. None of them is counted in the "
+    "headline tiles, the trends, the pipeline chart or the regional cut, and "
+    "none of those numbers appears in this section — every account resolves to "
+    "exactly one state, so the two cuts partition the population with nothing "
+    "double-counted and nothing dropped.\n"
+    "The stated reason is read from Migration Status for cancelled and "
+    "deferred accounts — the column that took them out — and from Current "
+    "State for the rest, which is where the reason lives. Nothing is inferred: "
+    "an account with neither reads 'Not stated'."
+)
+
 EXECUTIVE_SUMMARY = (
     "Headline numbers for this migration category over the selected reporting "
     "period. Every tile has its own ⓘ, and 'Records behind these tiles' opens the "
@@ -288,4 +327,138 @@ EOS_MATRIX = (
     "Each fiscal year closes with its own TOTAL column, summing that year's "
     "months. Every measure places a TPID in exactly one month, so a year's "
     "total is the sum of its months with nothing double-counted."
+)
+
+
+# --------------------------------------------------------------------------- #
+# The methodology printed inside the reports themselves
+# --------------------------------------------------------------------------- #
+#: "Methodology & logic" as (heading, paragraphs), shared by the PDF, the HTML
+#: report and the Methodology page, so the three cannot document the same rule
+#: three different ways.  ``**bold**`` markers are rendered by both exporters.
+#:
+#: This describes the implementation, not an intention: every rule below is one
+#: a function in ``app/core`` actually applies, named so a reader can go and
+#: check it.
+REPORT_METHODOLOGY: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Accounts, waves and the latest wave", (
+        "An **account is a TPID**, and a TPID can hold several waves "
+        "(Wave-1, Wave-2 …). Account names are never used for matching — the "
+        "same account is spelled differently between source systems.",
+        "A TPID's **latest wave** is its highest wave number (ties broken by "
+        "creation date), and its **Wave-1** is its lowest. Each field is read "
+        "from the wave that answers for it: current status, region and stage "
+        "from the latest wave; the nomination approval date from Wave-1; "
+        "**Total ACR summed across every wave**.",
+        "Every unique-TPID metric counts an account **once**, however many "
+        "waves it has, so no multi-wave account is ever double-counted.",
+    )),
+    ("On-Track vs. Completed — the account classification", (
+        "A **wave** is on track when both halves hold: its Migration Status is "
+        "one of the four in-flight codes (**1 - Validating Commitment & Initial "
+        "Scope**, **2 - Executing Pre-Requisites**, **3 - Finalize Scope**, "
+        "**4 - Executing Migration**) **and** its Current State reads *On "
+        "Track*. A blank Current State falls back to the status alone.",
+        "An account is **On-Track when ANY of its waves is on track** — not "
+        "only its latest one. Work still running on an earlier wave is work "
+        "still running.",
+        "An account is **Completed only when both** conditions hold: its "
+        "**latest wave is 7 - Completed**, **and none of its waves is on "
+        "track**. An account whose latest wave has completed while another wave "
+        "is on track is therefore classified **On-Track**, not Completed.",
+        "The remaining precedence, applied to the latest wave once the "
+        "on-track test has failed: **Cancelled / Archived**, then **Blocked** "
+        "(Current State contains *Blocked*), then **Deferred** "
+        "(**5 - Deferred by Customer**), then **Other** (waiting on a "
+        "follow-up, or a state the export does not name).",
+        "Every account resolves to **exactly one** state, so the reported cut "
+        "and the excluded cut partition the population: nothing is counted "
+        "twice and nothing is lost.",
+    )),
+    ("Accounts outside the reported pipeline", (
+        "Blocked, deferred, cancelled / archived and waiting accounts are "
+        "**reported in their own section and nowhere else**. They are not in "
+        "the headline metrics, not in the state chart, not in the trends and "
+        "not in the regional cut.",
+        "**New Engagements is the one deliberate exception**, and it is not an "
+        "exclusion at all: an account that was nominated and approved inside the "
+        "period is counted there whatever became of it afterwards, because "
+        "intake is a historical fact and a figure that moved when an account got "
+        "blocked would be reporting something else. No metric that reads an "
+        "account's *state* — completions, on-track accounts, the state chart, "
+        "ACR Pipeline, Nodes Deployment Planned — counts them.",
+        "That section reports what the data supports about them: how many "
+        "accounts, the ACR they hold up, their state distribution, their WW "
+        "Region distribution, the reason each one carries (Migration Status "
+        "for cancelled and deferred accounts, since that is the column that "
+        "took them out; Current State for the rest) and how many waves sit "
+        "behind them. No reason is inferred — a blank reads *Not stated*.",
+    )),
+    ("EOS reporting — Gen-1 and Gen-2 only", (
+        "An account is in **EOS scope** when any of its waves carries an "
+        "**AVS Migration - Gen1** or **AVS Migration - Gen2** tag; that tag "
+        "also fixes the generation, and Gen-1 wins if both appear. Failing any "
+        "tag, an **AV36/AV36P/AV52 - EOS** migration path or offering brings "
+        "the account into scope with **no generation**.",
+        "**EOS reports cover Gen-1 and Gen-2 only.** An account in scope by "
+        "path with no generation tag is excluded from every EOS total, chart, "
+        "calculation and insight — EOS is reported by generation, and an "
+        "ungenerationed account would make the combined figure disagree with "
+        "the sum of its two blocks.",
+        "Those accounts are **not discarded**: they remain AVS migrations, and "
+        "they are listed under **Data Inconsistency** so the missing tag can be "
+        "fixed at source, after which they report like any other EOS account.",
+    )),
+    ("ACR Pipeline", (
+        "**ACR Pipeline** is the ACR of every **eligible wave** — the approved, "
+        "unblocked, unfinished work. Eligibility is judged **per wave**, and a "
+        "wave must satisfy **all three** conditions:",
+        "1. its latest **Migration Status is not** *7 - Completed*, "
+        "*5 - Deferred by Customer* or *6 - Cancelled / Archived*;",
+        "2. the **nomination is approved**; and",
+        "3. its **Current State does not contain *Blocked***.",
+        "Any single exclusion drops the wave. The figure is a snapshot of "
+        "where things stand — the reporting period does not narrow it — and it "
+        "is deliberately separate from **ACR Claimed**, which is ACR already "
+        "realised by waves that ended inside the period.",
+    )),
+    ("Nodes Deployment Planned (EOS reports)", (
+        "**Nodes Deployment Planned** sums the **Total Cores** column over the "
+        "**same eligible waves** the ACR Pipeline is built from — the identical "
+        "three conditions, applied per wave.",
+        "It is reported on the **EOS reports only**, and presented as "
+        "**Nodes**: the AVS motions deploy nodes, and Total Cores is the column "
+        "that records them. It answers what is still to be deployed, where "
+        "*Hosts Migrated* answers what already has been.",
+    )),
+    ("The other measures", (
+        "**New Engagements** — unique TPIDs whose **Wave-1** nomination "
+        "approval date falls in the period.",
+        "**Migrations Completed** — unique TPIDs classified Completed by the "
+        "rule above, dated by their latest wave's Actual End Date.",
+        "**Hosts / Cores Migrated** — the **sum of Total Cores over completed "
+        "wave records** in the period, each source record counted once. "
+        "Deliberately a wave-level measure and not an account count: a "
+        "completed wave deployed its nodes whatever the account's overall "
+        "state now is.",
+        "**ACR Claimed** — the ACR of **every wave** whose Actual End Date "
+        "falls inside the period, so one account can claim in several months; a "
+        "wave that never ended never claims.",
+        "**Cumulative** is the running total of the months displayed, computed "
+        "from the same population as the monthly values.",
+    )),
+    ("Periods, regions and money", (
+        "The reporting period narrows the period-bound measures only. "
+        "**On-Track, ACR Pipeline, Nodes Deployment Planned, the current "
+        "pipeline, the regional cut and the excluded-accounts section are "
+        "snapshots** and say so under their own titles.",
+        "The **regional breakdown** counts accounts at their latest wave — one "
+        "row per TPID — over the stages a migration progresses through (the "
+        "four in-flight ones plus Completed). It is drawn as a **single "
+        "heatmap**: the stacked bar beside it carried the same numbers, and one "
+        "reading of a figure is better than two.",
+        "**Money is written in K and M** — $12.5K, $125K, $1.25M — in tiles, "
+        "tables, chart axes and chart tooltips alike, so the same amount reads "
+        "the same way wherever it appears.",
+    )),
 )

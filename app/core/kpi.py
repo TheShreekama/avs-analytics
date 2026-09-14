@@ -6,10 +6,17 @@ Every metric here follows the rules in the requirements document to the letter:
   qualifying TPID exactly once, no matter how many waves it has.
 * **Hosts migrated** is deliberately *not* a TPID count: it sums ``Total Cores``
   over the qualifying wave records, each counted once.
-* **Migration completion always evaluates the latest wave** of a TPID.  A TPID
-  with Wave 7 completed and Wave 8 outstanding is not a completed migration.
-* **On-Track** is read from the *Current State* column of the latest wave, not
-  inferred from "not finished": a blocked or waiting account is not on track.
+* **Migration completion evaluates the latest wave *and* every other wave.**  A
+  TPID is Completed only when its latest wave is completed **and none** of its
+  waves is On Track; a TPID with Wave 7 completed and Wave 8 outstanding is not
+  a completed migration, and neither is one whose latest wave completed while an
+  earlier wave is still running.
+* **On-Track** is read from the *Current State* column, not inferred from "not
+  finished": a blocked or waiting account is not on track.  **Any** On-Track
+  wave makes the account On-Track, whatever its latest wave says.
+* **Accounts that are neither** — blocked, deferred, cancelled/archived or
+  waiting — are reported on their own (:func:`excluded_accounts`) and never
+  mixed into the On-Track/Completed numbers.
 * **ACR claimed** is wave-level and period-bound: every wave whose *Actual End
   Date* falls in the window contributes its ACR, so one account can claim in
   several months.
@@ -38,14 +45,25 @@ DRILLDOWN_COLUMNS = [
 ]
 
 COMPLETED_CODE = 7
+DEFERRED_CODE = 5
+CANCELLED_CODE = 6
 STATE_ON_TRACK = "On-Track"
 STATE_COMPLETED = "Completed"
 STATE_CANCELLED = "Cancelled"
+STATE_DEFERRED = "Deferred"
+STATE_BLOCKED = "Blocked"
 STATE_OTHER = "Other"
 
 #: The only two states reported on the pipeline chart.  Cancelled accounts and
 #: accounts sitting in a blocked/waiting state are deliberately not shown there.
 REPORTED_STATES = (STATE_ON_TRACK, STATE_COMPLETED)
+
+#: Everything the primary reports leave out: an account in one of these states
+#: is neither delivering nor delivered, so it is reported separately (see
+#: :func:`excluded_accounts`) rather than padding the On-Track/Completed cut.
+#: The two sets are complementary and never overlap — every account resolves to
+#: exactly one state — so nothing is counted twice and nothing is dropped.
+EXCLUDED_STATES = (STATE_BLOCKED, STATE_DEFERRED, STATE_CANCELLED, STATE_OTHER)
 
 #: "On Track", "On-Track", "on  track" — the Current State column is free text.
 _ON_TRACK_PATTERN = r"on\s*-?\s*track"
@@ -94,12 +112,21 @@ class Metric:
 # Wave selection
 # --------------------------------------------------------------------------- #
 def _ordered(fact: pd.DataFrame) -> pd.DataFrame:
-    """Rows sorted so that a TPID's waves run first → last."""
+    """Rows sorted so that a TPID's waves run first → last.
+
+    A frame with no wave number at all — the customer rollup, which is already
+    one row per account — sorts on the creation date alone rather than failing:
+    first and latest wave of a one-row account are that row either way.
+    """
     df = fact.copy()
     if "tpid_key" not in df.columns:
         df["tpid_key"] = segments.tpid_key(df)
-    df["_wave_order"] = df["wave_num"].fillna(9_999)
-    df["_date_order"] = df["created_date"].fillna(pd.Timestamp.max)
+    waves = df["wave_num"] if "wave_num" in df.columns else pd.Series(
+        pd.NA, index=df.index, dtype="Float64")
+    created = df["created_date"] if "created_date" in df.columns else pd.Series(
+        pd.NaT, index=df.index)
+    df["_wave_order"] = waves.fillna(9_999)
+    df["_date_order"] = created.fillna(pd.Timestamp.max)
     return df.sort_values(["tpid_key", "_wave_order", "_date_order"])
 
 
@@ -152,15 +179,18 @@ def new_engagements(fact: pd.DataFrame, start=None, end=None,
 
 def migrations_completed(fact: pd.DataFrame, start=None, end=None,
                          lasts: pd.DataFrame | None = None) -> Metric:
-    """Unique TPIDs whose **latest** wave is completed, dated by its actual end.
+    """Unique TPIDs classified **Completed**, dated by their latest wave's end.
 
-    A TPID whose last wave is still running is not counted, even when earlier
-    waves are complete.
+    Completed means both halves of the rule: the account's latest wave is
+    completed **and none** of its waves is On Track.  A TPID whose last wave is
+    still running is not counted, even when earlier waves are complete; nor is
+    one whose latest wave completed while an earlier wave is still on track —
+    that account is still delivering, and is counted as On-Track instead.
     """
     if fact.empty:
         return Metric(0, "customers")
     lasts = latest_wave(fact) if lasts is None else lasts
-    done = lasts[is_completed(lasts)]
+    done = lasts[account_state(fact, lasts) == STATE_COMPLETED]
     hit = done[in_window(done["actual_end_date"], start, end)]
     return Metric(len(hit), "customers", hit)
 
@@ -267,14 +297,16 @@ def acr_claimed(fact: pd.DataFrame, start=None, end=None) -> Metric:
 
 def on_track_accounts(fact: pd.DataFrame,
                       lasts: pd.DataFrame | None = None) -> Metric:
-    """Accounts whose **latest** wave reads On-Track in the Current State column.
+    """Accounts with **any** wave reading On-Track in the Current State column.
 
     Independent of the reporting period: this is where the pipeline stands now.
+    The record behind each account is the *latest of its on-track waves* — the
+    wave the work is actually happening on — so the drill-down shows the stage
+    the account is in rather than a completed wave it has already left behind.
     """
     if fact.empty:
         return Metric(0, "customers")
-    lasts = latest_wave(fact) if lasts is None else lasts
-    rows = lasts[state_of(lasts) == STATE_ON_TRACK]
+    rows = on_track_wave(fact, lasts=lasts)
     return Metric(len(rows), "customers", rows)
 
 
@@ -582,45 +614,149 @@ def reported_stages(df: pd.DataFrame) -> pd.Series:
     return (in_flight(df) | is_completed(df)).fillna(False)
 
 
+def is_on_track_wave(df: pd.DataFrame) -> pd.Series:
+    """Per **wave**: is this wave on track right now?
+
+    Both halves have to hold, exactly as the pipeline has always read them:
+
+    * the wave's Migration Status is one of the four in-flight codes (1-4) — a
+      completed, deferred or cancelled wave can never be on track; and
+    * its Current State reads *On Track* / *On-Track*.
+
+    A wave whose Current State is blank falls back to the status alone, so a
+    file that never got that column mapped still reports a pipeline rather than
+    an empty one.
+    """
+    if df.empty:
+        return pd.Series(dtype=bool)
+    raw = _current_state(df)
+    unstated = raw.isna() | raw.eq("")
+    reads_on_track = raw.str.contains(_ON_TRACK_PATTERN, case=False, na=False,
+                                      regex=True)
+    return (in_flight(df) & (reads_on_track | unstated)).fillna(False)
+
+
+def _current_state(df: pd.DataFrame) -> pd.Series:
+    if "current_state" not in df.columns:
+        return pd.Series(pd.NA, index=df.index, dtype="string")
+    return df["current_state"].astype("string").str.strip()
+
+
+def is_blocked(df: pd.DataFrame) -> pd.Series:
+    """Current State says the work is blocked ("Blocked - Customer")."""
+    if df.empty:
+        return pd.Series(dtype=bool)
+    return _current_state(df).str.contains("blocked", case=False, na=False).fillna(False)
+
+
+def is_deferred(df: pd.DataFrame) -> pd.Series:
+    """Migration Status is "5 - Deferred by Customer" (by code, or by label)."""
+    if df.empty:
+        return pd.Series(dtype=bool)
+    code = pd.to_numeric(df.get("migration_status_code"), errors="coerce")
+    label = df.get("migration_status_label", pd.Series("", index=df.index))
+    return (code.eq(DEFERRED_CODE)
+            | label.astype("string").str.contains("defer", case=False, na=False)
+            ).fillna(False)
+
+
+def is_cancelled(df: pd.DataFrame) -> pd.Series:
+    """Migration Status is "6 - Cancelled / Archived" (by code, label or status)."""
+    if df.empty:
+        return pd.Series(dtype=bool)
+    code = pd.to_numeric(df.get("migration_status_code"), errors="coerce")
+    label = df.get("migration_status_label", pd.Series("", index=df.index))
+    out = (code.eq(CANCELLED_CODE)
+           | label.astype("string").str.contains("cancel|archiv", case=False,
+                                                 regex=True, na=False))
+    if "eos_status" in df.columns:
+        out = out | df["eos_status"].eq(STATE_CANCELLED)
+    return out.fillna(False)
+
+
+def _keys(df: pd.DataFrame) -> pd.Series:
+    return df["tpid_key"] if "tpid_key" in df.columns else segments.tpid_key(df)
+
+
+def account_state(fact: pd.DataFrame,
+                  lasts: pd.DataFrame | None = None) -> pd.Series:
+    """The state of each **account**, aligned to the one-row-per-TPID *lasts*.
+
+    Read across every wave the account owns, not just its last one — which is
+    what separates an account that has finished from one whose final wave
+    happens to be finished:
+
+    1. **On-Track** — **any** wave of the account is on track
+       (:func:`is_on_track_wave`).  This wins over everything else: an account
+       with Wave 7 completed and Wave 8 on track is still delivering, and so is
+       one whose *latest* wave completed while an earlier wave runs on.
+    2. **Completed** — the latest wave is ``7 - Completed`` **and** no wave is
+       on track.  Both conditions, never one.
+    3. **Cancelled** — the latest wave resolved to cancelled / archived.
+    4. **Blocked** — the latest wave's Current State reads *Blocked*.
+    5. **Deferred** — the latest wave is ``5 - Deferred by Customer``.
+    6. **Other** — everything else: waiting on a follow-up, or a state the
+       export does not name.
+
+    Every account resolves to exactly one state, so the reported cut
+    (On-Track + Completed) and the excluded cut (:data:`EXCLUDED_STATES`)
+    partition the population with nothing double-counted and nothing lost.
+    """
+    lasts = latest_wave(fact) if lasts is None else lasts
+    if lasts.empty:
+        return pd.Series(dtype="object")
+    on_track_by_account = (is_on_track_wave(fact).groupby(_keys(fact)).any()
+                           if not fact.empty else pd.Series(dtype=bool))
+    any_on_track = (_keys(lasts).map(on_track_by_account)
+                    .fillna(False).astype(bool))
+
+    # Assigned in reverse precedence: each line overrides the ones above it.
+    out = pd.Series(STATE_OTHER, index=lasts.index, dtype="object")
+    out[is_deferred(lasts)] = STATE_DEFERRED
+    out[is_blocked(lasts)] = STATE_BLOCKED
+    out[is_cancelled(lasts)] = STATE_CANCELLED
+    out[is_completed(lasts)] = STATE_COMPLETED
+    out[any_on_track.to_numpy()] = STATE_ON_TRACK
+    return out
+
+
 def state_of(df: pd.DataFrame) -> pd.Series:
-    """Current state of one-row-per-TPID latest-wave records.
+    """The state of a frame read **on its own rows**, with no cross-wave view.
 
-    Read from the latest wave, in this order:
-
-    1. **Completed** — the wave's Migration Status is "7 - Completed".
-    2. **Cancelled** — the wave resolved to a cancelled/archived status.
-    3. **On-Track** — BOTH conditions hold:
-       * Migration Status is one of the four in-flight codes — "1 - Validating
-         Commitment & Initial Scope", "2 - Executing Pre-Requisites",
-         "3 - Finalize Scope", "4 - Executing Migration"; and
-       * Current State reads "On Track"/"On-Track".
-    4. **Other** — everything else.  A wave deferred ("5 - Deferred by
-       Customer") is not on track however its Current State reads; nor is one
-       whose Current State says "Blocked - Customer" or "Waiting action on
-       follow up date" however its status reads.
-
-    A row whose Current State is blank falls back to the status alone, so a file
-    that never got that column mapped still reports a pipeline rather than an
-    empty one.
+    Kept for callers holding a single frame (a wave-level status distribution,
+    say).  Anything reporting an *account* uses :func:`account_state` instead,
+    because "is any other wave of this account on track" cannot be answered from
+    one row.  The taxonomy is the same: Completed → Cancelled → Blocked →
+    Deferred → On-Track → Other.
     """
     if df.empty:
         return pd.Series(dtype="object")
-    completed = is_completed(df)
-    cancelled = df.get("eos_status", pd.Series("", index=df.index)) \
-        .eq(STATE_CANCELLED).fillna(False)
-    moving = in_flight(df)
-
-    raw = (df["current_state"].astype("string").str.strip()
-           if "current_state" in df.columns
-           else pd.Series(pd.NA, index=df.index, dtype="string"))
-    unstated = raw.isna() | raw.eq("")
-    reads_on_track = raw.str.contains(_ON_TRACK_PATTERN, case=False, na=False, regex=True)
-
     out = pd.Series(STATE_OTHER, index=df.index, dtype="object")
-    out[moving & (reads_on_track | unstated)] = STATE_ON_TRACK
-    out[cancelled] = STATE_CANCELLED
-    out[completed] = STATE_COMPLETED
+    out[is_deferred(df)] = STATE_DEFERRED
+    out[is_blocked(df)] = STATE_BLOCKED
+    out[is_on_track_wave(df)] = STATE_ON_TRACK
+    out[is_cancelled(df)] = STATE_CANCELLED
+    out[is_completed(df)] = STATE_COMPLETED
     return out
+
+
+def on_track_wave(fact: pd.DataFrame,
+                  lasts: pd.DataFrame | None = None) -> pd.DataFrame:
+    """One row per on-track account: the **latest of its on-track waves**.
+
+    Not the account's latest wave — an account can be on track on Wave 8 while
+    Wave 9 is a completed follow-up — so the row shows the wave the work is
+    actually on, and with it the stage that wave has reached.
+    """
+    if fact.empty:
+        return fact
+    # Select first, then sort: only the on-track waves need ordering, and
+    # sorting the whole population to throw most of it away costs half a second
+    # on a 100k-wave portfolio.
+    rows = fact[is_on_track_wave(fact)]
+    if rows.empty:
+        return rows
+    return _ordered(rows).groupby("tpid_key", as_index=False, sort=False).last()
 
 
 def stage_labels(df: pd.DataFrame) -> tuple[pd.Series, list[tuple[str, str]]]:
@@ -655,18 +791,22 @@ def stage_labels(df: pd.DataFrame) -> tuple[pd.Series, list[tuple[str, str]]]:
 def by_state(fact: pd.DataFrame, lasts: pd.DataFrame | None = None,
              only: tuple[str, ...] | None = REPORTED_STATES
              ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Account count and ACR by current state, from each TPID's latest wave.
+    """Account count and ACR by current state, one row per TPID.
 
-    ``only`` restricts both the summary and the drill-down rows to the states
-    worth reporting — On-Track and Completed — so cancelled, blocked and waiting
-    accounts do not pad the chart.  Pass ``only=None`` for every state.
+    The state is :func:`account_state` — read across every wave — while the row
+    behind it stays the account's latest wave, which is the row that says where
+    the account is now.  ``only`` restricts both the summary and the drill-down
+    rows to the states worth reporting — On-Track and Completed — so cancelled,
+    blocked and waiting accounts do not pad the chart; they are reported on
+    their own through :func:`excluded_accounts`.  Pass ``only=None`` for every
+    state.
     """
     if lasts is None:
         lasts = latest_wave(fact) if not fact.empty else fact
     if lasts.empty:
         return pd.DataFrame(columns=["category", "count", "acr"]), lasts
     rows = lasts.copy()
-    rows["state"] = state_of(rows)
+    rows["state"] = account_state(fact, lasts)
     if only:
         rows = rows[rows["state"].isin(only)]
     if rows.empty:
@@ -681,16 +821,12 @@ def by_state(fact: pd.DataFrame, lasts: pd.DataFrame | None = None,
 
 def on_track_by_stage(fact: pd.DataFrame,
                       lasts: pd.DataFrame | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """On-track accounts grouped by their current migration stage, with ACR."""
-    if lasts is None:
-        lasts = latest_wave(fact) if not fact.empty else fact
-    if lasts.empty:
-        return pd.DataFrame(columns=["category", "count", "acr"]), lasts
-    rows = lasts.copy()
-    rows["state"] = state_of(rows)
-    rows = rows[rows["state"] == STATE_ON_TRACK].copy()
-    if rows.empty:
-        return pd.DataFrame(columns=["category", "count", "acr"]), rows
+    """On-track accounts grouped by the stage of their on-track wave, with ACR."""
+    rows = on_track_wave(fact, lasts=lasts)
+    if rows is None or rows.empty:
+        return pd.DataFrame(columns=["category", "count", "acr"]), (
+            rows if rows is not None else pd.DataFrame())
+    rows = rows.copy()
     rows["stage"] = (rows["migration_status_label"].astype("string")
                      .replace({"": pd.NA}).fillna("Unknown"))
     rows["_acr"] = pd.to_numeric(rows.get("total_acr"), errors="coerce")
@@ -699,6 +835,145 @@ def on_track_by_stage(fact: pd.DataFrame,
                    .rename(columns={"stage": "category"})
                    .sort_values("count", ascending=False))
     return summary.reset_index(drop=True), rows
+
+
+# --------------------------------------------------------------------------- #
+# Accounts the primary reports leave out
+# --------------------------------------------------------------------------- #
+def excluded_accounts(fact: pd.DataFrame, lasts: pd.DataFrame | None = None
+                      ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Accounts in none of the reported states, summarised and with their rows.
+
+    The complement of :func:`by_state`: every account whose
+    :func:`account_state` is blocked, deferred, cancelled/archived or otherwise
+    unreported.  Kept apart from the On-Track/Completed numbers on purpose —
+    these accounts are not delivering and not delivered, and folding them in
+    would overstate both — but kept *visible*, because an account nobody is
+    working on is exactly the one a programme review needs to see.
+
+    Returns ``(summary, rows)`` where summary is state × accounts × ACR and rows
+    are the accounts' latest waves carrying a ``state`` column.
+    """
+    if lasts is None:
+        lasts = latest_wave(fact) if not fact.empty else fact
+    if lasts.empty:
+        return pd.DataFrame(columns=["category", "count", "acr"]), lasts
+    rows = lasts.copy()
+    rows["state"] = account_state(fact, lasts)
+    rows = rows[rows["state"].isin(EXCLUDED_STATES)]
+    if rows.empty:
+        return pd.DataFrame(columns=["category", "count", "acr"]), rows
+    rows["_acr"] = pd.to_numeric(rows.get("total_acr"), errors="coerce")
+    summary = (rows.groupby("state", as_index=False)
+                   .agg(count=("tpid_key", "nunique"), acr=("_acr", "sum"))
+                   .rename(columns={"state": "category"})
+                   .sort_values("count", ascending=False))
+    return summary.reset_index(drop=True), rows
+
+
+def excluded_reasons(rows: pd.DataFrame, limit: int = 10) -> pd.DataFrame:
+    """Why each excluded account is out, as the export itself words it.
+
+    A cancelled or deferred account is named by its **Migration Status**, which
+    is the column that took it out ("6 - Cancelled / Archived"); everything else
+    is named by its **Current State**, which is where the reason lives
+    ("Blocked - Customer", "Waiting action on follow up date").  Reading Current
+    State for all of them would report a deferred account as "On Track", since
+    that is exactly the contradiction the two columns can carry.  Nothing is
+    inferred: an account with neither reads "Not stated".
+    """
+    if rows is None or rows.empty:
+        return pd.DataFrame(columns=["category", "count"])
+    state = _current_state(rows).replace({"": pd.NA})
+    status = (rows["migration_status_label"].astype("string").str.strip()
+              .replace({"": pd.NA, "Unknown": pd.NA})
+              if "migration_status_label" in rows.columns
+              else pd.Series(pd.NA, index=rows.index, dtype="string"))
+    named_by_status = (rows["state"].isin((STATE_CANCELLED, STATE_DEFERRED))
+                       if "state" in rows.columns
+                       else pd.Series(False, index=rows.index))
+    reason = state.where(~named_by_status.to_numpy(), status)
+    reason = reason.fillna(status).fillna("Not stated")
+    return (reason.value_counts().rename_axis("category")
+            .reset_index(name="count").head(limit))
+
+
+def wave_profile(fact: pd.DataFrame, rows: pd.DataFrame) -> pd.DataFrame:
+    """How many waves the given accounts carry — 1 wave, 2 waves, 3+.
+
+    A blocked account on its fifth wave is a different problem from one blocked
+    on its first, so the excluded cut reports the shape of the work behind it.
+    """
+    if fact.empty or rows is None or rows.empty:
+        return pd.DataFrame(columns=["category", "count"])
+    counts = fact.groupby(_keys(fact)).size()
+    waves = _keys(rows).map(counts).fillna(1).astype(int)
+    buckets = waves.map(lambda n: f"{n} wave" if n == 1 else
+                        (f"{n} waves" if n < 3 else "3+ waves"))
+    order = {"1 wave": 0, "2 waves": 1, "3+ waves": 2}
+    out = (buckets.value_counts().rename_axis("category").reset_index(name="count"))
+    return out.sort_values("category", key=lambda c: c.map(order).fillna(9)
+                           ).reset_index(drop=True)
+
+
+# --------------------------------------------------------------------------- #
+# Pipeline ahead: the waves still to deliver
+# --------------------------------------------------------------------------- #
+#: Migration Statuses that take a wave out of the forward pipeline: the work is
+#: done, the customer deferred it, or it was cancelled/archived.
+PIPELINE_EXCLUDED_CODES = (COMPLETED_CODE, DEFERRED_CODE, CANCELLED_CODE)
+
+
+def eligible_pipeline_waves(fact: pd.DataFrame) -> pd.Series:
+    """Waves still ahead of the programme — the pipeline's eligibility rule.
+
+    A wave counts only when **all three** hold, judged on the wave itself:
+
+    1. its (latest) Migration Status is **not** ``7 - Completed``,
+       ``5 - Deferred by Customer`` or ``6 - Cancelled / Archived``;
+    2. the nomination is **approved**; and
+    3. its Current State does **not** contain *Blocked*.
+
+    Any one exclusion drops the wave, so nothing blocked, deferred, cancelled,
+    delivered or unapproved is ever counted as pipeline.
+    """
+    if fact.empty:
+        return pd.Series(dtype=bool)
+    code = pd.to_numeric(fact.get("migration_status_code"), errors="coerce")
+    resolved = (code.isin(PIPELINE_EXCLUDED_CODES).fillna(False)
+                | is_completed(fact) | is_deferred(fact) | is_cancelled(fact))
+    approved = fact.get("is_approved")
+    approved = (pd.Series(False, index=fact.index) if approved is None
+                else approved.fillna(False).astype(bool))
+    return (~resolved & approved & ~is_blocked(fact)).fillna(False)
+
+
+def acr_pipeline(fact: pd.DataFrame) -> Metric:
+    """ACR carried by every eligible wave — the commercial value still to land.
+
+    Wave-level by construction (see :func:`eligible_pipeline_waves`), and not
+    period-bound: this is what the approved, unblocked, unfinished work is
+    worth as things stand.
+    """
+    if fact.empty:
+        return Metric(0.0, "ACR")
+    rows = _dedupe_records(fact[eligible_pipeline_waves(fact)])
+    total = float(pd.to_numeric(rows.get("total_acr"), errors="coerce").sum())
+    return Metric(total, "ACR", rows)
+
+
+def nodes_planned(fact: pd.DataFrame) -> Metric:
+    """Total Cores across every eligible wave, reported as **Nodes**.
+
+    The same eligibility rule as :func:`acr_pipeline`, summing the Total Cores
+    column instead of the ACR — the deployment still to come, as opposed to the
+    deployment already delivered that *Hosts Migrated* counts.
+    """
+    if fact.empty:
+        return Metric(0, "nodes")
+    rows = _dedupe_records(fact[eligible_pipeline_waves(fact)])
+    total = float(pd.to_numeric(rows.get("total_cores"), errors="coerce").sum())
+    return Metric(total, "nodes", rows)
 
 
 # --------------------------------------------------------------------------- #

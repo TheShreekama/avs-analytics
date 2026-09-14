@@ -16,8 +16,9 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.config import DIR_OTHER  # noqa: E402
-from app.core import (cleaning, kpi, loader, mapping, metrics, nulls, rollup,  # noqa: E402
-                      schema, segments)
+from app.core import (cleaning, glossary, kpi, loader, mapping, metrics,  # noqa: E402
+                      nulls, rollup, schema, segments)
+from app.core.html_report import esc  # noqa: E402
 
 # Wave rows: (TPID, name, task, wave, sku, status, approved, actual_end, cores, acr, path)
 _ROWS = [
@@ -418,19 +419,47 @@ def test_from_avs_stays_out_of_every_other_category_even_when_tagged(raw_frame):
     assert not built.loc[built["tpid"] == "600", "is_eos_population"].any()
 
 
-def test_combined_eos_tab_is_the_union_of_its_generations(fact):
-    """The EOS Migration tab holds Gen-1, Gen-2 and the untagged EOS accounts."""
+def test_combined_eos_tab_is_exactly_its_two_generations(fact):
+    """The EOS Migration tab holds Gen-1 and Gen-2 — and nothing else.
+
+    An account in EOS scope by migration path with no generation tag has no
+    generation to report, so it is left out of EOS reporting rather than
+    inflating a combined total past the sum of its own blocks.
+    """
     combined = segments.population(fact, segments.CAT_EOS_ALL)
     gen1 = segments.population(fact, segments.CAT_EOS_GEN1)
     gen2 = segments.population(fact, segments.CAT_EOS_GEN2)
     untagged = segments.population(fact, segments.CAT_EOS_UNCLASSIFIED)
 
-    assert _tpids(combined) == ["100", "200", "300", "400"]
-    assert set(_tpids(gen1)) | set(_tpids(gen2)) | set(_tpids(untagged)) == \
-        set(_tpids(combined))
-    # The parts do not overlap, so the combined count is their sum.
-    assert len(gen1) + len(gen2) + len(untagged) == len(combined)
+    assert _tpids(combined) == ["100", "200", "300"]
+    assert set(_tpids(gen1)) | set(_tpids(gen2)) == set(_tpids(combined))
+    # The parts do not overlap, so the combined count is their sum exactly.
+    assert len(gen1) + len(gen2) == len(combined)
     assert combined["is_eos_population"].all()
+    assert set(combined["generation"]) == {segments.GEN_1, segments.GEN_2}
+
+    # The untagged account is not discarded: still selectable, still an AVS
+    # migration, still reported on Data Inconsistency.
+    assert _tpids(untagged) == ["400"]
+    assert "400" in _tpids(segments.population(fact, segments.CAT_ALL_AVS))
+    assert "400" in _tpids(segments.eos_consistency(fact)["eos_path_without_tag"])
+
+
+def test_no_eos_number_counts_an_unclassified_account(fact):
+    """Totals, charts and metrics over the EOS population all exclude it."""
+    combined = segments.population(fact, segments.CAT_EOS_ALL)
+    assert "400" not in set(combined["tpid"].astype(str))
+    waves = kpi.wave_index(combined)
+    for metric in (kpi.new_engagements(combined, None, None, firsts=waves.first),
+                   kpi.migrations_completed(combined, None, None, lasts=waves.last),
+                   kpi.hosts_migrated(combined), kpi.acr_claimed(combined),
+                   kpi.on_track_accounts(combined, lasts=waves.last),
+                   kpi.acr_pipeline(combined), kpi.nodes_planned(combined)):
+        records = metric.records
+        if records is not None and not records.empty:
+            assert "400" not in set(records["tpid"].astype(str))
+    states, rows = kpi.by_state(combined, lasts=waves.last, only=None)
+    assert "400" not in set(rows["tpid"].astype(str))
 
 
 # --------------------------------------------------------------------------- #
@@ -1084,14 +1113,18 @@ def test_a_this_fy_row_is_added_when_the_period_is_something_else(html_ctx):
                      pd.Timestamp("2025-11-30"))).decode("utf-8")
     assert "Two periods:" in month
     assert "This FY (FY26)" in month
-    assert month.count('<div class="kpis">') == 2      # FY row, then period row
+    # Two headline rows — the FY one, then the period one.  Counted by their tile
+    # groups, since other sections render tiles of their own.
+    import re
+    groups = set(re.findall(r'data-tile-group="(kpis-[^"]+)"', month))
+    assert len(groups) == 2, groups
 
     fy_span = metrics.date_preset_range(html_ctx.as_of, "This FY", 7)
     same = html_report.build_html_report(
         html_ctx, reports=["eos"], period_label="This FY",
         date_window=(fy_span[0], fy_span[1])).decode("utf-8")
     assert "Two periods:" not in same                  # nothing to compare against
-    assert same.count('<div class="kpis">') == 1
+    assert len(set(re.findall(r'data-tile-group="(kpis-[^"]+)"', same))) == 1
 
 
 def test_underlying_data_shows_the_accounts_not_just_the_chart_numbers(html_doc):
@@ -1154,11 +1187,12 @@ def test_chart_buckets_match_the_rows_they_filter(html_ctx, matrix_fact):
 
 
 def test_the_headline_tiles_select_one_shared_accounts_panel(html_doc):
-    """Five accordions was five clicks to compare two numbers; this is one panel.
+    """One accordion for the whole row, not one per tile.
 
     Each metric is counted at its own grain — Wave-1 rows per TPID for
-    engagements, completed *wave* records for hosts — so the tiles switch
-    between separate lists rather than filtering one merged table.
+    engagements, completed *wave* records for hosts, eligible waves for the
+    pipeline — so the tiles switch between separate lists rather than filtering
+    one merged table.
     """
     import re
     # Only the document body: the inlined script mentions these attribute names
@@ -1168,7 +1202,10 @@ def test_the_headline_tiles_select_one_shared_accounts_panel(html_doc):
     assert groups
     for group in groups:
         tiles = re.findall(rf'data-tile="([^"]+)" data-tile-group="{group}"', body)
-        assert len(tiles) == 5                      # the five headline metrics
+        # Six headline metrics, and seven on an EOS report — which alone carries
+        # the planned-deployment tile.
+        expected = 7 if "-eos" in group else 6
+        assert len(tiles) == expected, (group, tiles)
         assert f'id="acc-{group}"' in body          # …one accordion between them
         for pane in tiles:
             assert f'data-pane="{pane}" data-pane-group="{group}"' in body
@@ -1303,3 +1340,351 @@ def test_the_report_does_not_end_with_a_list_of_every_account(html_doc):
     # The accounts each chart opens are still there.
     assert "data-drill=" in html_doc
     assert "Accounts behind" in html_doc
+
+
+# --------------------------------------------------------------------------- #
+# Account classification: On-Track vs. Completed across every wave
+# --------------------------------------------------------------------------- #
+#: A file written to exercise each state exactly once, plus the case the whole
+#: classification rule turns on: an account whose *latest* wave has completed
+#: while an earlier wave of the same account is still on track.
+#: (tpid, name, task, wave, tag, status, approved, actual end, planned end,
+#:  cores, acr, current state, region)
+_STATE_ROWS = [
+    ("1", "Acme", "a1", "Wave 1", "Gen1", "7 - Completed", "2025-07-08",
+     "2025-11-14", "2025-11-01", "36", "$1,250,000", "Done", "Americas - Enterprise"),
+    # Beta: Wave 2 (its latest) completed, Wave 1 still On Track -> On-Track.
+    ("2", "Beta", "b1", "Wave 1", "Gen1", "4 - Executing Migration", "2025-09-02",
+     "", "2025-10-01", "72", "$125,000", "On Track", "Americas - Enterprise"),
+    ("2", "Beta", "b2", "Wave 2", "Gen1", "7 - Completed", "2025-10-02",
+     "2026-01-05", "", "12", "$12,500", "Done", "Americas - Enterprise"),
+    ("3", "Gamma", "g1", "Wave 1", "Gen2", "2 - Executing Pre-Requisites",
+     "2025-08-11", "", "", "52", "$2,400,000", "Blocked - Customer", "EMEA"),
+    ("4", "Delta", "d1", "Wave 1", "Gen2", "5 - Deferred By Customer",
+     "2025-08-11", "", "", "20", "$300,000", "On Track", "EMEA"),
+    ("5", "Epsilon", "e1", "Wave 1", "Gen1", "6 - Cancelled / Archived",
+     "2025-09-11", "", "", "10", "$90,000", "On Track", "EMEA"),
+    # Zeta carries no generation tag: EOS scope by path only.
+    ("6", "Zeta", "z1", "Wave 1", "", "4 - Executing Migration", "2025-09-11",
+     "", "", "16", "$400,000", "On Track", "EMEA"),
+]
+
+
+@pytest.fixture(scope="module")
+def state_fact():
+    raw = pd.DataFrame([{
+        "TPID": t, "Customer Name": n, "Task ID": k, "Phase": w,
+        "Tags": f"Qualify and AccelerateAVS Migration - {g}" if g else "Unified Support",
+        "Migration Status": s, "Nom. Approval Date": a, "Nom. Created Date": a,
+        "Actual End Date": e, "Planned End Date": pe, "Total Cores": c,
+        "Total ACR": acr, "Current State": cs, "WW Region": r,
+        "Nomination Status": "Approved",
+        "Primary Migration Path": "AV36/AV36P/AV52 - EOS",
+    } for t, n, k, w, g, s, a, e, pe, c, acr, cs, r in _STATE_ROWS]).astype("string")
+    mp = mapping.resolve_mapping(list(raw.columns))
+    built, _report = cleaning.build_fact_frame(raw, mp, pd.Timestamp("2026-03-01"))
+    return built
+
+
+def _states(fact):
+    lasts = kpi.latest_wave(fact)
+    return dict(zip(lasts["tpid"].astype(str), kpi.account_state(fact, lasts)))
+
+
+def test_an_account_is_completed_only_when_no_wave_is_on_track(state_fact):
+    """Both halves of the rule, on the account it was written for.
+
+    Beta's latest wave (Wave 2) is ``7 - Completed``; its Wave 1 is still On
+    Track. Latest-wave-only logic calls that Completed; the account is still
+    delivering, so it is On-Track.
+    """
+    states = _states(state_fact)
+    assert states["1"] == kpi.STATE_COMPLETED       # every wave done
+    assert states["2"] == kpi.STATE_ON_TRACK        # latest done, Wave 1 running
+
+    completed = kpi.migrations_completed(state_fact, None, None)
+    assert _tpids(completed.records) == ["1"]
+    assert "2" in _tpids(kpi.on_track_accounts(state_fact).records)
+
+
+def test_any_on_track_wave_makes_the_account_on_track(state_fact):
+    on_track = kpi.on_track_accounts(state_fact)
+    assert _tpids(on_track.records) == ["2", "6"]
+    # The record behind each is the on-track wave, not a later completed one.
+    assert set(on_track.records["task_id"]) == {"b1", "z1"}
+    stages, rows = kpi.on_track_by_stage(state_fact)
+    assert set(stages["category"]) == {"Executing Migration"}
+
+
+def test_every_account_lands_in_exactly_one_state(state_fact):
+    """The reported and excluded cuts partition the population."""
+    states = _states(state_fact)
+    assert states == {"1": kpi.STATE_COMPLETED, "2": kpi.STATE_ON_TRACK,
+                      "3": kpi.STATE_BLOCKED, "4": kpi.STATE_DEFERRED,
+                      "5": kpi.STATE_CANCELLED, "6": kpi.STATE_ON_TRACK}
+    reported, rep_rows = kpi.by_state(state_fact)
+    excluded, exc_rows = kpi.excluded_accounts(state_fact)
+    assert set(reported["category"]) <= set(kpi.REPORTED_STATES)
+    assert set(excluded["category"]) <= set(kpi.EXCLUDED_STATES)
+    # No account in both, and none in neither.
+    assert set(rep_rows["tpid"]) & set(exc_rows["tpid"]) == set()
+    assert (int(reported["count"].sum()) + int(excluded["count"].sum())
+            == state_fact["tpid_key"].nunique())
+
+
+def test_excluded_accounts_report_what_the_data_supports(state_fact):
+    summary, rows = kpi.excluded_accounts(state_fact)
+    counts = dict(zip(summary["category"], summary["count"]))
+    assert counts == {kpi.STATE_BLOCKED: 1, kpi.STATE_DEFERRED: 1,
+                      kpi.STATE_CANCELLED: 1}
+    assert float(summary["acr"].sum()) == 2_400_000 + 300_000 + 90_000
+    # A cancelled or deferred account is named by the status that took it out;
+    # everything else by its Current State.  Never by a contradicting column:
+    # Delta and Epsilon both read "On Track" while being deferred / cancelled.
+    reasons = set(kpi.excluded_reasons(rows)["category"])
+    assert reasons == {"Blocked - Customer", "Deferred By Customer",
+                       "Cancelled / Archived"}
+    assert "On Track" not in reasons
+    assert list(kpi.wave_profile(state_fact, rows)["category"]) == ["1 wave"]
+
+
+def test_excluded_accounts_are_in_none_of_the_delivery_metrics(state_fact):
+    """Requirement: kept completely separate from On-Track / Completed.
+
+    Every metric that reads an account's *state* — completions, on-track
+    accounts, the state chart, and the two forward-looking pipeline measures —
+    must leave them out.  **New Engagements deliberately does not**: a blocked
+    account was still nominated and approved, and intake is a historical fact
+    that cannot un-happen because delivery later stalled.  A figure that moved
+    when an account got blocked would report the wrong thing entirely.
+    """
+    _summary, excluded = kpi.excluded_accounts(state_fact)
+    out = set(excluded["tpid"].astype(str))
+    assert out == {"3", "4", "5"}
+    waves = kpi.wave_index(state_fact)
+    for metric in (kpi.migrations_completed(state_fact, None, None, lasts=waves.last),
+                   kpi.on_track_accounts(state_fact, lasts=waves.last),
+                   kpi.acr_pipeline(state_fact), kpi.nodes_planned(state_fact)):
+        records = metric.records
+        if records is not None and not records.empty:
+            assert set(records["tpid"].astype(str)) & out == set(), metric.unit
+    _states_summary, reported = kpi.by_state(state_fact, lasts=waves.last)
+    assert set(reported["tpid"].astype(str)) & out == set()
+    # Intake counts them once, as the nominations they are — and only once.
+    intake = kpi.new_engagements(state_fact, None, None, firsts=waves.first)
+    assert intake.count == state_fact["tpid_key"].nunique()
+    assert not intake.records["tpid"].duplicated().any()
+
+
+# --------------------------------------------------------------------------- #
+# ACR Pipeline / Nodes Deployment Planned — the eligible-wave rule
+# --------------------------------------------------------------------------- #
+def test_a_pipeline_wave_must_satisfy_all_three_conditions(state_fact):
+    eligible = state_fact[kpi.eligible_pipeline_waves(state_fact)]
+    # Only the two in-flight, approved, unblocked waves survive: Beta's Wave 1
+    # and Zeta's.  Completed (a1, b2), deferred (d1), cancelled (e1) and blocked
+    # (g1) waves are all dropped — any one exclusion is enough.
+    assert sorted(eligible["task_id"]) == ["b1", "z1"]
+    assert kpi.acr_pipeline(state_fact).value == 125_000 + 400_000
+    assert kpi.nodes_planned(state_fact).value == 72 + 16
+    assert kpi.nodes_planned(state_fact).unit == "nodes"
+
+
+@pytest.mark.parametrize("column,value", [
+    ("Migration Status", "7 - Completed"),
+    ("Migration Status", "5 - Deferred By Customer"),
+    ("Migration Status", "6 - Cancelled / Archived"),
+    ("Nomination Status", "Pending"),
+    ("Current State", "Blocked - Account team"),
+])
+def test_each_exclusion_alone_removes_a_wave_from_the_pipeline(column, value):
+    """One failed condition is enough, whatever the other two say."""
+    base = {"TPID": "9", "Customer Name": "Solo", "Task ID": "s1",
+            "Phase": "Wave 1", "Tags": "AVS Migration - Gen1",
+            "Migration Status": "4 - Executing Migration",
+            "Nomination Status": "Approved", "Nom. Approval Date": "2025-09-01",
+            "Nom. Created Date": "2025-09-01", "Current State": "On Track",
+            "Total Cores": "10", "Total ACR": "$1,000",
+            "WW Region": "EMEA", "Primary Migration Path": "AV36/AV36P/AV52 - EOS"}
+    mp = mapping.resolve_mapping(list(base))
+    eligible, _ = cleaning.build_fact_frame(pd.DataFrame([base]).astype("string"),
+                                           mp, pd.Timestamp("2026-03-01"))
+    assert kpi.eligible_pipeline_waves(eligible).all()          # the control
+
+    # A nomination with no approval date and a non-approving status is not
+    # approved; every other case is a value swap on one column.
+    dropped = dict(base, **{column: value})
+    if column == "Nomination Status":
+        dropped["Nom. Approval Date"] = ""
+    frame, _ = cleaning.build_fact_frame(pd.DataFrame([dropped]).astype("string"),
+                                        mp, pd.Timestamp("2026-03-01"))
+    assert not kpi.eligible_pipeline_waves(frame).any(), (column, value)
+    assert kpi.acr_pipeline(frame).value == 0
+    assert kpi.nodes_planned(frame).value == 0
+
+
+def test_only_eos_reports_carry_the_planned_deployment_card():
+    """Requirement 9 is EOS-only; nothing else may grow the tile."""
+    from app.core import exporter as exp
+    shown = {spec.key: exp.shows_nodes_planned(spec) for spec in exp.REPORTS}
+    assert shown == {"avs": False, "eos": True, "native": False}
+
+
+# --------------------------------------------------------------------------- #
+# The report renderings: cards, one regional chart, money, the opt-in section
+# --------------------------------------------------------------------------- #
+@pytest.fixture(scope="module")
+def state_ctx(state_fact):
+    """A context over the mixed-state fixture, enough to render both reports."""
+    from app import state as state_mod
+    from app.core import loader as loader_mod, rollup as rollup_mod
+    report = {"as_of": pd.Timestamp("2026-03-01"), "dq": {}, "dq_rows": 0,
+              "n_rows": len(state_fact), "unmapped": [], "parse": {},
+              "scope": {"floor_fy": "FY25"}}
+    customer = rollup_mod.build_customer_rollup(state_fact, report["as_of"])
+    return state_mod.DataContext(
+        filename="programme-export.csv", signature="sig", raw=pd.DataFrame(),
+        mapping={}, fact=state_fact, customer=customer, report=report,
+        as_of=report["as_of"], con=loader_mod.make_connection(state_fact, customer))
+
+
+@pytest.fixture(scope="module")
+def state_doc(state_ctx):
+    from app.core import html_report
+    return html_report.build_html_report(
+        state_ctx, reports=["avs", "eos"], appendices=["inconsistency"]).decode("utf-8")
+
+
+def _main(doc: str) -> str:
+    """Only the document body: the inlined chart library mentions everything."""
+    return doc.split("<main>", 1)[1].split("</main>", 1)[0]
+
+
+def test_the_summary_carries_the_pipeline_cards(state_doc):
+    body = _main(state_doc)
+    assert "ACR pipeline" in body
+    # Nodes on the EOS report and nowhere else.
+    assert "Nodes deployment planned" in body
+    assert "kpi-eos-nodes_planned" in body
+    assert "kpi-avs-nodes_planned" not in body
+
+
+def test_the_regional_breakdown_keeps_only_the_heatmap(state_doc):
+    """Requirement 2: no second chart saying the same thing."""
+    body = _main(state_doc)
+    assert "WW Region × status heatmap" in body
+    assert "Migration status by WW Region" not in body
+    # …and the heatmap still opens the accounts for a region and a stage.
+    assert 'data-drill="rh-eos" data-drill-mode="y-x"' in body
+
+
+def test_money_in_tooltips_is_written_in_k_and_m(state_doc):
+    """Requirement 4: a hover must not report a raw 1250000."""
+    from app.core.metrics import fmt_compact_currency
+    assert fmt_compact_currency(12_500) == "$12.5K"
+    assert fmt_compact_currency(125_000) == "$125K"
+    assert fmt_compact_currency(1_250_000) == "$1.25M"
+    body = _main(state_doc)
+    # The figures carry pre-formatted money as customdata, read by the hover.
+    assert "%{customdata}" in state_doc
+    assert "$%{y:,.0f}" not in state_doc           # the raw-number hover is gone
+    assert "$1.25M" in state_doc or "$1.26M" in state_doc
+    assert body                                    # the report did render
+
+
+def test_the_excluded_section_is_present_but_hidden_by_default(state_doc):
+    """Requirement 7: generated, off by default, and no application needed."""
+    import re
+    body = _main(state_doc)
+    toggles = re.findall(
+        r'<input type="checkbox" class="opt-toggle" id="(optx-[^"]+)"([^>]*)>', body)
+    assert [t for t, _ in toggles] == ["optx-avs", "optx-eos"]
+    for _id, attrs in toggles:
+        assert "checked" not in attrs              # unticked when the file opens
+    # Hidden by a CSS rule on the checkbox itself, so it is hidden from the
+    # first paint with no script having run.
+    assert ".opt-toggle:not(:checked) ~ .opt-body" in state_doc
+    assert "Accounts outside the reported pipeline" in body
+    assert "Show blocked, deferred and cancelled accounts" in body
+    # The data is there, waiting: counts, ACR, reasons and the accounts.
+    assert "ACR held up" in body and "Stated reason" in body
+
+
+def test_the_report_states_its_own_methodology(state_doc):
+    """Requirement 10: the rules travel with the report."""
+    body = _main(state_doc)
+    assert 'id="methodology"' in body
+    for heading, _paragraphs in glossary.REPORT_METHODOLOGY:
+        assert esc(heading) in body, heading
+    for rule in ("none of its waves is on track", "Nodes Deployment Planned",
+                 "ACR Pipeline", "EOS reports cover Gen-1 and Gen-2 only"):
+        assert rule in body, rule
+
+
+def test_no_generated_report_names_the_application_or_the_file(state_ctx, state_doc):
+    """Requirement 11: the report is about the programme, nothing else."""
+    from app.core import exporter as exp
+    body = _main(state_doc)
+    banned = ("AVS Migration Analytics", "programme-export.csv", "Dataset:",
+              "Status Report", "Insights page", "avs-analytics")
+    for needle in banned:
+        assert needle not in body, needle
+    assert "Source:" not in body
+    # The PDF story carries the same text as flowables; check it the same way.
+    text = _flowable_text(exp.build_story(state_ctx, reports=["avs", "eos"]))
+    for needle in banned:
+        assert needle not in text, needle
+    assert exp.DEFAULT_TITLE == "Migration Programme Report"
+
+
+def _flowable_text(story) -> str:
+    from reportlab.platypus import Paragraph, Table
+    out: list[str] = []
+
+    def walk(item):
+        if isinstance(item, Paragraph):
+            out.append(item.getPlainText())
+        elif isinstance(item, Table):
+            for row in getattr(item, "_cellvalues", []) or []:
+                for cell in row:
+                    walk(cell)
+        elif isinstance(item, (list, tuple)):
+            for cell in item:
+                walk(cell)
+        if getattr(item, "title", None):
+            out.append(str(item.title))
+        for kid in getattr(item, "_content", []) or []:
+            walk(kid)
+
+    for flowable in story:
+        walk(flowable)
+    return " ".join(out)
+
+
+# --------------------------------------------------------------------------- #
+# Requirement 6 — the added insights are derived, not decorative
+# --------------------------------------------------------------------------- #
+def test_programme_insights_are_supported_by_the_data(state_fact):
+    from app.core import insights as ins
+    items = ins.programme_insights(state_fact)
+    by_category = {i.category for i in items}
+    assert {"Pipeline", "Excluded", "Bottleneck", "Delays", "Waves", "EOS"} \
+        <= by_category, by_category
+    text = " ".join(i.detail for i in items)
+    # Each figure quoted is one the metrics above produce.
+    assert "$525K" in text or "$525.0K" in text        # the ACR pipeline
+    assert "of 6 accounts (50%)" in text               # the excluded accounts
+    assert "no Gen1/Gen2 tag" in text                  # the untagged EOS account
+    # The classification rule reports its own count.
+    assert "another wave still on track" in text
+
+
+def test_an_insight_with_nothing_to_say_says_nothing(state_fact):
+    """A rule that cannot be supported is dropped, never padded with a zero."""
+    from app.core import insights as ins
+    clean_slice = state_fact[state_fact["tpid"].astype(str) == "1"]
+    items = ins.programme_insights(clean_slice)
+    assert not [i for i in items if i.category == "Excluded"]
+    assert not [i for i in items if i.category == "Pipeline"]
+    # …and an empty frame produces nothing at all rather than raising.
+    assert ins.programme_insights(state_fact.head(0)) == []
