@@ -101,17 +101,25 @@ IN_FLIGHT_CODES = (1, 2, 3, 4)
 
 @dataclass
 class WaveIndex:
-    """A population's first and latest wave per TPID, computed once.
+    """A population's first, latest and approval wave per TPID, computed once.
 
     Sorting 500k waves takes ~0.7s, and a dashboard needs these frames half a
     dozen times, so a view builds this once and hands it to every metric.
+
+    ``approval`` is the wave a nomination is *dated* by — see
+    :func:`dated_wave`.  It is a frame of its own rather than a column on
+    ``first`` because the wave that carries the approval date is not always
+    Wave-1, and a drill-down has to be able to show which wave it was.
     """
     first: pd.DataFrame
     last: pd.DataFrame
+    approval: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 def wave_index(fact: pd.DataFrame) -> WaveIndex:
-    return WaveIndex(first=first_wave(fact), last=latest_wave(fact))
+    ordered = _ordered(fact) if not fact.empty else fact
+    return WaveIndex(first=_first_of(ordered), last=_last_of(ordered),
+                     approval=_dated_wave_of(ordered, "approval_date"))
 
 
 @dataclass
@@ -152,14 +160,79 @@ def first_wave(fact: pd.DataFrame) -> pd.DataFrame:
     """One row per TPID: its Wave-1 (lowest wave number)."""
     if fact.empty:
         return fact
-    return _ordered(fact).groupby("tpid_key", as_index=False, sort=False).first()
+    return _first_of(_ordered(fact))
 
 
 def latest_wave(fact: pd.DataFrame) -> pd.DataFrame:
     """One row per TPID: its most recent wave."""
     if fact.empty:
         return fact
-    return _ordered(fact).groupby("tpid_key", as_index=False, sort=False).last()
+    return _last_of(_ordered(fact))
+
+
+def _first_of(ordered: pd.DataFrame) -> pd.DataFrame:
+    """The account's Wave-1 row itself — every cell from that one wave.
+
+    ``GroupBy.first()`` would fill each column independently from the first wave
+    that has a value for it, which quietly builds a row no wave ever had: Wave-1's
+    task id next to Wave-3's approval date.  Where a *date* is meant to fall
+    through to a later wave that is now :func:`dated_wave`'s job, stated as a
+    rule and carrying the wave it read.
+    """
+    if ordered.empty:
+        return ordered
+    return ordered.groupby("tpid_key", sort=False).head(1).reset_index(drop=True)
+
+
+def _last_of(ordered: pd.DataFrame) -> pd.DataFrame:
+    """The account's latest wave, column-wise.
+
+    Deliberately still ``GroupBy.last()``: where the latest wave leaves a cell
+    blank — a completed wave with no Actual End Date, a wave nobody restated the
+    Current State on — the account's own most recent answer stands in, and every
+    state, stage and closure rule in this module has been read against that.
+    """
+    if ordered.empty:
+        return ordered
+    return ordered.groupby("tpid_key", as_index=False, sort=False).last()
+
+
+def dated_wave(fact: pd.DataFrame, column: str = "approval_date") -> pd.DataFrame:
+    """One row per TPID: the earliest wave that actually carries *column*.
+
+    The rule the programme states for **New Engagements**: read *Nom. Approval
+    Date* from **Wave-1, whatever state or status that wave is in** — an
+    unapproved, blocked or cancelled Wave-1 still dates the engagement — and
+    move on to the next wave **only** when Wave-1's date is missing, then the
+    one after that, until a wave has one.
+
+    The returned row is the wave the date came from, not a Wave-1 row wearing a
+    later wave's date: a drill-down that counts an account from Wave-3's
+    approval has to be able to name Wave-3.  An account with no such date
+    anywhere keeps its Wave-1 row (with the date still blank), so it is present
+    to be listed and simply falls outside every dated window.
+    """
+    if fact.empty:
+        return fact
+    return _dated_wave_of(_ordered(fact), column)
+
+
+def _dated_wave_of(ordered: pd.DataFrame, column: str) -> pd.DataFrame:
+    if ordered.empty or column not in ordered.columns:
+        return _first_of(ordered)
+    dated = ordered[ordered[column].notna()]
+    rows = _first_of(dated)
+    # Accounts with the date nowhere: kept on their Wave-1 row rather than
+    # dropped, so the frame stays one row per TPID and nothing silently leaves
+    # the population between one metric and the next.
+    missing = _first_of(ordered)
+    if not rows.empty:
+        missing = missing[~missing["tpid_key"].isin(set(rows["tpid_key"]))]
+    if missing.empty:
+        return rows
+    if rows.empty:
+        return missing
+    return pd.concat([rows, missing], ignore_index=True)
 
 
 def is_completed(df: pd.DataFrame) -> pd.Series:
@@ -186,12 +259,20 @@ def in_window(dates: pd.Series, start, end) -> pd.Series:
 # Headline metrics
 # --------------------------------------------------------------------------- #
 def new_engagements(fact: pd.DataFrame, start=None, end=None,
-                    firsts: pd.DataFrame | None = None) -> Metric:
-    """Unique TPIDs whose **Wave-1** nomination approval date falls in the period."""
+                    approvals: pd.DataFrame | None = None) -> Metric:
+    """Unique TPIDs whose nomination approval date falls in the period.
+
+    The date is read from **Wave-1 whatever state or status that wave is in** —
+    an unapproved, blocked, deferred or cancelled Wave-1 still dates the
+    engagement — and only when Wave-1 has no *Nom. Approval Date* does the rule
+    move on to the next wave, and the next, until one carries a date
+    (:func:`dated_wave`).  An account with no approval date on any wave has
+    never been nominated as far as this metric can tell, and is not counted.
+    """
     if fact.empty:
         return Metric(0, "customers")
-    firsts = first_wave(fact) if firsts is None else firsts
-    hit = firsts[in_window(firsts["approval_date"], start, end)]
+    approvals = dated_wave(fact, "approval_date") if approvals is None else approvals
+    hit = approvals[in_window(approvals["approval_date"], start, end)]
     return Metric(len(hit), "customers", hit)
 
 
@@ -224,22 +305,42 @@ def migration_starts(fact: pd.DataFrame, start=None, end=None) -> Metric:
     return Metric(len(hit), "customers", hit)
 
 
+#: The label a date carries when the EOS tracking sheet supplied it, rather
+#: than the export's own columns.  Printed in the drill-down beside the date, so
+#: a reader can see which source answered for each account.
+TRACKER_START_SOURCE = "EOS tracker — Migration Start Date"
+TRACKER_END_SOURCE = "EOS tracker — Actual Migration End Date"
+FDO_END_SOURCE = "Actual End Date (latest wave)"
+
+
 def migration_start_dates(fact: pd.DataFrame) -> pd.DataFrame:
     """One row per TPID: the date its migration started, and where that came from.
 
-    The export has no "migration started" field, so it is derived, per the
-    programme's rule: take the account's **earliest wave whose Current State
-    reads "On Track" or "Done"** — the first wave that was actually under way —
-    and read its **Actual Start Date**, falling back to **Planned Start Date**
-    and then to **Nom. Approval Date** when the earlier ones are blank.
+    **The manual EOS tracking sheet answers first.**  Where it gives an account
+    a *Migration Start Date*, that is the date: it is the programme stating when
+    the migration began, rather than the export being read for a clue about it.
 
-    An account with no such wave has not started and is not counted.  The
-    returned frame carries ``migration_start_date`` and ``start_date_source``
-    (which column the date came from), so a reader can see how firm the number
-    is rather than having to trust it.
+    Only for an account the sheet does not cover — or does not date — is the
+    date derived, exactly as it always has been, because the export has no
+    "migration started" field: take the account's **earliest wave whose Current
+    State reads "On Track" or "Done"** — the first wave that was actually under
+    way — and read its **Actual Start Date**, falling back to **Planned Start
+    Date** and then to **Nom. Approval Date** when the earlier ones are blank.
+
+    An account with neither has not started and is not counted.  The returned
+    frame carries ``migration_start_date`` and ``start_date_source`` (which
+    column, in which document, the date came from), so a reader can see how firm
+    the number is rather than having to trust it.
     """
     if fact.empty:
         return fact
+    derived = _derived_start_dates(fact)
+    tracked = _tracked_dates(fact, "eos_start_date", "migration_start_date",
+                             "start_date_source", TRACKER_START_SOURCE)
+    return _prefer(tracked, derived, "migration_start_date")
+
+
+def _derived_start_dates(fact: pd.DataFrame) -> pd.DataFrame:
     started = _started_state(fact)
     rows = _ordered(fact[started])
     if rows.empty:
@@ -261,6 +362,61 @@ def migration_start_dates(fact: pd.DataFrame) -> pd.DataFrame:
     return out[out["migration_start_date"].notna()].reset_index(drop=True)
 
 
+def migration_end_dates(fact: pd.DataFrame,
+                        lasts: pd.DataFrame | None = None) -> pd.DataFrame:
+    """One row per TPID: the date its migration ended, and where that came from.
+
+    The same two-source rule as :func:`migration_start_dates`.  **The manual EOS
+    tracking sheet answers first**: an *Actual Migration End Date* in the sheet
+    is the programme saying the migration ended, whatever state the nomination
+    export was last left in.  Every other account falls back to the export's own
+    rule — the account is **Completed** (:func:`account_state`) and is dated by
+    its latest wave's *Actual End Date* — so an installation with no tracking
+    sheet reports exactly what it reported before there was one.
+    """
+    if fact.empty:
+        return fact
+    done = migrations_completed(fact, None, None, lasts).records
+    derived = pd.DataFrame()
+    if not done.empty:
+        derived = done.assign(
+            migration_end_date=pd.to_datetime(done["actual_end_date"],
+                                              errors="coerce"),
+            end_date_source=FDO_END_SOURCE)
+        derived = derived[derived["migration_end_date"].notna()]
+    tracked = _tracked_dates(fact, "eos_end_date", "migration_end_date",
+                             "end_date_source", TRACKER_END_SOURCE)
+    return _prefer(tracked, derived, "migration_end_date")
+
+
+def _tracked_dates(fact: pd.DataFrame, column: str, date_name: str,
+                   source_name: str, label: str) -> pd.DataFrame:
+    """One row per TPID the EOS tracking sheet dates, from its own column."""
+    if column not in fact.columns:
+        return pd.DataFrame()
+    dates = pd.to_datetime(fact[column], errors="coerce")
+    rows = fact[dates.notna()]
+    if rows.empty:
+        return pd.DataFrame()
+    rows = latest_wave(rows)
+    return rows.assign(**{date_name: pd.to_datetime(rows[column], errors="coerce"),
+                          source_name: label}).reset_index(drop=True)
+
+
+def _prefer(primary: pd.DataFrame, fallback: pd.DataFrame,
+            date_name: str) -> pd.DataFrame:
+    """*primary*'s row for every TPID it has, *fallback*'s for the rest."""
+    if primary is None or primary.empty:
+        return (fallback if fallback is not None and not fallback.empty
+                else pd.DataFrame(columns=[date_name]))
+    if fallback is None or fallback.empty:
+        return primary.reset_index(drop=True)
+    rest = fallback[~fallback["tpid_key"].isin(set(primary["tpid_key"]))]
+    if rest.empty:
+        return primary.reset_index(drop=True)
+    return pd.concat([primary, rest], ignore_index=True)
+
+
 def _started_state(df: pd.DataFrame) -> pd.Series:
     """Waves whose Current State says the work is under way or finished."""
     if df.empty or "current_state" not in df.columns:
@@ -271,16 +427,36 @@ def _started_state(df: pd.DataFrame) -> pd.Series:
 
 def monthly_migration_starts(fact: pd.DataFrame, start=None, end=None
                              ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Unique TPIDs per month by their derived migration start date."""
-    rows = migration_start_dates(fact)
+    """Unique TPIDs per month by their migration start date (tracker first)."""
+    return _monthly_by_date(migration_start_dates(fact), "migration_start_date",
+                            "Migration Starts", start, end)
+
+
+def monthly_migration_ends(fact: pd.DataFrame, start=None, end=None,
+                           lasts: pd.DataFrame | None = None
+                           ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Unique TPIDs per month by their migration end date (tracker first).
+
+    The programme matrix's *migration end* row.  It is deliberately **not**
+    :func:`monthly_migrations_completed`: that one is the export's own measure,
+    which the trends and the headline tiles report, and it stays exactly as it
+    was.  This one lets the EOS tracking sheet's *Actual Migration End Date*
+    answer where it has one, which is what the matrix is asked to show.
+    """
+    return _monthly_by_date(migration_end_dates(fact, lasts), "migration_end_date",
+                            "Migrations Completed", start, end)
+
+
+def _monthly_by_date(rows: pd.DataFrame, date_col: str, label: str,
+                     start, end) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if rows is None or rows.empty or date_col not in rows.columns:
+        return _empty_trend(label), (rows if rows is not None else pd.DataFrame())
+    rows = rows[in_window(rows[date_col], start, end)].copy()
     if rows.empty:
-        return _empty_trend("Migration Starts"), rows
-    rows = rows[in_window(rows["migration_start_date"], start, end)].copy()
-    if rows.empty:
-        return _empty_trend("Migration Starts"), rows
-    rows["month"] = _month(rows["migration_start_date"])
+        return _empty_trend(label), rows
+    rows["month"] = _month(rows[date_col])
     summary = rows.groupby("month", as_index=False).agg(value=("tpid_key", "nunique"))
-    return _finish_trend(summary, "Migration Starts"), rows
+    return _finish_trend(summary, label), rows
 
 
 def hosts_migrated(fact: pd.DataFrame, start=None, end=None) -> Metric:
@@ -345,14 +521,22 @@ def _month(dates: pd.Series) -> pd.Series:
 
 
 def monthly_unique_tpids(fact: pd.DataFrame, date_col: str = "approval_date",
-                         start=None, end=None, firsts: pd.DataFrame | None = None
+                         start=None, end=None, waves: "WaveIndex | None" = None
                          ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Unique TPIDs per month, each TPID counted once in the month of its Wave-1 date."""
-    if firsts is None:
-        firsts = first_wave(fact) if not fact.empty else fact
-    if firsts.empty:
-        return _empty_trend("Nominations"), firsts
-    rows = firsts[in_window(firsts[date_col], start, end)].copy()
+    """Unique TPIDs per month, each counted once in the month of its Wave-1 date.
+
+    Wave-1's date whatever that wave's state, falling through to the next wave
+    only when Wave-1 has none — the same :func:`dated_wave` rule
+    :func:`new_engagements` counts on, so a trend and the tile above it cannot
+    disagree about which month an account belongs to.
+    """
+    if waves is not None and date_col == "approval_date":
+        dated = waves.approval
+    else:
+        dated = dated_wave(fact, date_col) if not fact.empty else fact
+    if dated.empty:
+        return _empty_trend("Nominations"), dated
+    rows = dated[in_window(dated[date_col], start, end)].copy()
     rows["month"] = _month(rows[date_col])
     summary = (rows.groupby("month", as_index=False)
                    .agg(value=("tpid_key", "nunique")))
@@ -450,7 +634,8 @@ def matrix_month_span(fact: pd.DataFrame, start, as_of=None) -> list[pd.Period]:
     """
     end = pd.Period(pd.Timestamp(as_of if as_of is not None else pd.Timestamp.today()),
                     freq="M")
-    for col in ("approval_date", "actual_end_date"):
+    for col in ("approval_date", "actual_end_date", "eos_end_date",
+                "eos_start_date"):
         if col in fact.columns:
             months = _month(fact[col]).dropna()
             if not months.empty and months.max() > end:
@@ -459,26 +644,29 @@ def matrix_month_span(fact: pd.DataFrame, start, as_of=None) -> list[pd.Period]:
 
 
 def monthly_matrix(fact: pd.DataFrame, months: list[pd.Period],
-                   firsts: pd.DataFrame | None = None,
-                   lasts: pd.DataFrame | None = None,
+                   waves: "WaveIndex | None" = None,
                    fy_start_month: int = 7) -> pd.DataFrame:
     """The five programme measures as rows, one column per month plus FY totals.
 
     Every number comes from the same functions the dashboards and trends use —
-    new engagements from Wave-1 approval dates, starts from the derived
-    migration start date, migration ends from an account's latest wave
-    completing, hosts from Total Cores over completed records — so the grid
-    reconciles with the rest of the report by construction.  Each fiscal year
-    closes with its own total column.
-    """
-    if firsts is None or lasts is None:
-        waves = wave_index(fact)
-        firsts = waves.first if firsts is None else firsts
-        lasts = waves.last if lasts is None else lasts
+    new engagements from Wave-1 approval dates, hosts from Total Cores over
+    completed records — so the grid reconciles with the rest of the report by
+    construction.  Each fiscal year closes with its own total column.
 
-    engagements, _ = monthly_unique_tpids(fact, "approval_date", firsts=firsts)
+    The two date rows are the programme's own: **migration start** and
+    **migration end** take the manual EOS tracking sheet's *Migration Start
+    Date* and *Actual Migration End Date* for every account it covers, and fall
+    back to the export's derivation for the rest
+    (:func:`migration_start_dates`, :func:`migration_end_dates`).  With no
+    tracking sheet loaded the fallbacks are all there is, and the grid reads
+    exactly as it did before the sheet existed.
+    """
+    if waves is None:
+        waves = wave_index(fact)
+
+    engagements, _ = monthly_unique_tpids(fact, "approval_date", waves=waves)
     starts, _ = monthly_migration_starts(fact)
-    ends, _ = monthly_migrations_completed(fact, lasts=lasts)
+    ends, _ = monthly_migration_ends(fact, lasts=waves.last)
     hosts, _ = monthly_hosts(fact)
     by_row = {
         "Total number of new engagement": _by_period(engagements, "Nominations"),
@@ -877,6 +1065,67 @@ def by_state(fact: pd.DataFrame, lasts: pd.DataFrame | None = None,
     return summary.reset_index(drop=True), rows
 
 
+#: How many accounts the "largest by ACR" cut shows.  Ten is the number a
+#: review reads off a slide: enough to see the shape of the concentration,
+#: short enough that every bar keeps a legible label.
+TOP_ACCOUNTS = 10
+
+
+def top_accounts_by_acr(fact: pd.DataFrame, limit: int = TOP_ACCOUNTS,
+                        approvals: pd.DataFrame | None = None,
+                        lasts: pd.DataFrame | None = None
+                        ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The largest accounts by ACR, and the account rows behind them.
+
+    ACR is summed across **every wave** of an account, which is the account-level
+    figure :func:`account_detail` reports and the one the reconciliation adds up
+    — an account that claimed 10M, 15M and 20M over three waves is a 45M
+    account, and ranking it on its latest wave's 20M would put it in the wrong
+    place in the order.
+
+    Accounts with no ACR at all are left out rather than listed as zeroes: the
+    question is which accounts the money is in, and a row of zeroes answers a
+    different one.  Returns ``(summary, rows)`` — ``category``/``acr``/``count``
+    for the chart, and one full account row each for the table beneath it.
+    """
+    if fact.empty:
+        return pd.DataFrame(columns=["category", "acr", "count"]), fact
+    detail = account_detail(fact, approvals=approvals, lasts=lasts)
+    if detail.empty:
+        return pd.DataFrame(columns=["category", "acr", "count"]), detail
+    rows = detail.copy()
+    rows["_acr"] = pd.to_numeric(rows.get("total_acr"), errors="coerce").fillna(0.0)
+    rows = rows[rows["_acr"] > 0]
+    if rows.empty:
+        return pd.DataFrame(columns=["category", "acr", "count"]), rows
+    rows = rows.sort_values("_acr", ascending=False).head(int(limit))
+    rows["account_label"] = _account_labels(rows)
+    waves = fact.groupby("tpid_key").size()
+    rows["_waves"] = rows["tpid_key"].map(waves).fillna(1)
+    summary = pd.DataFrame({
+        "category": rows["account_label"].to_numpy(),
+        "acr": rows["_acr"].to_numpy(),
+        "count": rows["_waves"].astype("int64").to_numpy(),
+    })
+    return summary.reset_index(drop=True), rows.reset_index(drop=True)
+
+
+def _account_labels(rows: pd.DataFrame) -> pd.Series:
+    """A label per account that no two accounts can share.
+
+    Customer names repeat between subsidiaries and arrive spelled differently
+    between worksheets, so the label carries the TPID — which is what the whole
+    application matches on — and a chart bar therefore names exactly one
+    account.
+    """
+    names = rows["customer_name"].astype("string").str.strip().replace({"": pd.NA})
+    tpids = rows["tpid"].astype("string").str.strip().replace({"": pd.NA})
+    names = names.fillna("Unknown")
+    return pd.Series(
+        [name if pd.isna(tpid) else f"{name} ({tpid})"
+         for name, tpid in zip(names, tpids)], index=rows.index, dtype="object")
+
+
 def on_track_by_stage(fact: pd.DataFrame,
                       lasts: pd.DataFrame | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """On-track accounts grouped by the stage of their on-track wave, with ACR."""
@@ -1159,7 +1408,7 @@ BLOCKED_DRILLDOWN_COLUMNS = [
 ]
 
 
-def account_detail(fact: pd.DataFrame, firsts: pd.DataFrame | None = None,
+def account_detail(fact: pd.DataFrame, approvals: pd.DataFrame | None = None,
                    lasts: pd.DataFrame | None = None) -> pd.DataFrame:
     """One row per TPID, showing the account's current state.
 
@@ -1172,20 +1421,24 @@ def account_detail(fact: pd.DataFrame, firsts: pd.DataFrame | None = None,
     * **Total ACR** — summed across **every** wave of the account.  An account
       that claimed 10M, 15M and 20M over three waves has committed 45M; showing
       the last wave's 20M would understate it.
-    * **Nomination approval date** — the **earliest** wave's, because that is
-      when the account was nominated, not when its latest wave was.
+    * **Nomination approval date** — Wave-1's, because that is when the account
+      was nominated, not when its latest wave was; when Wave-1 carries no
+      approval date the rule falls through to the next wave that does
+      (:func:`dated_wave`), so the column reads the same here as in the New
+      Engagements tile.
     """
     if fact.empty:
         return fact
-    firsts = first_wave(fact) if firsts is None else firsts
+    approvals = (dated_wave(fact, "approval_date") if approvals is None
+                 else approvals)
     lasts = latest_wave(fact) if lasts is None else lasts
 
     out = lasts.copy()
     acr = (pd.to_numeric(fact.get("total_acr"), errors="coerce")
            .groupby(fact["tpid_key"]).sum())
     out["total_acr"] = out["tpid_key"].map(acr)
-    approvals = firsts.set_index("tpid_key")["approval_date"]
-    out["approval_date"] = out["tpid_key"].map(approvals)
+    dates = approvals.set_index("tpid_key")["approval_date"]
+    out["approval_date"] = out["tpid_key"].map(dates)
     return out.reset_index(drop=True)
 
 

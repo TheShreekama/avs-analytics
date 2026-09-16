@@ -47,6 +47,12 @@ _REGIONAL_BREAKDOWN = (segments.CAT_EOS_ALL, segments.CAT_ALL_AVS,
 #: The EOS pages — the only ones that report the deployment still planned.
 _EOS_CATEGORIES = (segments.CAT_EOS_ALL, segments.CAT_EOS_GEN1, segments.CAT_EOS_GEN2)
 
+#: The two broad motions that also report their largest accounts by ACR.  The
+#: generation pages are subsets of EOS Migration (All) and would repeat much of
+#: its list; these two are whole portfolios, and "where is the money" is the
+#: question their reviews open with.
+_TOP_ACCOUNT_CATEGORIES = (segments.CAT_ALL_AVS, segments.CAT_AVS_NATIVE)
+
 # The AVS → Azure Native motion moves *cores* to Azure-native services; the AVS
 # categories move *hosts*.  Both are the Total Cores column — only the noun differs.
 def _unit(category: str) -> str:
@@ -104,6 +110,8 @@ def render(category: str) -> None:
     if category == segments.CAT_EOS_ALL:
         _generation_matrix(ctx, fact, key)
     _pipeline(fact, waves, key)
+    if category in _TOP_ACCOUNT_CATEGORIES:
+        _top_accounts(fact, waves, key)
     if category == segments.CAT_AVS_NATIVE:
         _offering_and_target(fact, key)
     if category in _REGIONAL_BREAKDOWN:
@@ -134,10 +142,13 @@ def _generation_matrix(ctx, fact: pd.DataFrame, key: str) -> None:
     st.caption(f"From **{start:%b %Y}** to **{ctx.as_of:%b %Y}**, every month "
                "included, each fiscal year closing with its own total column. "
                "Blocks are the generation each account is refreshing on to — all "
-               "EOS accounts are coming from Gen-1 hardware. *Migration start* is "
-               "derived (earliest wave reading On Track or Done → Actual Start "
-               "Date, else Planned Start, else Nom. Approval); *engagement end* "
-               "repeats *migration end*, the closest the export comes to it.")
+               "EOS accounts are coming from Gen-1 hardware. *Migration start* "
+               "and *migration end* come from the **manual EOS tracking sheet** "
+               "wherever it covers an account, and otherwise from the export: "
+               "start derived (earliest wave reading On Track or Done → Actual "
+               "Start Date, else Planned Start, else Nom. Approval), end from "
+               "the latest wave completing. *Engagement end* repeats *migration "
+               "end*, the closest the export comes to it.")
     for generation, title in _MATRIX_BLOCKS:
         block = fact[fact["generation"] == generation]
         accounts = segments.tpid_key(block).nunique() if not block.empty else 0
@@ -227,7 +238,7 @@ def _summary_row(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str,
                  unit_label: str, category: str, period_label: str) -> None:
     """One period's tiles, with the records behind them."""
     subheading(period_label)
-    engagements = kpi.new_engagements(fact, start, end, firsts=waves.first)
+    engagements = kpi.new_engagements(fact, start, end, approvals=waves.approval)
     completed = kpi.migrations_completed(fact, start, end, lasts=waves.last)
     hosts = kpi.hosts_migrated(fact, start, end)
     on_track = kpi.on_track_accounts(fact, lasts=waves.last)
@@ -349,6 +360,40 @@ def _pipeline(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
             summary=stages.rename(columns={"category": "Stage", "count": "Accounts",
                                            "acr": "ACR"}),
             summary_bucket="Stage")
+
+
+def _top_accounts(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
+    """The ten accounts carrying the most ACR, and the records behind them.
+
+    Not narrowed by the reporting period, like the pipeline above it: the
+    question is where this category's money sits, which a window would answer
+    only for the window.  ACR is summed across every wave of an account, so the
+    order is the account-level one the reconciliation and the account records
+    both use.
+    """
+    section(f"Top {kpi.TOP_ACCOUNTS} accounts by ACR",
+            help=glossary.TOP_ACCOUNTS_ACR,
+            period="All time — not filtered by the reporting period")
+    summary, rows = kpi.top_accounts_by_acr(fact, approvals=waves.approval,
+                                            lasts=waves.last)
+    if summary.empty:
+        components.empty_state("No account in this category carries any ACR.")
+        return
+    total = float(pd.to_numeric(fact.get("total_acr"), errors="coerce").sum())
+    shown = float(summary["acr"].sum())
+    share = f" — **{shown / total:.0%}** of the category's ACR" if total else ""
+    st.caption(f"Total ACR summed across every wave of each account. These "
+               f"**{fmt_int(len(summary))}** accounts carry "
+               f"**{fmt_currency(shown)}**{share}. Click a bar or a table row "
+               f"to open the account behind it.")
+    fig = charts.bar(summary, "category", "acr", horizontal=True, currency=True,
+                     height=380)
+    drilldown.chart_with_drilldown(
+        fig, rows.assign(bucket=rows["account_label"]), "bucket",
+        key=f"{key}_topacr", what="accounts",
+        summary=summary.rename(columns={"category": "Account", "acr": "Total ACR",
+                                        "count": "Waves"}),
+        summary_bucket="Account")
 
 
 def _reconciliation(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
@@ -573,7 +618,7 @@ def _detailed_data(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: st
                         key=f"{key}_limit", disabled=start is None,
                         help="Keeps only accounts whose nomination approval date "
                              "(earliest wave) falls inside the selected window.")
-    rows = kpi.account_detail(fact, firsts=waves.first, lasts=waves.last)
+    rows = kpi.account_detail(fact, approvals=waves.approval, lasts=waves.last)
     if limit and start is not None:
         rows = rows[kpi.in_window(rows["approval_date"], start, end)]
         if rows.empty:

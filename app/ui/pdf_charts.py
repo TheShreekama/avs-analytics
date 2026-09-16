@@ -18,7 +18,7 @@ matplotlib.use("Agg")  # headless: no display, no browser, no GUI toolkit
 
 import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
-from matplotlib.ticker import MaxNLocator  # noqa: E402
+from matplotlib.ticker import FuncFormatter, MaxNLocator  # noqa: E402
 
 from ..config import CATEGORICAL_SEQUENCE, PALETTE, STATUS_COLORS  # noqa: E402
 
@@ -98,25 +98,71 @@ def donut_png(df: pd.DataFrame, names: str, values: str, title: str | None = Non
 
 def bar_png(df: pd.DataFrame, x: str, y: str, title: str | None = None,
             horizontal: bool = False, color_status: bool = False,
-            height_px: int = 330, width_px: int = 950) -> bytes:
+            height_px: int = 330, width_px: int = 950,
+            currency: bool = False) -> bytes:
+    """A bar chart.  ``currency`` writes the bar labels and the value axis as
+    money in K/M, the way the tiles write it — never as a raw 1200000."""
     cats = [str(v) for v in df[x].tolist()]
     vals = [float(v) for v in df[y].tolist()]
     colors = _colors_for(cats) if color_status else PALETTE["primary"]
+    labels = [_money(v) for v in vals] if currency else None
     fig, ax = _new(width_px, height_px)
     if horizontal:
         bars = ax.barh(cats, vals, color=colors)
         ax.invert_yaxis()
-        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-        ax.bar_label(bars, fmt="%.0f", padding=3, fontsize=8)
+        if currency:
+            _money_axis(ax.xaxis)
+            ax.bar_label(bars, labels=labels, padding=3, fontsize=8)
+            # Room for the value written outside the longest bar.
+            ax.set_xlim(right=max(vals + [0]) * 1.18 or 1)
+        else:
+            ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+            ax.bar_label(bars, fmt="%.0f", padding=3, fontsize=8)
         ax.grid(axis="x", color="#EEF1F5", linewidth=0.8)
     else:
         bars = ax.bar(cats, vals, color=colors)
-        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-        ax.bar_label(bars, fmt="%.0f", padding=3, fontsize=8)
+        if currency:
+            _money_axis(ax.yaxis)
+            ax.bar_label(bars, labels=labels, padding=3, fontsize=8)
+        else:
+            ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+            ax.bar_label(bars, fmt="%.0f", padding=3, fontsize=8)
         ax.grid(axis="y", color="#EEF1F5", linewidth=0.8)
         if max((len(c) for c in cats), default=0) > 6 or len(cats) > 6:
             plt.setp(ax.get_xticklabels(), rotation=25, ha="right")
     ax.set_axisbelow(True)
+    _despine(ax)
+    _title(ax, title)
+    return _finish(fig)
+
+
+def fy_lines_png(df: pd.DataFrame, x: str, series: list[str],
+                 title: str | None = None, currency: bool = False,
+                 height_px: int = 330, width_px: int = 950) -> bytes:
+    """One line per fiscal year over a shared Jul → Jun month axis.
+
+    The printed form of :func:`app.ui.charts.fy_lines`: over several years a
+    single continuous line only gets longer, where the years laid on top of one
+    another show the movement.  The axis is the twelve months in fiscal order,
+    every one of them, so a quiet month is visible rather than skipped.
+    """
+    cats = [str(v) for v in df[x].tolist()]
+    fig, ax = _new(width_px, height_px)
+    for i, name in enumerate(series):
+        ax.plot(range(len(cats)), df[name].astype(float).tolist(), marker="o",
+                markersize=3.2, linewidth=1.6, label=str(name),
+                color=CATEGORICAL_SEQUENCE[i % len(CATEGORICAL_SEQUENCE)])
+    ax.set_xticks(range(len(cats)), cats, fontsize=8)
+    if currency:
+        _money_axis(ax.yaxis)
+    else:
+        ax.yaxis.set_major_locator(MaxNLocator(integer=True, nbins=6))
+    ax.set_ylim(bottom=0)
+    ax.grid(axis="y", color="#EEF1F5", linewidth=0.8)
+    ax.set_axisbelow(True)
+    # Above the plot: below it the legend lands on the month labels.
+    ax.legend(frameon=False, fontsize=8, ncol=max(len(series), 1),
+              loc="lower center", bbox_to_anchor=(0.5, 1.0))
     _despine(ax)
     _title(ax, title)
     return _finish(fig)
@@ -146,8 +192,7 @@ def line_png(df: pd.DataFrame, x: str, y: str, title: str | None = None,
         ax.set_ylim(0, max(max(ys), 1) * 1.15)
     _category_ticks(ax, labels)
     if currency:
-        ax.yaxis.set_major_formatter(lambda v, _pos: _money(v))
-        ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+        _money_axis(ax.yaxis)
     else:
         ax.yaxis.set_major_locator(MaxNLocator(integer=True, nbins=6))
     ax.grid(axis="y", color="#EEF1F5", linewidth=0.8)
@@ -158,12 +203,25 @@ def line_png(df: pd.DataFrame, x: str, y: str, title: str | None = None,
 
 
 def _money(value: float) -> str:
-    """Axis-scale currency: $1.2M / $840K / $310."""
+    """Axis-scale currency: $1.2M / $840K / $310.
+
+    A round number loses its decimal — "$250K", not "$250.0K".  Axis ticks sit
+    next to one another, and the extra two characters are what makes them run
+    together into "$250.0K$500.0K".
+    """
     v = float(value)
     for limit, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
         if abs(v) >= limit:
-            return f"${v / limit:,.1f}{suffix}"
+            scaled = v / limit
+            digits = 0 if abs(round(scaled, 1) - round(scaled)) < 0.05 else 1
+            return f"${scaled:,.{digits}f}{suffix}"
     return f"${v:,.0f}"
+
+
+def _money_axis(axis) -> None:
+    """Money on an axis: K/M labels, and few enough of them to stay apart."""
+    axis.set_major_locator(MaxNLocator(nbins=6))
+    axis.set_major_formatter(FuncFormatter(lambda v, _p: _money(v)))
 
 
 def heatmap_png(pivot: pd.DataFrame, title: str | None = None, cmap: str = "Blues",

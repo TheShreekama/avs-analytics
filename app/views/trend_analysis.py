@@ -27,7 +27,7 @@ from app.config import FY_START_MONTH, REPORTING_FLOOR_FY
 from app.core import glossary, kpi, metrics, segments
 from app.core.metrics import fmt_currency, fmt_int
 from app.ui import charts, components, drilldown
-from app.ui.theme import banner, page_header, section
+from app.ui.theme import banner, page_header, section, subheading
 
 #: Every category, in the order the reports list them.
 _ALL_CATEGORIES = (segments.CAT_ALL_AVS, segments.CAT_EOS_ALL, segments.CAT_EOS_GEN1,
@@ -57,6 +57,11 @@ class Measure:
     categories: tuple[str, ...] = _ALL_CATEGORIES
     #: Nomination counts can be dated by Wave-1 approval or creation.
     basis_toggle: bool = False
+    #: Categories that also get a "Top 10 accounts by ACR" block under the
+    #: trend.  A monthly line says how much was claimed and when; it does not
+    #: say *who* it was claimed on, and for the two broad motions that is the
+    #: next question every review asks.
+    top_accounts: tuple[str, ...] = ()
 
 
 MEASURES: tuple[Measure, ...] = (
@@ -66,7 +71,7 @@ MEASURES: tuple[Measure, ...] = (
         "category. Each TPID is counted once, in the month of its Wave-1 date.",
         glossary.TREND_NOMINATIONS,
         lambda fact, waves, start, end, date_col: kpi.monthly_unique_tpids(
-            fact, date_col, start, end, firsts=waves.first),
+            fact, date_col, start, end, waves=waves),
         "Nominations", "Nominations", "approval_date", None, False, "nominations",
         basis_toggle=True),
     Measure(
@@ -77,7 +82,8 @@ MEASURES: tuple[Measure, ...] = (
         lambda fact, waves, start, end, date_col: kpi.monthly_acr_claimed(
             fact, start, end),
         "ACR Claimed", "ACR Claimed", "actual_end_date", "total_acr", True,
-        "claiming waves"),
+        "claiming waves",
+        top_accounts=(segments.CAT_ALL_AVS, segments.CAT_AVS_NATIVE)),
     Measure(
         "nodes", "Nodes Deployed",
         "Nodes deployed per month (the Total Cores column) over wave records "
@@ -195,7 +201,54 @@ def _category_block(ctx, measure: Measure, category: str, date_col: str,
         components.show_table(_fy_grid(split, measure, order))
 
     _records_by_fiscal_year(rows, measure, key, picked)
+    if category in measure.top_accounts:
+        _top_accounts(fact, key)
     st.write("")
+
+
+def _top_accounts(fact: pd.DataFrame, key: str) -> None:
+    """The ten accounts carrying the most ACR in this category, and their rows.
+
+    Deliberately outside the fiscal-year split above it: the trend answers *when*
+    ACR was claimed, this answers *where it is*, and the answer is about the
+    whole category rather than a month of it — so no period narrows it, exactly
+    as the pipeline tiles are not narrowed.
+    """
+    summary, rows = kpi.top_accounts_by_acr(fact)
+    subheading(f"Top {kpi.TOP_ACCOUNTS} accounts by ACR",
+               help=glossary.TOP_ACCOUNTS_ACR)
+    if summary.empty:
+        components.empty_state("No account in this category carries any ACR.")
+        return
+    total = float(pd.to_numeric(fact.get("total_acr"), errors="coerce").sum())
+    shown = float(summary["acr"].sum())
+    share = f" — **{shown / total:.0%}** of the category's ACR" if total else ""
+    st.caption(f"Total ACR summed across every wave of each account. These "
+               f"**{fmt_int(len(summary))}** accounts carry "
+               f"**{fmt_currency(shown)}**{share}. All time, not the window "
+               f"above.")
+    left, right = st.columns([3, 2])
+    with left:
+        # Horizontal, because an account name on a vertical axis is readable and
+        # the same name rotated under a bar is not.
+        st.plotly_chart(charts.bar(summary, "category", "acr", horizontal=True,
+                                   currency=True, height=380),
+                        width="stretch", key=f"{key}_top_acr")
+    with right:
+        st.caption("The accounts behind the bars")
+        table = summary.rename(columns={"category": "Account",
+                                        "acr": "Total ACR", "count": "Waves"})
+        components.show_table(components.format_money(table), height=380)
+    frame = kpi.drilldown_frame(rows)
+    # Named apart from the per-fiscal-year record panels above: this one is the
+    # accounts behind the bars, not one year's records.
+    with st.expander(f"🔎 The accounts behind these bars — "
+                     f"{fmt_int(len(frame))} rows"):
+        components.show_table(frame, height=320)
+        st.download_button(
+            "⬇️ Export to CSV", frame.to_csv(index=False).encode("utf-8"),
+            file_name=f"{key}-top-accounts-acr.csv", mime="text/csv",
+            key=f"{key}_top_acr_csv")
 
 
 def _fy_grid(split: pd.DataFrame, measure: Measure, order: list[str]) -> pd.DataFrame:

@@ -107,8 +107,15 @@ def _sidebar_brand(ctx, state, app_name: str, tagline: str) -> None:
 
     src = "Sample dataset" if ctx.is_sample else ctx.filename
     n_cust = len(ctx.customer)
-    st.sidebar.markdown(
-        f"**Dataset:** {src}  \n**Waves:** {len(ctx.fact):,} · **Accounts:** {n_cust:,}")
+    lines = [f"**FDO Dataset:** {src}",
+             f"**Waves:** {len(ctx.fact):,} · **Accounts:** {n_cust:,}"]
+    if ctx.has_tracker:
+        # Which document is answering for the EOS generations and dates is the
+        # kind of thing a reader should never have to go and check.
+        matched = (ctx.report.get("tracker") or {}).get("matched_accounts", 0)
+        lines.append(f"**EOS tracking sheet:** {ctx.tracker_filename} "
+                     f"({matched:,} matched)")
+    st.sidebar.markdown("  \n".join(lines))
     cur = pd.Timestamp(ctx.as_of).date()
     new_asof = st.sidebar.date_input("Reporting as-of date", value=cur,
                                      help="Anchors all date-range presets and the "

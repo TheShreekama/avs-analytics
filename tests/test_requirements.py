@@ -16,8 +16,8 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.config import DIR_OTHER  # noqa: E402
-from app.core import (cleaning, glossary, kpi, loader, mapping, metrics,  # noqa: E402
-                      nulls, rollup, schema, segments)
+from app.core import (cleaning, eos_tracker, glossary, kpi, loader,  # noqa: E402
+                      mapping, metrics, nulls, rollup, schema, segments)
 from app.core.html_report import esc  # noqa: E402
 
 # Wave rows: (TPID, name, task, wave, sku, status, approved, actual_end, cores, acr, path)
@@ -196,6 +196,93 @@ def test_new_engagements_counts_unique_tpids_on_wave1_approval(fact):
     assert m.count == 2
     assert _tpids(m.records) == ["100", "200"]
     assert kpi.new_engagements(eos, "2026-03-01", "2026-03-31").count == 0
+
+
+def _approval_fixture():
+    """Three accounts whose Wave-1 approval date is present, missing, or nowhere."""
+    rows = [
+        # P: Wave-1 approved in January — the date the engagement is counted on,
+        #    even though Wave-1 was cancelled and Wave-2 approved in March.
+        ("700", "Papa",   "p1", "Wave 1", "01-15-2026", "6 - Cancelled / Archived",
+         "Rejected", "Blocked - Customer"),
+        ("700", "Papa",   "p2", "Wave 2", "03-15-2026", "4 - Executing Migration",
+         "Approved", "On Track"),
+        # Q: Wave-1 carries no approval date at all, so the rule moves on to
+        #    Wave-2 — and stops there rather than walking to Wave-3.
+        ("800", "Quebec", "q1", "Wave 1", "",           "1 - Validating",
+         "Pending",  "On Track"),
+        ("800", "Quebec", "q2", "Wave 2", "04-20-2026", "1 - Validating",
+         "Approved", "On Track"),
+        ("800", "Quebec", "q3", "Wave 3", "05-20-2026", "1 - Validating",
+         "Approved", "On Track"),
+        # R: no wave anywhere carries one — never counted, never crashes.
+        ("900", "Romeo",  "r1", "Wave 1", "",           "1 - Validating",
+         "Pending",  "On Track"),
+    ]
+    raw = pd.DataFrame(rows, columns=[
+        "TPID", "Customer Name", "Task ID", "Phase", "Nom. Approval Date",
+        "Migration Status", "Nomination Status", "Current State"])
+    raw["Nom. Created Date"] = "01-01-2026"
+    raw["Factory Offering"] = "AVS Migration Nominations"
+    raw["Primary Migration Path"] = "Onprem to AVS"
+    raw["WW Region"] = "Americas - Enterprise"
+    raw["Total ACR"] = "$1,000"
+    raw["Total Cores"] = "4"
+    raw["Tags"] = "None of the above"
+    mp = mapping.resolve_mapping(list(raw.columns))
+    built, _report = cleaning.build_fact_frame(raw, mp, pd.Timestamp("2026-09-01"))
+    return built
+
+
+def test_wave1_dates_the_engagement_whatever_its_state_or_status():
+    """Wave-1's approval date counts even when Wave-1 was cancelled and unapproved."""
+    built = _approval_fixture()
+    papa = built[built["tpid"] == "700"]
+    january = kpi.new_engagements(papa, "2026-01-01", "2026-01-31")
+    assert january.count == 1
+    assert list(january.records["phase"]) == ["Wave 1"]
+    # …and the later, approved wave does not date it a second time.
+    assert kpi.new_engagements(papa, "2026-03-01", "2026-03-31").count == 0
+
+
+def test_the_next_wave_dates_it_only_when_wave1_has_no_approval_date():
+    """Missing on Wave-1 → the next wave that has one, and no further."""
+    built = _approval_fixture()
+    quebec = built[built["tpid"] == "800"]
+    april = kpi.new_engagements(quebec, "2026-04-01", "2026-04-30")
+    assert april.count == 1
+    # The record is the wave the date was read from, so a drill-down can name it.
+    assert list(april.records["phase"]) == ["Wave 2"]
+    assert list(april.records["task_id"]) == ["q2"]
+    assert kpi.new_engagements(quebec, "2026-05-01", "2026-05-31").count == 0
+
+
+def test_an_account_with_no_approval_date_anywhere_is_not_counted():
+    built = _approval_fixture()
+    romeo = built[built["tpid"] == "900"]
+    assert kpi.new_engagements(romeo, None, None).count == 0
+    # It still has a row in the approval frame, so nothing downstream loses it.
+    assert len(kpi.dated_wave(romeo, "approval_date")) == 1
+
+
+def test_the_first_wave_frame_is_one_real_wave_not_a_composite():
+    """``first_wave`` is Wave-1 itself — the fall-through lives in ``dated_wave``."""
+    built = _approval_fixture()
+    quebec = built[built["tpid"] == "800"]
+    first = kpi.first_wave(quebec)
+    assert list(first["phase"]) == ["Wave 1"]
+    assert first["approval_date"].isna().all()
+    assert list(kpi.dated_wave(quebec, "approval_date")["phase"]) == ["Wave 2"]
+
+
+def test_the_trend_and_the_tile_date_an_engagement_the_same_way():
+    built = _approval_fixture()
+    waves = kpi.wave_index(built)
+    table, _rows = kpi.monthly_unique_tpids(built, "approval_date", waves=waves)
+    months = dict(zip(table["period"], table["Nominations"]))
+    assert months == {"2026-01": 1, "2026-04": 1}
+    assert kpi.new_engagements(built, None, None,
+                               approvals=waves.approval).count == 2
 
 
 def test_migrations_completed_requires_the_latest_wave_to_be_completed(fact):
@@ -450,7 +537,7 @@ def test_no_eos_number_counts_an_unclassified_account(fact):
     combined = segments.population(fact, segments.CAT_EOS_ALL)
     assert "400" not in set(combined["tpid"].astype(str))
     waves = kpi.wave_index(combined)
-    for metric in (kpi.new_engagements(combined, None, None, firsts=waves.first),
+    for metric in (kpi.new_engagements(combined, None, None, approvals=waves.approval),
                    kpi.migrations_completed(combined, None, None, lasts=waves.last),
                    kpi.hosts_migrated(combined), kpi.acr_claimed(combined),
                    kpi.on_track_accounts(combined, lasts=waves.last),
@@ -662,6 +749,192 @@ def test_the_origin_names_app_code_not_the_stage_wrapper():
         with loader.ingest_stage("clean", "f.csv"):
             cleaning.parse_date_series(None)             # raises inside app code
     assert caught.value.failure.origin.startswith("app/core/cleaning.py:")
+
+
+# --------------------------------------------------------------------------- #
+# The manual EOS tracking sheet
+# --------------------------------------------------------------------------- #
+_TRACKER_HEADERS = [
+    "TPID", "Customer", "Region", "Migration Status", "Current State",
+    "Target SDDC Generation", "Total SDDCs in Scope for Migration",
+    "Number of SDDCs Migrated", "Migration Start Date",
+    "Actual Migration End Date", "Programme Notes",
+]
+
+
+def _sheet(rows):
+    return pd.DataFrame(rows, columns=_TRACKER_HEADERS, dtype="string")
+
+
+def _tracked_fact(raw_frame, rows):
+    """The requirements fixture with a tracking sheet joined onto it."""
+    tracker, _report = eos_tracker.build_tracker(_sheet(rows))
+    mp = mapping.resolve_mapping(list(raw_frame.columns))
+    built, report = cleaning.build_fact_frame(raw_frame, mp,
+                                              pd.Timestamp("2026-09-01"),
+                                              tracker=tracker)
+    return built, tracker, report
+
+
+def test_the_sheet_is_read_by_its_own_column_names():
+    """The ten columns the programme's sheet carries, matched off the header row."""
+    found = eos_tracker.auto_map(_TRACKER_HEADERS)
+    assert found["tpid"] == "TPID"
+    assert found["target_generation"] == "Target SDDC Generation"
+    assert found["sddcs_in_scope"] == "Total SDDCs in Scope for Migration"
+    assert found["sddcs_migrated"] == "Number of SDDCs Migrated"
+    assert found["migration_start_date"] == "Migration Start Date"
+    assert found["migration_end_date"] == "Actual Migration End Date"
+    # A column the reports have no use for is left alone, not claimed.
+    assert "Programme Notes" not in set(found.values())
+
+
+def test_a_sheet_without_a_tpid_column_says_so():
+    """TPID is the only key, so its absence is a refusal, not a silent no-op."""
+    with pytest.raises(ValueError, match="TPID"):
+        eos_tracker.build_tracker(pd.DataFrame(
+            {"Customer": ["Acme"], "Target SDDC Generation": ["Gen1"]},
+            dtype="string"))
+
+
+def test_the_sheets_generation_decides_the_account(raw_frame):
+    """Target SDDC Generation leads; the Gen1/Gen2 tag is the fallback."""
+    built, _tracker, _report = _tracked_fact(raw_frame, [
+        # 100 is tagged Gen-1 in the export — the sheet says Gen2 and wins.
+        ("100", "Alpha", "Americas", "", "", "Gen2", "2", "0", "", "", ""),
+        # 500 carries no generation tag at all, so the sheet is all there is.
+        ("500", "Echo", "Americas", "", "", "Gen1", "1", "0", "", "", ""),
+    ])
+    by_tpid = built.drop_duplicates("tpid_key").set_index("tpid")
+    assert by_tpid.loc["100", "generation"] == segments.GEN_2
+    assert by_tpid.loc["500", "generation"] == segments.GEN_1
+    assert by_tpid.loc["100", eos_tracker.GENERATION_SOURCE] == eos_tracker.SOURCE_TRACKER
+    # An account the sheet does not cover keeps the tag's answer.
+    assert by_tpid.loc["300", "generation"] == segments.GEN_2
+    assert by_tpid.loc["300", eos_tracker.GENERATION_SOURCE] == eos_tracker.SOURCE_TAGS
+
+
+def test_a_blank_target_generation_falls_back_to_the_tag(raw_frame):
+    built, _tracker, _report = _tracked_fact(raw_frame, [
+        ("100", "Alpha", "Americas", "", "", "", "2", "0", "", "", ""),
+        ("400", "Delta", "Americas", "", "", "   ", "1", "0", "", "", ""),
+    ])
+    by_tpid = built.drop_duplicates("tpid_key").set_index("tpid")
+    assert by_tpid.loc["100", "generation"] == segments.GEN_1      # its own tag
+    assert by_tpid.loc["100", eos_tracker.GENERATION_SOURCE] == eos_tracker.SOURCE_TAGS
+    # 400 has an EOS path but no tag and no stated generation — still unclassified.
+    assert by_tpid.loc["400", "generation"] == segments.GEN_UNCLASSIFIED
+
+
+def test_the_sheet_brings_an_untagged_account_into_eos_scope(raw_frame):
+    """A stated generation is scope as well as generation."""
+    built, _tracker, _report = _tracked_fact(raw_frame, [
+        ("500", "Echo", "Americas", "", "", "Gen1", "1", "0", "", "", ""),
+    ])
+    gen1 = segments.population(built, segments.CAT_EOS_GEN1)
+    assert "500" in set(gen1["tpid"].astype(str))
+    assert bool(built.loc[built["tpid"] == "500", "is_eos_population"].all())
+
+
+def test_only_the_tpid_is_read_from_the_sheet_everything_else_is_looked_up(raw_frame):
+    """PM, SA and the rest come from the FDO dataset, matched on TPID."""
+    built, _tracker, report = _tracked_fact(raw_frame, [
+        ("100", "A DIFFERENT NAME ENTIRELY", "Nowhere", "", "", "Gen2",
+         "2", "0", "", "", ""),
+    ])
+    row = built[built["tpid"] == "100"].iloc[0]
+    assert row["customer_name"] == "Alpha"          # the export's name, not the sheet's
+    assert row["region_geo"] == "Americas - Enterprise"
+    assert row["eos_tracker_customer"] == "A DIFFERENT NAME ENTIRELY"
+    assert report["tracker"]["matched_accounts"] == 1
+
+
+def test_a_tpid_the_export_has_never_heard_of_is_named_not_invented(raw_frame):
+    built, tracker, report = _tracked_fact(raw_frame, [
+        ("999999", "Ghost Ltd", "Americas", "", "", "Gen1", "1", "0", "", "", ""),
+    ])
+    assert report["tracker"]["unmatched_tpids"] == ["999999"]
+    # No row is conjured for it: it has no offering, no ACR and no wave.
+    assert "999999" not in set(built["tpid"].astype(str))
+    issues = eos_tracker.inconsistencies(built, tracker, report["tracker"])
+    assert list(issues["unmatched_tpids"]["tpid"]) == ["999999"]
+
+
+def test_the_matrix_takes_the_sheets_start_and_end_dates(raw_frame):
+    built, _tracker, _report = _tracked_fact(raw_frame, [
+        ("100", "Alpha", "Americas", "", "", "Gen1", "2", "2",
+         "01-05-2026", "06-20-2026", ""),
+    ])
+    pop = built[built["tpid"] == "100"]
+    starts = kpi.migration_start_dates(pop)
+    assert list(starts["migration_start_date"]) == [pd.Timestamp("2026-01-05")]
+    assert list(starts["start_date_source"]) == [kpi.TRACKER_START_SOURCE]
+    ends = kpi.migration_end_dates(pop)
+    assert list(ends["migration_end_date"]) == [pd.Timestamp("2026-06-20")]
+    assert list(ends["end_date_source"]) == [kpi.TRACKER_END_SOURCE]
+
+    months = kpi.month_span("2026-01-01", "2026-07-31")
+    grid = kpi.monthly_matrix(pop, months).set_index("Measure")
+    assert grid.loc["Total number of migration start", "Jan-26"] == "1"
+    assert grid.loc["Total number of migration end", "Jun-26"] == "1"
+    # The export's own dates — Feb and Jul — no longer place this account.
+    assert grid.loc["Total number of migration end", "Jul-26"] == "0"
+
+
+def test_an_account_the_sheet_does_not_date_keeps_the_export_rule(raw_frame):
+    """The fallback is the behaviour of an installation with no sheet at all."""
+    built, _tracker, _report = _tracked_fact(raw_frame, [
+        ("100", "Alpha", "Americas", "", "", "Gen1", "2", "0", "", "", ""),
+    ])
+    pop = built[built["tpid"] == "100"]
+    ends = kpi.migration_end_dates(pop)
+    assert list(ends["end_date_source"]) == [kpi.FDO_END_SOURCE]
+    assert list(ends["migration_end_date"]) == [pd.Timestamp("2026-07-15")]
+
+
+def test_with_no_sheet_every_eos_number_is_what_it_always_was(fact, raw_frame):
+    """The overlay has to be invisible until a sheet is loaded."""
+    built, _tracker, _report = _tracked_fact(raw_frame, [])
+    for column in ("generation", "is_eos_population", "migration_category"):
+        assert list(built[column].astype(str)) == list(fact[column].astype(str))
+    months = kpi.month_span("2026-01-01", "2026-08-31")
+    eos = segments.population(fact, segments.CAT_EOS_ALL)
+    assert (kpi.monthly_matrix(eos, months).to_dict()
+            == kpi.monthly_matrix(segments.population(built, segments.CAT_EOS_ALL),
+                                  months).to_dict())
+
+
+def test_several_sheet_rows_for_one_account_roll_up_to_one(raw_frame):
+    """A sheet row per SDDC: earliest start, latest end, counts summed."""
+    tracker, report = eos_tracker.build_tracker(_sheet([
+        ("100", "Alpha", "Americas", "", "", "Gen1", "2", "1",
+         "03-01-2026", "05-01-2026", ""),
+        ("100", "Alpha", "Americas", "", "", "Gen1", "1", "1",
+         "01-15-2026", "06-10-2026", ""),
+    ]))
+    assert len(tracker) == 1 and report["accounts"] == 1
+    row = tracker.iloc[0]
+    assert row["migration_start_date"] == pd.Timestamp("2026-01-15")
+    assert row["migration_end_date"] == pd.Timestamp("2026-06-10")
+    assert row["sddcs_in_scope"] == 3 and row["sddcs_migrated"] == 2
+
+
+def test_rows_that_disagree_on_the_generation_are_reported_not_hidden():
+    tracker, report = eos_tracker.build_tracker(_sheet([
+        ("100", "Alpha", "Americas", "", "", "Gen1", "1", "0", "", "", ""),
+        ("100", "Alpha", "Americas", "", "", "Gen2", "1", "0", "", "", ""),
+    ]))
+    assert report["generation_conflicts"] == ["100"]
+    assert tracker.iloc[0]["target_generation"] == segments.GEN_1   # Gen-1 wins
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("Gen1", segments.GEN_1), ("gen 2", segments.GEN_2),
+    ("GEN-1", segments.GEN_1), ("Target Gen2", segments.GEN_2),
+    ("", None), ("   ", None), ("TBD", None), ("Gen3", None),
+])
+def test_the_generation_cell_is_read_the_way_it_is_typed(value, expected):
+    assert eos_tracker.normalise_generation(value) == expected
 
 
 # --------------------------------------------------------------------------- #
@@ -1557,7 +1830,7 @@ def test_blocked_accounts_are_in_none_of_the_delivery_metrics(state_fact):
     _states_summary, reported = kpi.by_state(state_fact, lasts=waves.last)
     assert set(reported["tpid"].astype(str)) & out == set()
     # Intake counts them once, as the nominations they are — and only once.
-    intake = kpi.new_engagements(state_fact, None, None, firsts=waves.first)
+    intake = kpi.new_engagements(state_fact, None, None, approvals=waves.approval)
     assert intake.count == state_fact["tpid_key"].nunique()
     assert not intake.records["tpid"].duplicated().any()
 
@@ -2233,7 +2506,7 @@ def test_the_eos_report_cuts_accounts_by_generation_and_state(every_state_fact):
     # Engagements counts.
     assert int(grid.loc[exp.ALL_EOS_ROW].sum()) == pop["tpid_key"].nunique()
     assert int(grid.loc[exp.ALL_EOS_ROW].sum()) == kpi.new_engagements(
-        pop, None, None, firsts=waves.first).count
+        pop, None, None, approvals=waves.approval).count
     # A cell opens its own accounts, and every account belongs to two cells:
     # its generation's, and the total row's.
     buckets = set(html_report_module()._by_generation_state(rows))
@@ -2281,10 +2554,183 @@ def test_the_generation_heatmap_is_in_the_eos_report_only(every_state_fact):
     assert (sum(v for k, v in per_row.items() if k != exp_module().ALL_EOS_ROW)
             == pop["tpid_key"].nunique())
 
+    # …and nowhere else: the AVS report has no generations to cut by.  These two
+    # lines sat below the `return` of the helper underneath and so never ran.
+    avs = _main(html_report.build_html_report(ctx, reports=["avs"]).decode())
+    assert "Accounts by generation and state" not in avs
+
 
 def exp_module():
     from app.core import exporter
     return exporter
 
-    avs = _main(html_report.build_html_report(ctx, reports=["avs"]).decode())
-    assert "Accounts by generation and state" not in avs
+
+# --------------------------------------------------------------------------- #
+# The PDF and the HTML report are one report in two renderings
+# --------------------------------------------------------------------------- #
+#: Every section heading a report carries, as the reader sees it.  The two
+#: renderers are checked against this same list, because "the PDF is missing the
+#: matrix" is exactly the kind of drift that goes unnoticed until someone prints
+#: the thing and finds half a report.  The headline tiles are not here: the HTML
+#: report writes them without a heading of their own (see the tile tests).
+_SHARED_SECTIONS = [
+    "Trends — month over month",
+    "Fiscal years side by side",
+    "Current pipeline",
+    "Regional breakdown",
+    "Blocked, deferred & cancelled accounts",
+]
+
+
+def _exp():
+    from app.core import exporter as exp
+    return exp
+
+
+def _pdf_text(ctx, **kw) -> str:
+    return _flowable_text(_exp().build_story(ctx, **kw))
+
+
+def test_both_reports_carry_the_same_sections(state_ctx):
+    """Whatever the HTML report shows, the printed one prints."""
+    from app.core import html_report
+
+    pdf = _pdf_text(state_ctx, reports=["avs", "eos"], drilldown=False)
+    html = _main(html_report.build_html_report(
+        state_ctx, reports=["avs", "eos"]).decode())
+    for section in _SHARED_SECTIONS:
+        assert section in pdf, f"missing from the PDF: {section}"
+        assert esc(section) in html or section in html, \
+            f"missing from the HTML report: {section}"
+
+
+def test_the_pdf_carries_the_eos_programme_matrix(state_ctx):
+    """The grid the EOS dashboard opens with, which the PDF used not to have."""
+    from app.core import html_report
+
+    pdf = _pdf_text(state_ctx, reports=["eos"], drilldown=False)
+    html = _main(html_report.build_html_report(state_ctx, reports=["eos"]).decode())
+    for text in ("Monthly programme matrix", "Gen1 to Gen1", "Gen1 to Gen2",
+                 "Total number of new engagement", "Total number of migration start"):
+        assert text in pdf, f"missing from the PDF: {text}"
+        assert text in html, f"missing from the HTML report: {text}"
+    # The AVS report has no matrix — it is the EOS programme's own grid.
+    assert "Monthly programme matrix" not in _pdf_text(
+        state_ctx, reports=["avs"], drilldown=False)
+
+
+def test_the_pdf_gets_a_this_fy_row_too(state_ctx):
+    """The same two-row rule the dashboards and the HTML report follow."""
+    month = _pdf_text(state_ctx, reports=["avs"], drilldown=False,
+                      period_label="01 Nov 2025 → 30 Nov 2025",
+                      date_window=(pd.Timestamp("2025-11-01"),
+                                   pd.Timestamp("2025-11-30")))
+    assert "Two periods:" in month
+    assert "01 Nov 2025 → 30 Nov 2025" in month
+
+    span = metrics.date_preset_range(state_ctx.as_of, "This FY", 7)
+    same = _pdf_text(state_ctx, reports=["avs"], drilldown=False,
+                     period_label="This FY", date_window=(span[0], span[1]))
+    assert "Two periods:" not in same
+
+
+def test_both_reports_carry_every_trend_including_the_fiscal_years(state_ctx):
+    """All four measures, month by month and then year against year."""
+    from app.core import html_report
+
+    pdf = _pdf_text(state_ctx, reports=["avs"], drilldown=False)
+    html = _main(html_report.build_html_report(state_ctx, reports=["avs"]).decode())
+    spec = _exp()._BY_KEY["avs"]
+    titles = [t.title for t in _exp().trends(
+        state_ctx.fact, kpi.wave_index(state_ctx.fact), None, None, spec)]
+    # The noun the report uses for Total Cores reaches the trend titles, so the
+    # chart and the tile above it cannot call the same column two things.
+    assert _exp().unit_noun(spec) == "Nodes"
+    assert any("Total Nodes" in t for t in titles)
+    assert len(titles) == 4
+    for title in titles:
+        # Twice over in each: once under the monthly trends, once under the
+        # fiscal-year comparison.
+        assert pdf.count(title) >= 2, (title, pdf.count(title))
+        assert esc(title) in html
+    assert _exp().FISCAL_YEARS_TITLE in pdf
+    assert _exp().FISCAL_YEARS_TITLE in html
+
+
+def test_the_fiscal_year_comparison_ignores_the_reporting_period(state_ctx):
+    """A year-on-year comparison cut to one month has nothing to compare."""
+    from app.core import html_report
+
+    def fy_grid(doc):
+        """The nominations fiscal-year grid, exactly as the report wrote it."""
+        body = _main(doc)
+        marker = 'id="fy-avs-nominations-g"'
+        assert marker in body
+        return body.split(marker, 1)[1].split("</table>", 1)[0]
+
+    whole = html_report.build_html_report(state_ctx, "", reports=["avs"]).decode()
+    narrowed = html_report.build_html_report(
+        state_ctx, _FROM_SEP, reports=["avs"], all_time_where="",
+        date_window=_SEP_WINDOW, period_label="Sep 25 → Jun 26").decode()
+    # The period moves the monthly trend and not this: a year-on-year comparison
+    # cut to one month would have nothing to compare.
+    assert fy_grid(whole) == fy_grid(narrowed)
+    assert "Sep 25 → Jun 26" in _main(narrowed)
+
+
+# --------------------------------------------------------------------------- #
+# Top 10 accounts by ACR
+# --------------------------------------------------------------------------- #
+def test_top_accounts_rank_on_acr_summed_over_every_wave(fact):
+    """An account with waves of 100k and 50k is a 150k account, not a 50k one."""
+    pop = segments.population(fact, segments.CAT_ALL_AVS)
+    summary, rows = kpi.top_accounts_by_acr(pop)
+    by_account = dict(zip(rows["tpid"].astype(str), rows["total_acr"]))
+    assert by_account["100"] == 150_000          # 100,000 + 50,000 across two waves
+    assert by_account["300"] == 305_000          # 300,000 + 5,000
+    # Largest first, and the summary and the rows are the same accounts.
+    assert list(summary["acr"]) == sorted(summary["acr"], reverse=True)
+    assert len(summary) == len(rows)
+
+
+def test_top_accounts_name_the_tpid_so_no_two_bars_are_the_same(fact):
+    pop = segments.population(fact, segments.CAT_ALL_AVS)
+    summary, _rows = kpi.top_accounts_by_acr(pop)
+    assert len(set(summary["category"])) == len(summary)
+    assert any("(100)" in str(label) for label in summary["category"])
+
+
+def test_top_accounts_stop_at_ten_and_skip_the_accounts_with_no_acr():
+    rows = [("%d" % i, f"Acct {i}", f"${(20 - i) * 1000:,}") for i in range(1, 15)]
+    rows.append(("99", "No money", "$0"))
+    raw = pd.DataFrame([{
+        "TPID": t, "Customer Name": name, "Task ID": f"k{t}", "Phase": "Wave 1",
+        "Factory Offering": "AVS Migration Nominations",
+        "Primary Migration Path": "Onprem to AVS", "Nomination Status": "Approved",
+        "Migration Status": "4 - Executing Migration", "Current State": "On Track",
+        "Nom. Approval Date": "2026-01-05", "Nom. Created Date": "2026-01-05",
+        "Total Cores": "10", "Total ACR": acr, "WW Region": "EMEA", "Tags": "x",
+    } for t, name, acr in rows]).astype("string")
+    mp = mapping.resolve_mapping(list(raw.columns))
+    built, _report = cleaning.build_fact_frame(raw, mp, pd.Timestamp("2026-09-01"))
+    summary, _rows = kpi.top_accounts_by_acr(built)
+    assert len(summary) == kpi.TOP_ACCOUNTS == 10
+    assert "No money" not in " ".join(str(v) for v in summary["category"])
+    assert len(kpi.top_accounts_by_acr(built, limit=3)[0]) == 3
+
+
+def test_both_reports_carry_the_top_accounts_on_the_two_broad_motions(state_ctx):
+    from app.core import html_report
+
+    title = _exp().top_accounts_title()
+    assert {"avs", "native"} == set(_exp().TOP_ACCOUNT_REPORTS)
+    for key in ("avs", "native"):
+        assert _exp().shows_top_accounts(_exp()._BY_KEY[key])
+    # The fixture only populates the AVS motions, so that is the one both
+    # renderers can be read for.
+    assert title in _pdf_text(state_ctx, reports=["avs"], drilldown=False)
+    assert title in _main(html_report.build_html_report(
+        state_ctx, reports=["avs"]).decode())
+    # Not on the EOS report: its question is which generation, not which account.
+    assert not _exp().shows_top_accounts(_exp()._BY_KEY["eos"])
+    assert title not in _pdf_text(state_ctx, reports=["eos"], drilldown=False)

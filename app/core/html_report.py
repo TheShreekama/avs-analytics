@@ -456,13 +456,11 @@ def _card(title: str, note: str, body: str) -> str:
 # Report sections
 # --------------------------------------------------------------------------- #
 def _unit_noun(spec) -> str:
-    """What this report calls the Total Cores column.
+    """What this report calls the Total Cores column — Nodes, or Cores.
 
-    The AVS motions deploy **nodes**; only the "(From AVS)" motion moves cores
-    to Azure-native services.  One noun per report, used by the tiles and the
-    trend titles alike so the two never disagree.
+    One rule, in :func:`app.core.exporter.unit_noun`, shared with the PDF.
     """
-    return "Cores" if spec.key == "native" else "Nodes"
+    return exporter.unit_noun(spec)
 
 
 def _population_line(spec, pop: pd.DataFrame) -> str:
@@ -547,39 +545,31 @@ def _by_month(rows: pd.DataFrame) -> list[str]:
 
 
 def _trends(doc: _Builder, spec, pop, waves, start, end) -> None:
-    """The four monthly measures, each a bar chart with a cumulative line."""
-    noms, nom_rows = kpi.monthly_unique_tpids(pop, "approval_date", start, end,
-                                              firsts=waves.first)
-    acr, acr_rows = kpi.monthly_acr_claimed(pop, start, end)
-    hosts, host_rows = kpi.monthly_hosts(pop, start, end)
-    done, done_rows = kpi.monthly_migrations_completed(pop, start, end,
-                                                       lasts=waves.last)
-    noun = _unit_noun(spec)
-    series = [("Nominations per month (unique TPIDs)", noms, nom_rows,
-               "Nominations", False),
-              ("ACR claimed per month", acr, acr_rows, "ACR Claimed", True),
-              (f"{spec.unit_label} per month (Total {noun})", hosts, host_rows,
-               "Hosts", False),
-              ("Migrations completed per month (unique TPIDs)", done, done_rows,
-               "Migrations Completed", False)]
+    """The four monthly measures, each a bar chart with a cumulative line.
+
+    Built from :func:`app.core.exporter.trends`, which the PDF uses too — the
+    two reports carry the same four measures under the same names because they
+    are not two sets of measures.
+    """
     drawn = []
-    for title, table, rows, value_col, currency in series:
-        if table.empty:
+    for trend in exporter.trends(pop, waves, start, end, spec, _unit_noun(spec)):
+        if trend.table.empty:
             continue
         # ``currency`` reaches the factory as well as the figure: the factory
         # writes the hover ($1.25M from customdata), the figure the axis.  Left
         # off, the axis reads $1.2M while the tooltip reads 1,250,000.
-        fig = charts.trend_chart(table, "period", value_col, "Cumulative",
-                                 currency=currency, height=300)
-        slug = _slug("t", spec.key, value_col.lower().replace(" ", ""))
-        body = _drillable(doc, heading=title, fig=fig, rows=rows,
+        fig = charts.trend_chart(trend.table, "period", trend.value_col,
+                                 "Cumulative", currency=trend.currency, height=300)
+        slug = _slug("t", spec.key, trend.key)
+        body = _drillable(doc, heading=trend.title, fig=fig, rows=trend.rows,
                           buckets=_by_month, table_id=slug + "-r",
-                          height=300, currency=currency)
+                          height=300, currency=trend.currency)
         body += _accordion(
-            f"Monthly numbers — {title}",
-            _table(exporter.trend_table(table, value_col, currency), slug + "-m",
-                   numeric={value_col, "Cumulative"}),
-            badge=f"{fmt_int(len(table))} months")
+            f"Monthly numbers — {trend.title}",
+            _table(exporter.trend_table(trend.table, trend.value_col,
+                                        trend.currency),
+                   slug + "-m", numeric={trend.value_col, "Cumulative"}),
+            badge=f"{fmt_int(len(trend.table))} months")
         drawn.append(f"<div>{body}</div>")
     if not drawn:
         doc.write(_card("Trends — month over month", "",
@@ -592,6 +582,96 @@ def _trends(doc: _Builder, spec, pop, waves, start, end) -> None:
         "bar or point to narrow the accounts beneath it to that month; click it "
         "again to clear. A legend entry hides a series; dragging zooms.",
         "".join(drawn)))
+
+
+def _fiscal_years(doc: _Builder, spec, pop, waves) -> None:
+    """The same measures again, each fiscal year against the others.
+
+    ``pop`` is the population the reporting period never narrowed: a
+    year-on-year comparison cut to one month has nothing to compare, so this
+    reads the whole dataset while every other filter still binds — the same
+    argument the programme matrix is drawn from.
+    """
+    order = metrics.fiscal_month_order(FY_START_MONTH)
+    drawn = []
+    for trend in exporter.trends(pop, waves, None, None, spec, _unit_noun(spec)):
+        split, grid = exporter.fiscal_year_split(trend)
+        if split.empty or grid.empty:
+            continue
+        fig = charts.fy_lines(split, "fy_month", "fy", trend.value_col, order,
+                              currency=trend.currency, height=320)
+        slug = _slug("fy", spec.key, trend.key)
+        rows = kpi.label_fiscal_year(trend.rows, trend.date_col, FY_START_MONTH)
+        # A point names its fiscal year (the trace) and its month (the x), so
+        # clicking Sep on the FY26 line opens FY26's September and not FY25's.
+        body = _drillable(
+            doc, heading=trend.title, fig=fig,
+            rows=rows if rows is not None else pd.DataFrame(),
+            buckets=_by_fiscal_month, table_id=slug + "-r", mode="trace-x",
+            height=320, currency=trend.currency,
+            label=f"Records — {trend.title}")
+        body += _accordion(
+            f"{exporter.FISCAL_YEARS_TITLE} — {trend.title}",
+            _table(grid, slug + "-g", numeric=set(grid.columns[1:]),
+                   row_head=True, highlight="Total"),
+            badge=f"{fmt_int(len(grid.columns) - 1)} fiscal years")
+        drawn.append(f"<div>{body}</div>")
+    if not drawn:
+        return
+    doc.write(_card(exporter.FISCAL_YEARS_TITLE,
+                    exporter.FISCAL_YEARS_NOTE + " Click a point to narrow the "
+                    "records beneath it to that month.",
+                    "".join(drawn)))
+
+
+def _by_fiscal_month(rows: pd.DataFrame) -> list[str]:
+    """Each record's (fiscal year, month) pair, as a clicked point names it.
+
+    The chart draws one line per fiscal year over a shared Jul → Jun axis, so
+    the month alone identifies nothing: both lines have a September.  The bucket
+    is the trace and the point together, which is what ``trace-x`` reads off the
+    click.
+    """
+    if "fy" not in rows.columns or "fy_month" not in rows.columns:
+        return ["" for _ in range(len(rows))]
+    return [f"{fy}{_REGION_STAGE_JOIN}{month}"
+            for fy, month in zip(rows["fy"], rows["fy_month"])]
+
+
+def _top_accounts(doc: _Builder, spec, pop, waves) -> None:
+    """The ten accounts carrying the most ACR, charted and listed.
+
+    Not narrowed by the reporting period, like the pipeline: the question is
+    where this category's money sits, which a window would answer only for the
+    window.
+    """
+    summary, rows = exporter.top_accounts(pop, waves)
+    title = exporter.top_accounts_title()
+    if summary.empty:
+        doc.write(_card(title, exporter.TOP_ACCOUNTS_NOTE,
+                        '<p class="empty">No account in this category carries '
+                        'any ACR.</p>'))
+        return
+    body = _drillable(
+        doc, heading="Accounts by total ACR",
+        fig=charts.bar(summary, "category", "acr", horizontal=True,
+                       currency=True),
+        rows=rows, buckets=lambda r: list(r["account_label"]),
+        table_id=_slug("ta", spec.key), mode="y", height=380, currency=True,
+        label="Accounts — largest by ACR")
+    printable = summary.rename(columns={"category": "Account", "acr": "Total ACR",
+                                        "count": "Waves"})
+    printable["Total ACR"] = printable["Total ACR"].map(fmt_currency)
+    printable["Waves"] = printable["Waves"].map(fmt_int)
+    body += _accordion(
+        "The numbers — account by account",
+        _table(printable, _slug("tn", spec.key),
+               numeric={"Total ACR", "Waves"}, row_head=True),
+        badge=f"{fmt_int(len(summary))} accounts")
+    doc.write(_card(title,
+                    exporter.TOP_ACCOUNTS_NOTE + " "
+                    + exporter.top_accounts_line(summary, pop)
+                    + " Click a bar to open the account behind it.", body))
 
 
 def _pipeline(doc: _Builder, spec, pop, waves) -> None:
@@ -781,10 +861,12 @@ def _eos_matrix(doc: _Builder, ctx, pop) -> None:
         "fiscal year closing with its own total column — the whole programme, "
         "not narrowed by the reporting period the rest of this report uses. "
         "Blocks are the generation each account is refreshing on to — all EOS "
-        "accounts are coming from Gen-1 hardware. Migration start is derived "
-        "(earliest wave reading On Track or Done → Actual Start Date, else "
-        "Planned Start, else Nom. Approval); engagement end repeats migration "
-        "end, the closest the export comes to it.",
+        "accounts are coming from Gen-1 hardware. Migration start and migration "
+        "end are the manual EOS tracking sheet's own dates wherever it covers "
+        "an account, and otherwise the export's: start derived (earliest wave "
+        "reading On Track or Done → Actual Start Date, else Planned Start, else "
+        "Nom. Approval), end from the latest wave completing. Engagement end "
+        "repeats migration end, the closest the export comes to it.",
         "".join(blocks)))
 
 
@@ -972,29 +1054,10 @@ def _insights(doc: _Builder, spec, pop) -> None:
 def _this_fy(ctx, start, end) -> tuple[tuple | None, str]:
     """The fiscal year the as-of date sits in — unless that *is* the window.
 
-    Mirrors the dashboard's Executive Summary, which puts a This-FY row above
-    the selected period whenever the two differ, so a month's numbers keep the
-    year they sit in.  Returns ``(None, "")`` only when the report already
-    covers exactly This FY.
-
-    **An unbounded period is not This FY.**  "All time" resolves to no window at
-    all, and reading that as "nothing to compare against" is what used to drop
-    the row from the report while the dashboard — which decides on the preset,
-    not on the dates — still showed it.  All time spans several fiscal years, so
-    the year you are in is exactly the context it loses.
+    One rule, in :func:`app.core.exporter.this_fiscal_year`, so the PDF puts the
+    row above the same periods this report does.
     """
-    span = metrics.date_preset_range(ctx.as_of, "This FY", FY_START_MONTH)
-    if not span:
-        return None, ""
-    fy_start, fy_end = pd.Timestamp(span[0]).date(), pd.Timestamp(span[1]).date()
-    same = (start is not None and end is not None
-            and pd.Timestamp(start).date() == fy_start
-            and pd.Timestamp(end).date() == fy_end)
-    if same:
-        return None, ""
-    label = (f"This FY ({metrics.fiscal_year_label(fy_start, FY_START_MONTH)}) — "
-             f"{fy_start:%d %b %Y} → {fy_end:%d %b %Y}")
-    return (fy_start, fy_end), label
+    return exporter.this_fiscal_year(ctx.as_of, start, end)
 
 
 def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec,
@@ -1034,6 +1097,14 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec
         # reporting period never touched — see :func:`_eos_matrix`.
         _eos_matrix(doc, ctx, segments.population(all_time, spec.category))
     _trends(doc, spec, pop, waves, start, end)
+    # The whole-dataset population, for everything a reporting period must not
+    # narrow: a year-on-year comparison cut to one month has nothing to compare,
+    # and "where is the money" is a question about the category, not the window.
+    whole = segments.population(all_time, spec.category)
+    whole_waves = kpi.wave_index(whole) if not whole.empty else waves
+    _fiscal_years(doc, spec, whole if not whole.empty else pop, whole_waves)
+    if exporter.shows_top_accounts(spec):
+        _top_accounts(doc, spec, whole if not whole.empty else pop, whole_waves)
     _pipeline(doc, spec, pop, waves)
     if spec.key == "native":
         _offerings(doc, spec, pop)

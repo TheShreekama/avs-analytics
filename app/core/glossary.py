@@ -14,11 +14,15 @@ from . import segments
 # Metrics
 # --------------------------------------------------------------------------- #
 NEW_ENGAGEMENTS = (
-    "Unique customers (TPIDs) whose FIRST wave was approved inside the reporting "
-    "period.\n"
-    "• Takes each TPID's Wave-1 row (lowest Phase/Wave number).\n"
-    "• Keeps it when its Nom. Approval Date falls in the period.\n"
-    "• Counts each TPID once — later waves of the same account never add to it."
+    "Unique customers (TPIDs) nominated inside the reporting period.\n"
+    "• Reads the Nom. Approval Date of the TPID's Wave-1 row (lowest Phase/Wave "
+    "number), WHATEVER state or status that wave is in — a cancelled, blocked "
+    "or unapproved Wave-1 still dates the engagement.\n"
+    "• Only when Wave-1 has no Nom. Approval Date does it move on to the next "
+    "wave, and the next, until one carries a date.\n"
+    "• Keeps the account when that date falls in the period.\n"
+    "• Counts each TPID once — later waves of the same account never add to it.\n"
+    "An account with no approval date on any wave is not counted."
 )
 
 MIGRATIONS_COMPLETED = (
@@ -156,8 +160,22 @@ TRENDS = (
 
 TREND_NOMINATIONS = (
     "Unique customers (TPIDs) per month, placed in the month of their Wave-1 date "
-    "(approval or creation, per the Trend basis above). Each TPID appears in one "
-    "month only."
+    "(approval or creation, per the Trend basis above) — whatever state that wave "
+    "is in, falling through to the next wave only when Wave-1 leaves the date "
+    "blank. Each TPID appears in one month only."
+)
+
+TOP_ACCOUNTS_ACR = (
+    "The ten accounts carrying the most ACR in this category, largest first.\n"
+    "• One row per account (TPID), never per wave.\n"
+    "• Total ACR is summed across EVERY wave the account has — an account with "
+    "waves of 10M, 15M and 20M is a 45M account, and ranking it on its latest "
+    "wave's 20M alone would place it wrongly.\n"
+    "• Accounts with no ACR are left out rather than listed as zeroes.\n"
+    "• Not narrowed by the reporting period: it answers where the money in this "
+    "category is, which is a question about the whole category.\n"
+    "Read it for concentration — how much of the category sits in a handful of "
+    "accounts, and who they are."
 )
 
 TREND_ACR = (
@@ -252,9 +270,9 @@ DETAILED_DATA = (
     "account's LATEST wave, so the row reads as where it stands now.\n"
     "• Total ACR — summed across EVERY wave of the account. Waves of 10M, 15M "
     "and 20M show as 45M; the latest wave's 20M alone would understate it.\n"
-    "• Nom. Approval Date — from the EARLIEST wave (lowest wave number), the "
-    "same Wave-1 rule the New Engagements tile counts on, because that is when "
-    "the account was nominated.\n"
+    "• Nom. Approval Date — from Wave-1 whatever its state, falling through to "
+    "the next wave that carries one: the same rule the New Engagements tile "
+    "counts on, because that is when the account was nominated.\n"
     "Group it to read subtotals, then export to CSV."
 )
 
@@ -349,11 +367,19 @@ EOS_MATRIX = (
     "ends are unique TPIDs whose LATEST wave is '7 - Completed', in the month "
     "of its Actual End Date; hosts migrated is the sum of Total Cores over "
     "every completed wave record, never a count of accounts.\n"
-    "MIGRATION START is derived, since the export has no such field: an "
+    "MIGRATION START and MIGRATION END take the manual EOS tracking sheet "
+    "first, for every account it covers: its Migration Start Date and Actual "
+    "Migration End Date are the programme stating when the work began and "
+    "ended, in its own document. Only where the sheet is silent — or where no "
+    "sheet is loaded — does the export answer, by the rules below.\n"
+    "MIGRATION START is then derived, since the export has no such field: an "
     "account's earliest wave whose Current State reads 'On Track' or 'Done' — "
     "the first wave actually under way — and from it the Actual Start Date, "
     "falling back to Planned Start Date and then to Nom. Approval Date. An "
     "account with no such wave has not started and is not counted.\n"
+    "MIGRATION END, without the sheet, is the account's latest wave completing "
+    "('7 - Completed' with no wave still on track), in the month of its Actual "
+    "End Date — the same measure the trends report.\n"
     "ENGAGEMENT END repeats the migration-end figure. The export marks when a "
     "wave ended but not an engagement closure distinct from its last wave "
     "completing, so an account whose latest wave has completed is the closest "
@@ -415,11 +441,14 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Wave-1        = its lowest wave number",
             "",
             "current status, region, stage, dates, owners  ← latest wave",
-            "Nom. Approval Date (New Engagements)          ← Wave-1",
+            "Nom. Approval Date (New Engagements)          ← Wave-1, then the",
+            "                                                 next wave with one",
             "Total ACR (account level)                     ← SUM over ALL waves",
         ), plain="Where the account stands now comes from its most recent wave; "
-                 "when it joined the programme comes from its first; and its "
-                 "money is every wave's added together."),
+                 "when it joined the programme comes from its first — whatever "
+                 "state that wave is in, and from the next wave only when the "
+                 "first leaves the date blank; and its money is every wave's "
+                 "added together."),
         "Every account-level figure counts an account **once**, however many "
         "waves it has, so nothing is double-counted.",
     )),
@@ -550,18 +579,38 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         "account whose generation nobody recorded therefore cannot be reported "
         "under either.",
         Rule("An account's EOS scope and generation", (
-            'IF   ANY wave Tags CONTAINS "AVS Migration - Gen1"  → Gen-1',
-            'ELIF ANY wave Tags CONTAINS "AVS Migration - Gen2"  → Gen-2',
+            'IF   EOS tracking sheet Target SDDC Generation = Gen1 → Gen-1',
+            'ELIF EOS tracking sheet Target SDDC Generation = Gen2 → Gen-2',
+            'ELIF ANY wave Tags CONTAINS "AVS Migration - Gen1"    → Gen-1',
+            'ELIF ANY wave Tags CONTAINS "AVS Migration - Gen2"    → Gen-2',
             'ELIF ANY wave Primary Migration Path / Factory Offering /',
             '     Linked Offering matches "AV36 / AV36P / AV52 - EOS"',
-            "                                                    → EOS scope,",
-            "                                                      NO generation",
-            "ELSE                                                → not EOS",
+            "                                                      → EOS scope,",
+            "                                                        NO gen.",
+            "ELSE                                                  → not EOS",
             "",
             "EOS report population = accounts with generation IN (Gen-1, Gen-2)",
-        ), plain="A Gen1 or Gen2 tag on any wave decides it; failing that, an "
-                 "EOS offering puts the account in scope but leaves it without "
-                 "a generation."),
+        ), plain="The programme's own tracking sheet decides the generation "
+                 "wherever it states one; failing that a Gen1 or Gen2 tag on "
+                 "any wave decides it; failing both, an EOS offering puts the "
+                 "account in scope but leaves it without a generation."),
+        "The **manual EOS tracking sheet** is joined on by **TPID**, and by "
+        "TPID alone: every other detail on an account — Factory PM, Solution "
+        "Architect, region, offering, ACR, waves — is looked up in the FDO "
+        "dataset, so the sheet never has to repeat or contradict them. A TPID "
+        "in the sheet that the FDO dataset does not hold has no nomination "
+        "behind it and so appears in no report; it is named under **Data "
+        "Inconsistency** instead.",
+        Rule("The programme matrix's two dates", (
+            "Migration start = EOS tracking sheet Migration Start Date",
+            "             ELSE earliest wave reading On Track / Done, and from",
+            "                  it Actual Start → Planned Start → Nom. Approval",
+            "Migration end   = EOS tracking sheet Actual Migration End Date",
+            "             ELSE latest wave completed, by its Actual End Date",
+        ), plain="The tracking sheet's dates are used wherever it has them; "
+                 "everywhere else the export is read exactly as it was before "
+                 "the sheet existed, so a report built without one is "
+                 "unchanged."),
         "Those untagged accounts are **not discarded**: they stay in All AVS "
         "Migrations and are listed under **Data Inconsistency**, and adding the "
         "tag at source brings them straight into the EOS reports. Counting them "
@@ -571,7 +620,9 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
     ("The other headline figures", (
         Rule("Counted per account (each customer once)", (
             "New Engagements      = COUNT(DISTINCT TPID)",
-            "                       WHERE Wave-1 Nom. Approval Date IN period",
+            "                       WHERE Nom. Approval Date IN period,",
+            "                       read from Wave-1 whatever its state, else",
+            "                       the next wave that carries one",
             "Migrations Completed = COUNT(DISTINCT TPID)",
             "                       WHERE account state = Completed",
             "                       AND latest wave Actual End Date IN period",

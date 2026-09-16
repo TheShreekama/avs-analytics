@@ -1,0 +1,6 @@
+TPID,Customer,Region,Migration Status,Current State,Target SDDC Generation,Total SDDCs in Scope for Migration,Number of SDDCs Migrated,Migration Start Date,Actual Migration End Date,Programme Notes
+672112,CHUBB,Americas - Enterprise,4 - Executing Migration,On Track,Gen1,3,1,03-02-2026,,Node refresh scheduled in two tranches
+12039532,PROMETRIC INC,Americas - Enterprise,2 - Executing Pre-Requisites,On Track,Gen2,2,0,04-06-2026,,Awaiting capacity confirmation
+2843186,IFS North American,Americas SME&C,7 - Completed,Done,Gen2,1,1,10-01-2025,02-12-2026,Completed ahead of plan
+604010,Nestec SA,EMEA,4 - Executing Migration,On Track,Gen1,4,2,01-12-2026,,Second tranche in flight
+88888888,CONTOSO REFRESH LTD,Americas - Enterprise,2 - Executing Pre-Requisites,On Track,Gen2,2,0,05-04-2026,,Nomination not yet raised in FDO

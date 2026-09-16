@@ -38,9 +38,25 @@ PAGES = [
 TREND_PAGES = [p for p in PAGES if p.startswith("trend_analysis")]
 
 
-def _render(page: str, mode: str) -> AppTest:
+#: The pages the manual EOS tracking sheet changes the answer on, rendered a
+#: second time with the bundled sheet joined onto the sample.  Without it the
+#: sample has no Gen-1/Gen-2 account at all, so the EOS pages, the programme
+#: matrix and the tracker panels never execute their populated paths.
+TRACKER_PAGES = [
+    "data_upload", "data_inconsistency", "reports",
+    "category_dashboard.eos_all", "category_dashboard.eos_gen1",
+    "category_dashboard.eos_gen2", "category_dashboard.all_avs",
+    "trend_analysis.nominations", "trend_analysis.acr",
+]
+
+
+def _render(page: str, mode: str, tracker: bool = False) -> AppTest:
     os.environ.pop("AVS_AS_OF", None)
     os.environ["AVS_PAGE"] = page
+    if tracker:
+        os.environ["AVS_EOS_TRACKER"] = "1"
+    else:
+        os.environ.pop("AVS_EOS_TRACKER", None)
     at = AppTest.from_file(_HARNESS, default_timeout=60)
     at.session_state["count_mode"] = mode
     at.run()
@@ -91,6 +107,33 @@ def _render_default(page: str, mode: str) -> AppTest:
 def test_page_renders_without_error(page, mode):
     at = _render(page, mode)
     assert not at.exception, f"{page} [{mode}] raised: {at.exception}"
+
+
+@pytest.mark.parametrize("page", TRACKER_PAGES)
+def test_page_renders_with_the_eos_tracking_sheet(page):
+    """The same pages again, with the manual EOS tracking sheet joined on.
+
+    A different dataset in every way that matters: generations come from the
+    sheet, so the EOS pages have a population at last, the programme matrix
+    reads the sheet's own start and end dates, and the tracker panels have
+    something to show.
+    """
+    at = _render(page, "Customer (deduplicated)", tracker=True)
+    assert not at.exception, f"{page} [tracker] raised: {at.exception}"
+
+
+def test_the_tracking_sheet_populates_the_eos_reports():
+    """Without the sheet the sample has no generation at all; with it, it does."""
+    from app.core import segments
+
+    plain = _render("category_dashboard.eos_all", "Customer (deduplicated)")
+    tracked = _render("category_dashboard.eos_all", "Customer (deduplicated)",
+                      tracker=True)
+    ctx_plain = plain.session_state["avs_ctx"]
+    ctx_tracked = tracked.session_state["avs_ctx"]
+    assert segments.population(ctx_plain.fact, segments.CAT_EOS_ALL).empty
+    assert not segments.population(ctx_tracked.fact, segments.CAT_EOS_ALL).empty
+    assert ctx_tracked.has_tracker and not ctx_plain.has_tracker
 
 
 # Regression: the default date preset used to be a one-week window, which left
@@ -426,7 +469,7 @@ def test_trend_pages_reuse_the_dashboard_calculation_layer():
     waves = kpi.wave_index(pop)
     expected = {
         "nominations": kpi.monthly_unique_tpids(pop, "approval_date", None, None,
-                                                firsts=waves.first)[0],
+                                                waves=waves)[0],
         "acr": kpi.monthly_acr_claimed(pop, None, None)[0],
         "nodes": kpi.monthly_hosts(pop, None, None)[0],
         "completed": kpi.monthly_migrations_completed(pop, None, None,

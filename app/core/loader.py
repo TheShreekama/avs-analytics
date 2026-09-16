@@ -118,6 +118,7 @@ STAGES: dict[str, str] = {
     "floor": "Applying the reporting-year floor",
     "rollup": "Rolling waves up to one row per account",
     "combine": "Combining the uploaded files into one dataset",
+    "tracker": "Reading the manual EOS tracking sheet",
     "register": "Loading the tables into DuckDB",
 }
 

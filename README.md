@@ -2,10 +2,12 @@
 
 **A professional, 100% local executive dashboard for Azure VMware Solution (AVS) migration analytics and reporting.**
 
-Upload your AVS nominations export — one file, or several that make up one dataset
-(CSV / XLSX / XLS) — and instantly get executive dashboards, trend analysis, a
-deterministic insights engine, and one‑click exports — a leadership PDF and a single
-interactive HTML file you can email — all running entirely on your own machine.
+Upload your **FDO Dataset** — the AVS nominations export, one file or several that make
+up one dataset (CSV / XLSX / XLS) — and, optionally, the **manual EOS tracking sheet**
+alongside it, and instantly get executive dashboards, trend analysis, a deterministic
+insights engine, and one‑click exports — a leadership PDF and a single interactive HTML
+file you can email, carrying the same sections — all running entirely on your own
+machine.
 
 ![Overview](docs/screenshots/01_overview.png)
 
@@ -71,16 +73,16 @@ troubleshooting: **[`docs/INSTALL.md`](docs/INSTALL.md)**.
 | # | Report | What it shows |
 |---|--------|---------------|
 | 🏠 | **Overview** | Portfolio KPIs, status & regional distribution, delivery health, top insights |
-| 1 | **Status Report → All AVS Migrations** | Headline metrics, current pipeline, regional breakdown, detailed data — one row per account |
+| 1 | **Status Report → All AVS Migrations** | Headline metrics, current pipeline, **top 10 accounts by ACR**, regional breakdown, detailed data — one row per account |
 | 2 | **Status Report → EOS Migrations (All / Gen‑1 / Gen‑2)** | The same report for the EOS family; Gen‑1 and Gen‑2 are subsets of All |
-| 3 | **Status Report → AVS → Azure Native** | The same report for the "(From AVS)" motion, plus **By offering & target** |
+| 3 | **Status Report → AVS → Azure Native** | The same report for the "(From AVS)" motion, plus **top 10 accounts by ACR** and **By offering & target** |
 | 4 | **Trend Analysis → Nomination Trends** | Unique TPIDs nominated per month, in every migration category |
-| 5 | **Trend Analysis → ACR Trend** | ACR claimed per month, by each wave's Actual End Date, in every category |
+| 5 | **Trend Analysis → ACR Trend** | ACR claimed per month, by each wave's Actual End Date, in every category — plus the **top 10 accounts by ACR** on the two broad motions |
 | 6 | **Trend Analysis → Nodes Deployed** | Total Cores completed per month, across the AVS motions |
 | 7 | **Trend Analysis → Cores Migrated** | The same measure for AVS → Azure Native, under the noun that motion uses |
 | 8 | **Trend Analysis → Migrations Completed** | Unique TPIDs whose latest wave completed, per month, in every category |
 | 💡 | **Insights** | Full deterministic insights engine, grouped by category |
-| 📄 | **Reports & Export** | One report, two formats: a two‑part management **PDF** (three executive reports plus drill‑downs, with contents, bookmarks and cross‑links) and a single self‑contained **interactive HTML** file to email; CSV exports |
+| 📄 | **Reports & Export** | One report, two formats carrying **the same sections in the same order**: a two‑part management **PDF** (the executive reports plus the account records, with contents, bookmarks and cross‑links) and a single self‑contained **interactive HTML** file to email; CSV exports |
 | 📖 | **Methodology & Logic** | Plain‑language reference for every metric, status, scope and insight rule |
 
 Every report has **Region / Status / path filters** and a **date‑range preset**
@@ -154,10 +156,15 @@ detail, and the cover text; both formats then select the same populations throug
 same code, so they cannot disagree.
 
 ### PDF — to print, file and circulate
-A two‑part document: the three executive reports up front, the numbers and account
-records behind them after, with a cover, contents, bookmarks, page numbers and links
-both ways. Charts are rendered locally with **matplotlib** — no bundled browser, no
-internet.
+A two‑part document: the three executive reports up front, the account records behind
+them after, with a cover, contents, bookmarks, page numbers and links both ways. **It
+carries the same sections as the interactive report, in the same order** — the headline
+tiles over a This‑FY row, the EOS programme matrix, every trend month by month and then
+fiscal year against fiscal year, the top 10 accounts by ACR, the pipeline, the regional
+cut, the generations and the accounts that have stopped — each chart with its own numbers
+tabulated underneath it. Part 2 adds what a printed page cannot open on demand: the
+regional matrix, the pipeline counts and the account records. Charts are rendered locally
+with **matplotlib** — no bundled browser, no internet.
 
 ### Interactive HTML — to email
 **One self‑contained file.** The dashboard's own look and feel, with the charts still
@@ -191,6 +198,27 @@ The app understands the standard AVS nominations export schema out of the box an
   mapping** for reuse on future files.
 
 Supported uploads: **CSV, XLSX, XLS**. First row must be headers.
+
+### The manual EOS tracking sheet
+
+The EOS programme keeps its own spreadsheet beside the export, and **Data & Upload** takes
+it as a second, separate upload. It is keyed on **TPID and nothing else**: every other
+detail an EOS report needs — Factory PM, Solution Architect, region, offering, ACR, waves
+— is looked up in the FDO Dataset by that TPID, so the sheet never has to repeat or
+contradict them. Three columns lead wherever they are filled in:
+
+| Column | What it decides |
+|---|---|
+| **Target SDDC Generation** (`Gen1` / `Gen2`) | The account's generation — and so its place in the EOS reports. Falls back to the `AVS Migration - Gen1/Gen2` tag. |
+| **Migration Start Date** | *Migration start* in the programme matrix. Falls back to the derivation from the earliest wave under way. |
+| **Actual Migration End Date** | *Migration end* in the programme matrix. Falls back to the latest wave completing. |
+
+`Total SDDCs in Scope for Migration` and `Number of SDDCs Migrated` are read too; columns
+the reports have no use for are left exactly as they are. Every account carries where its
+generation came from, and the page reports what the sheet reached and what it did not: a
+TPID the FDO Dataset has never heard of has no nomination behind it, so it is **named**
+under Data Inconsistency rather than invented. With no sheet loaded, every EOS figure is
+what it was before the sheet existed.
 
 ### Several files, one dataset
 

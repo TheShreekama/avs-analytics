@@ -16,7 +16,14 @@ from app.ui.theme import inject_css  # noqa: E402
 from app import state  # noqa: E402
 
 inject_css()
-state.ensure_context()
+# AVS_EOS_TRACKER renders the page against the bundled sample *with* the manual
+# EOS tracking sheet joined on, which is a different dataset: generations come
+# from the sheet, the EOS pages are populated, and the programme matrix reads
+# the sheet's own dates.
+if os.environ.get("AVS_EOS_TRACKER"):
+    state.load_sample(with_tracker=True)
+else:
+    state.ensure_context()
 
 # The as-of date now defaults to *today*, so a test working with the bundled
 # sample (whose activity sits in an earlier fiscal year) pins it the way a user
