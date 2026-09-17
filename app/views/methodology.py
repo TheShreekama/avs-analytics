@@ -27,6 +27,37 @@ def render() -> None:
                    if scope.get("floor_start") is not None else "1 Jul 2024")
 
     # ------------------------------------------------------------------ #
+    # The rules the reports themselves print.  Rendered from the same constant
+    # the PDF and the HTML report read, so the page cannot document one thing
+    # while the report states another.
+    section("Every figure, and how it is worked out",
+            help="Exactly the text the generated PDF and HTML reports carry in "
+                 "their own Methodology & logic section.")
+    st.caption("One entry per figure, under the name the reports give it. "
+               "**Anything in bold is in the spreadsheet** — a column name "
+               "written exactly as the file heads it, or a value written "
+               "exactly as that column holds it — so any number here can be "
+               "checked by opening the export and reading the same cell. "
+               "Rendered from the same source the exported reports print, so "
+               "this page and a circulated report cannot disagree.")
+    for heading, items in glossary.REPORT_METHODOLOGY:
+        st.markdown(f"##### {heading}")
+        for item in items:
+            if isinstance(item, glossary.Definition):
+                st.markdown(f"**{item.title}**")
+                for line in item.body:
+                    st.markdown(f"> {line}")
+            else:
+                st.markdown(item)
+    # The reporting floor above is stated in general terms because a circulated
+    # report cannot know which file it will be read against.  This page can, so
+    # it names the dataset's own floor underneath.
+    st.caption(f"**In this dataset:** the reporting floor is **{floor_label}**, "
+               f"from **{floor_start}**. Waves nominated before it were dropped "
+               f"as the file was read, so no chart, table, total, insight, CSV "
+               f"or export can include them.")
+
+    # ------------------------------------------------------------------ #
     section("Reporting scope (what counts as an 'AVS nomination')")
     st.markdown(
         "The dashboard's **primary focus is AVS Migration Nominations** — accounts "
@@ -48,25 +79,6 @@ def render() -> None:
         "that names an EGS, AV36 or ODAA offering, is **onboarding to AVS**.")
 
     # ------------------------------------------------------------------ #
-    section("Reporting floor — FY25 onwards")
-    st.markdown(
-        f"The dashboard reports from **{floor_label}** onwards "
-        f"({floor_start}). Waves nominated before it are **dropped as the file "
-        "is read** — before the customer rollup, before the SQL tables are "
-        "registered, before any page runs. They are not hidden by a filter that "
-        "a report could forget to apply: they are not in the data at all, so no "
-        "chart, table, total, insight, CSV or PDF can include them, and "
-        "**\"All time\" means "
-        f"{floor_label} onwards** everywhere.\n\n"
-        "A wave belongs to the fiscal year of its **nomination date** — its "
-        "approval date, or its creation date when it was never approved. A wave "
-        "carrying neither cannot be shown to be out of scope, so it stays: the "
-        "floor excludes what it can prove is old, never what it merely cannot "
-        "date.\n\n"
-        "Every page says how much was excluded, so a file that looks smaller "
-        "than it is always carries the reason.")
-
-    # ------------------------------------------------------------------ #
     section("Counting modes & wave deduplication")
     st.markdown(
         "A customer can have several waves (Wave-1, Wave-2 …). The **sidebar toggle** "
@@ -77,8 +89,8 @@ def render() -> None:
         "    - **Approval & creation date = Wave-1** (lowest wave number).\n"
         "    - **Status, region & closure = the last wave**. Closed when the last wave is "
         "done/completed. (The report-level **On-Track / Completed** "
-        "classification is stricter and reads every wave — see *The rules every "
-        "report applies* below.)\n"
+        "classification is stricter and reads every wave — see *Every figure, and "
+        "how it is worked out* above.)\n"
         "    - **ACR / cores = summed** across the customer's waves.\n"
         "- **Nomination (wave-level)** — every wave/row counts (raw detail).\n\n"
         "**Deduplication keys on TPID**, never on the account name — the same account "
@@ -86,250 +98,6 @@ def render() -> None:
         "TPID at all falls back to its account name so it still rolls up to something "
         "rather than collapsing into every other untitled row; those rows are listed "
         "on **Data → Data Inconsistency**.")
-
-    # ------------------------------------------------------------------ #
-    section("WW Region")
-    st.markdown(
-        "Every region grouping, filter, chart and export reads the source "
-        "**`WW Region`** column, and is labelled **WW Region** — the value the "
-        "business reports on, whatever shape it takes (*“Americas”*, *“Americas "
-        "SME&C”*, *“MS Elevate”*, *“EMEA”*, *“ASIA”*). Reports no longer reduce it "
-        "to a geography.\n\n"
-        "Any leading numeric prefix (e.g. *“1800 Americas”*) is stripped and "
-        "flagged as a data-quality issue; the **Customer Segment** column is "
-        "reported separately and is unaffected.")
-
-    # ------------------------------------------------------------------ #
-    section("Cores, nodes and hosts")
-    st.markdown(
-        "One column — **Total Cores** — reported under the noun that fits the motion. "
-        "The AVS motions deploy **nodes** onto AVS, so their reports say *Hosts "
-        "Migrated* and *Total Nodes deployed*. Only the **AVS → Azure Native** motion "
-        "moves **cores** to Azure-native services, and only it says *Cores Migrated* "
-        "and *Total Cores*. The number is identical either way; the noun is not.")
-
-    # ------------------------------------------------------------------ #
-    section("Risk")
-    st.markdown(
-        "Internally, every nomination carries a derived delivery-health status "
-        "(Completed, Cancelled, Blocked, At Risk, Delayed, On Track — first "
-        "matching rule wins, from Current State, Milestone Status, the Migration "
-        "Status code and planned-end vs the as-of date). It is not shown as its "
-        "own report or column — the dashboards surface it only through **Risk**: "
-        "any nomination in the At Risk, Delayed or Blocked state. The *Risk "
-        "hotspot* insight reports the region with the most such items, plus the "
-        "**share of the portfolio** in any risk state. There is no scoring model "
-        "— it is a direct count of those three statuses.\n\n"
-        "This is a different thing from the *Current pipeline* states "
-        "(On-Track / Completed) used on the Status Report pages, which "
-        "read Migration Status and Current State directly — see 'Current state "
-        "& the pipeline chart' above.")
-
-    # ------------------------------------------------------------------ #
-    section("Approval, closure, aging & cycle time")
-    st.markdown(
-        "- **Approved** — has an approval date, or Nomination Status contains “approv”.\n"
-        "- **Closed** — the Migration Status reads *7 - Completed*, the Current "
-        "State says done or complete, the milestone is complete, or there is an "
-        "actual end date.\n"
-        "- **Open** — not closed and not cancelled.\n"
-        "- **Aging (days)** — creation date → closure date (or the as-of date if still "
-        "open). Negative values are dropped.\n"
-        "- **Cycle time (days)** — creation → closure, **closed items only**.\n"
-        "- **Approval latency (days)** — creation → approval.\n"
-        "- **Closure rate** — closed ÷ total within the current selection.\n"
-        "- **Fastest-closing region** — the region with the **lowest median cycle "
-        "time** (regions with ≥2 closed items).\n"
-        "- **Approval velocity** — the **median approval latency**, plus the slowest "
-        "region by median latency.")
-
-    # ------------------------------------------------------------------ #
-    section("Migration categories & generations")
-    st.markdown(
-        "Each **Status Report** page reports one category, selected by "
-        "the nomination's **target platform** and — for EOS — the TPID's SKU "
-        "generation.\n\n"
-        "- **All AVS Migrations** — every nomination whose target platform is AVS: "
-        "on-premises, VMG, AWS/VMC, AVS-to-AVS and EOS refreshes. Every **EOS "
-        "Migration** account is included here too, whatever its own path reads.\n"
-        "- **AVS → Azure Native** — the '(From AVS)' offerings, moving workloads off "
-        "AVS onto Azure-native services. **Reported there and nowhere else**: a "
-        "(From AVS) nomination is leaving AVS, so counting it under All AVS "
-        "Migrations (onboarding *to* AVS) or under an EOS category (refreshing "
-        "ageing AVS hosts) would file it in the wrong story. Not even an 'AVS "
-        "Migration - Gen1/Gen2' tag pulls one in — every other category leaves that "
-        "motion out, and such a nomination is not counted into the EOS "
-        "population at all.\n"
-        "- **EOS Migration** — **Gen-1 and Gen-2 accounts** in one view, with a "
-        "page each as well. An account in EOS scope through its migration path "
-        "with **no generation tag on any wave is excluded from EOS reporting "
-        "altogether** — EOS is reported by generation, and an ungenerationed "
-        "account would make the combined figure disagree with the sum of its two "
-        "blocks. It is not discarded: it stays inside **All AVS Migrations** and "
-        "is listed on **Data → Data Inconsistency**, and tagging it at source "
-        "brings it straight in.\n\n"
-        "**EOS population.** An account is an **EOS Migration** account when ANY of "
-        "its waves carries an **\"AVS Migration - Gen1\"** or **\"AVS Migration - "
-        "Gen2\"** tag — one tagged wave brings the whole account into scope, and the "
-        "tag also sets its generation. When no wave carries either tag, the offering "
-        "falls back to deciding it: a **Primary Migration Path** (or Factory / Linked "
-        "Offering) reading **AV36/AV36P/AV52 - EOS** puts the account in scope with no "
-        "generation. Everything comes from the single nominations export.\n\n"
-        "**Tag vs. path consistency.** A file can disagree with itself two ways: "
-        "accounts **tagged Gen-1/Gen-2 with no EOS path** on any wave, and **waves on "
-        "the EOS path whose account carries no tag**. Both are still in EOS scope — "
-        "they are reported, with the offending records, on **Data → Data "
-        "Inconsistency**, which is the single place that lists them.\n\n"
-        "**Generation is decided per TPID, across all of its waves:**\n"
-        "1. Any wave tagged **\"AVS Migration - Gen1\"** → the account is **Gen-1**; "
-        "**\"AVS Migration - Gen2\"** → **Gen-2**. Gen-1 wins if both appear on "
-        "different waves. Tags arrive concatenated with no separator "
-        "(*\"Qualify and AccelerateAVS Migration - Gen1\"*), so the marker is matched "
-        "inside the cell regardless of spacing, dashes or neighbouring tags.\n"
-        "2. No generation tag on any wave → no generation. An account in EOS scope "
-        "through its migration path (*AV36/AV36P/AV52 - EOS*) is then **excluded "
-        "from EOS reporting** — every EOS total, chart, calculation and insight — "
-        "rather than being folded into Gen-1 or Gen-2 or counted in a combined "
-        "total its own blocks do not add up to. It remains an **All AVS "
-        "Migrations** account, and the records are listed on **Data → Data "
-        "Inconsistency** under *EOS accounts excluded from EOS reporting* so the "
-        "missing tag can be fixed at source. An EOS page that comes out empty for "
-        "this reason says so, with the count.")
-
-    # ------------------------------------------------------------------ #
-    section("Metric rules (accounts vs. pieces of work)")
-    st.markdown(
-        "**TPID is the identifier** behind every match, lookup, classification "
-        "and count. Account names differ between worksheets and source systems, "
-        "so they are never used for matching.\n\n"
-        "Some figures count **customers** and some count **the work itself**, "
-        "and which is which is the thing to know before reading any of them.\n\n"
-        "**Counting customers, each one once.**\n"
-        "- **New Engagements** — how many accounts were approved inside the "
-        "period. The date comes from the account's first wave, whatever state "
-        "that wave is in; if that wave has no approval date, the next wave that "
-        "has one is used instead.\n"
-        "- **Migrations Completed** — how many accounts finished inside the "
-        "period. An account counts only when its most recent wave reads "
-        "*7 - Completed* and none of its other waves is still on track, and it "
-        "is dated by the day that most recent wave ended.\n"
-        "- **On-Track Accounts** — how many accounts have any wave being worked "
-        "on right now: approved, at one of the four stages that mean it is "
-        "under way, and marked *On Track* in the **Current State** column. It "
-        "is a snapshot, so no reporting period narrows it.\n\n"
-        "**Counting the work, not the customers.**\n"
-        "- **Hosts Migrated** (called **Cores Migrated** on AVS → Azure Native) "
-        "— the **Total Cores** on every wave that reads *7 - Completed* and "
-        "ended inside the period, added up. It is deliberately not a count of "
-        "accounts, and each source record is counted once.\n"
-        "- **ACR Claimed** — the **Total ACR** on every wave that ended inside "
-        "the period, added up.\n\n"
-        "**Looking forward, over the whole dataset.**\n"
-        "- **ACR Pipeline** — the **Total ACR** on every wave that is this "
-        "report's own work, has been approved, is marked *On Track*, and has "
-        "not been deferred or cancelled by the customer. All four have to hold, "
-        "judged wave by wave.\n"
-        "- **Nodes Deployment Planned** (EOS reports only) — the **Total "
-        "Cores** on those same waves.\n"
-        "- Neither is narrowed by the reporting period: work nominated before "
-        "the window is still work still to do. Every other filter applies.\n\n"
-        "**Month by month.** The nomination trend places each account in one "
-        "month — the month of its first wave's approval date, or its created "
-        "date if you switch the basis. The ACR trend takes the same claiming "
-        "waves and splits them by the month each one ended, so the months add "
-        "back up to the tile.\n\n"
-        "**Completion evaluates the latest wave *and* every other wave.** A TPID "
-        "whose Wave 7 is completed but whose Wave 8 is still running is *not* a "
-        "completed migration — and neither is one whose *latest* wave completed "
-        "while an earlier wave is still On Track: that account is still "
-        "delivering, so it is counted On-Track instead. **Hosts / Cores "
-        "Migrated is the exception, deliberately**: it is a wave-level measure, "
-        "and a completed wave deployed its nodes whatever the account's overall "
-        "state is now.\n\n"
-        "**ACR Claimed is wave-level, not account-level.** If Waves 2 and 3 of one "
-        "account and Wave 5 of another ended inside the window, all three waves' ACR "
-        "is summed. A wave that ended outside the window contributes nothing, even "
-        "when a sibling wave of the same account ended inside it; a wave with no "
-        "Actual End Date has not claimed and never counts. Across a multi-month "
-        "period the trend chart splits that same total by the month each wave ended, "
-        "so the months add back up to the tile.\n\n"
-        "**Cumulative** is the final column of every trend table and is the running "
-        "total of the months displayed, computed from the same population as the "
-        "monthly values.\n\n"
-        "Money is shown in **K and M** wherever it appears — tiles, trend tables, "
-        "drill-downs, detailed data, chart axes and **chart tooltips**: "
-        "`$12.5K`, `$125K`, `$1.25M`. Tooltips are formatted in Python and "
-        "carried on the trace, rather than left to the chart library, which "
-        "would otherwise hover a raw `1250000`.")
-
-    # ------------------------------------------------------------------ #
-    section("The EOS monthly programme matrix")
-    st.markdown(
-        "**Status Report → EOS Migrations (All)** carries a month-by-month grid in "
-        "two blocks, **Gen1 to Gen1** and **Gen1 to Gen2**.\n\n"
-        "Every EOS account is refreshing *away from* ageing Gen-1 (AV36) hardware — "
-        "that is what puts it in scope — so the constant half of each heading is the "
-        "*from*, and the account's own **AVS Migration - Gen1 / - Gen2** tag names the "
-        "generation it is landing **on**. An account in EOS scope by migration path "
-        "with no generation tag on any wave is in neither block; those are listed "
-        "under **Data → Data Inconsistency**.\n\n"
-        "**The five rows, and where each number comes from:**\n\n"
-        "- **Total number of new engagement** — accounts, counted once each, in "
-        "the month their first wave was approved.\n"
-        "- **Total number of migration start** — accounts, in the month their "
-        "migration began.\n"
-        "- **Total number of migration end** — accounts, in the month their "
-        "migration ended.\n"
-        "- **Total number of engagement end** — the same figure as migration "
-        "end, for the reason given below.\n"
-        "- **Number of hosts migrated** — the Total Cores on every completed "
-        "wave, added up in the month each one ended.\n\n"
-        "**The two dates come from the manual EOS tracking sheet wherever it "
-        "has them.** A *Migration Start Date* in the sheet is when the "
-        "migration started and an *Actual Migration End Date* is when it ended "
-        "— that is the programme saying so in its own document, which is why it "
-        "is asked first.\n\n"
-        "**For an account the sheet does not cover, the export answers "
-        "instead.** The start is taken from the earliest wave somebody recorded "
-        "as *On Track* or *Done* — the first wave actually under way — reading "
-        "its actual start date, or failing that its planned start, or failing "
-        "that its approval date, so a partly-filled row still lands in a month. "
-        "An account with no such wave has not started and is not counted. The "
-        "end is the date the account's most recent wave completed. A dashboard "
-        "with no tracking sheet loaded therefore reads exactly as it did before "
-        "there was one.\n\n"
-        "**Engagement end repeats migration end.** The export marks when a wave "
-        "*ended* but not an engagement closure distinct from its last wave "
-        "completing, so an account whose latest wave has completed is the closest "
-        "the data comes to an engagement that ended. The two rows therefore carry "
-        "identical values by construction, not by coincidence.\n\n"
-        "**Each fiscal year closes with its own total column** — FY26 after Jun-26, "
-        "FY27 at the end — summing that year's months. Every measure places a TPID "
-        "in exactly one month, so a year's total is the sum of its months with "
-        "nothing double-counted.\n\n"
-        "The grid ignores the page's reporting period: it runs from **July 2025** to "
-        "the as-of month (further, if a completion is dated ahead of it) and shows "
-        "**every month in between**, because a month with no nominations is itself "
-        "the number being reported. The same is true of the *Fiscal years side by "
-        "side* table on every Trend Analysis page: all twelve fiscal months are "
-        "always listed, zero-filled.")
-
-    # ------------------------------------------------------------------ #
-    # The rules the reports themselves print.  Rendered from the same constant
-    # the PDF and the HTML report read, so the page cannot document one thing
-    # while the report states another.
-    section("The rules every report applies",
-            help="Exactly the text the generated PDF and HTML reports carry in "
-                 "their own Methodology & logic section.")
-    st.caption("Rendered from the same source the exported reports print, so the "
-               "page and the report cannot disagree. Every rule is written out "
-               "in ordinary words — the column names and the values a cell "
-               "actually holds are quoted only where you would need them to go "
-               "and check a number against the file.")
-    for heading, items in glossary.REPORT_METHODOLOGY:
-        st.markdown(f"##### {heading}")
-        for item in items:
-            st.markdown(item)
 
     # ------------------------------------------------------------------ #
     section("Current state & the pipeline chart")
@@ -359,14 +127,15 @@ def render() -> None:
         "**On-track by stage** groups on-track accounts by the Migration Status "
         "of the **on-track wave itself** — the wave the work is on — not of a "
         "later wave the account has already finished.\n\n"
-        "*When the two columns disagree* — Current State says *Done* but Migration "
-        "Status is not `7 - Completed` — the account is neither Completed nor "
+        "*When the two columns disagree* — **Current State** says **Done** but "
+        "**Migration Status** is not **7 - Completed** — the account is neither "
+        "Completed nor "
         "On-Track and appears in neither slice. That is not a silent loss: those "
         "records are listed on **Data → Data Inconsistency** under *Current State "
         "contradicts Migration Status*, so the disagreeing column can be fixed at "
         "source.\n\n"
-        "Note that the internal delivery-health status described under 'Risk' "
-        "below is a *different*, derived taxonomy feeding the Risk insight; the "
+        "Note that the delivery-health status under *Delivery health, and Risk* "
+        "above is a *different*, derived taxonomy feeding the Risk insight; the "
         "two are not interchangeable.")
 
     # ------------------------------------------------------------------ #

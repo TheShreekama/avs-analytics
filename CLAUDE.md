@@ -338,18 +338,27 @@ under Streamlit's AppTest in both counting modes.
   whenever the two differ, mirroring the dashboards — **including over "All time"**, which
   resolves to no window at all: reading "no window" as "nothing to compare against" is what
   used to drop the row from the report while the dashboard still showed it.
-- **Each report states its own methodology, in plain English rather than as formulas.**
-  `glossary.REPORT_METHODOLOGY` is the single source rendered by the PDF, the HTML report
-  and the Methodology page, so one rule cannot be documented three ways. It is
-  `(heading, paragraphs)` and **every item is a plain string** — no `Rule` class, no
-  monospaced block, no pseudo-SQL: a report goes to the people it is circulated to, and a
-  rule they must decode before they can check a number is a rule they end up trusting
-  instead. Column names and the literal values a cell holds ("Current State",
-  "7 - Completed") are still quoted, because that is what keeps a number checkable
-  against the file. `test_the_methodology_is_plain_english_not_formulas` fails on a
-  `COUNT(`, a `SUM(`, an `IF`/`ELSE` ladder or an assignment arrow creeping back in, and
-  `test_the_pipeline_rule_is_documented_exactly_as_implemented` still holds the prose to
-  naming every column and value the code tests for.
+- **Each report states its own methodology: one titled entry per figure, in plain
+  English.** `glossary.REPORT_METHODOLOGY` is the single source rendered by the PDF, the
+  HTML report and the Methodology page (which leads with it), so one figure cannot be
+  documented three ways. It is `(heading, items)` where an item is a context paragraph or
+  a `glossary.Definition(title, body)` — **43 of them**, titled with the name the reports
+  actually label the figure by (*New Engagements*, *ACR Pipeline*, *Aging (days)*), so a
+  reader holding a number can look it up. No formulas: a report goes to the people it is
+  circulated to, and a rule they must decode before they can check a number is one they
+  end up trusting instead.
+  **Bold means "this is in the spreadsheet"** — a column name exactly as the file heads it
+  (`**Nom. Approval Date**`) or a value exactly as that column holds it
+  (`**7 - Completed**`). That convention is the whole point: it is what lets a reader open
+  the export and find the same cell. Keep it; do not bold for emphasis.
+  Four tests hold the line: `..._is_plain_english_not_formulas` (no `COUNT(`, `SUM(`,
+  `IF`/`ELSE`, arrows), `..._every_headline_figure_is_defined_under_the_name_it_is_shown_by`,
+  `..._a_definition_names_the_columns_it_is_read_from` (every entry names a real
+  `schema` header, bar four listed derived ones), and
+  `..._the_pipeline_rule_is_documented_exactly_as_implemented`.
+  **The Methodology page carries no second copy**: it renders this constant first and then
+  only what is about the *application* (counting modes, navigation, date presets, uploads,
+  drill-down, exports) rather than how a figure is worked out.
 - **A generated report names neither the app nor the file it read.** No `Source:` line, no
   dataset on the cover, no app name in the PDF furniture or the HTML footer; the default
   title is `exporter.DEFAULT_TITLE` ("Migration Programme Report").

@@ -6,6 +6,8 @@ and the code all say the same thing.
 """
 from __future__ import annotations
 
+from typing import NamedTuple
+
 from . import segments
 
 # --------------------------------------------------------------------------- #
@@ -392,248 +394,527 @@ EOS_MATRIX = (
 # --------------------------------------------------------------------------- #
 # The methodology printed inside the reports themselves
 # --------------------------------------------------------------------------- #
-#: "Methodology & logic" as (heading, paragraphs).  Shared by the PDF, the HTML
-#: report and the Methodology page, so one rule cannot be documented three ways.
+class Definition(NamedTuple):
+    """One named figure, and how it is worked out, in ordinary words.
+
+    ``title`` is the figure exactly as the reports label it, so a reader who
+    has a number in front of them can find its definition by name.  ``body`` is
+    one or more paragraphs of plain English — never a formula: a report is read
+    by the people it is circulated to, and a rule they have to decode before
+    they can check a number is a rule they end up trusting instead.
+    """
+    title: str
+    body: tuple[str, ...]
+
+
+#: "Methodology & logic" as ``(heading, items)``, where an item is either a
+#: paragraph of context or a :class:`Definition`.  Shared by the PDF, the HTML
+#: report and the Methodology page, so one figure cannot be documented three
+#: ways.
 #:
-#: **Written as plain English, not as formulas.**  A report is read by whoever
-#: it is circulated to — account teams, programme managers, the leadership it is
-#: written for — and a block of pseudo-SQL asks them to decode a rule before
-#: they can check a number.  So every rule below is a sentence.  Column names
-#: and the values a cell actually holds are still quoted where a reader would
-#: need them to go and look ("Current State", "7 - Completed"), because that is
-#: what turns a description into something checkable; nothing else is.
-#:
-#: Each section says the same thing the code does.  Where the two could drift,
-#: a test holds them together.
+#: **Bold marks something that is in the file**: a column name written exactly
+#: as the spreadsheet heads it (**Nom. Approval Date**, **Current State**), or a
+#: value written exactly as that column holds it (**7 - Completed**, **AVS
+#: Migration Nominations**).  Everything else is description.  That convention
+#: is what makes a definition checkable — a reader can open the export, find the
+#: column, and see the same value the report read.
 REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
-    ("Reading this report — three words it uses", (
-        "**Account** — one customer. Reports count customers, not rows: an "
-        "account with five pieces of work in flight is still one account.",
-        "**Wave** — one piece of work for that account. A migration is usually "
-        "delivered in waves, so one account can have several, each with its own "
-        "status and dates.",
-        "**ACR** — the annual revenue the work is expected to bring in, as the "
-        "export records it. Money is written short throughout: $12.5K is twelve "
-        "and a half thousand, $1.25M is one and a quarter million.",
-        "Everything below is read from the columns of the export — *Migration "
-        "Status*, *Current State*, *Nomination Status* and so on. Those names "
-        "are quoted where you would need them to go and check a number against "
-        "the file. Nothing is estimated or inferred: if the export does not say "
-        "it, the report does not claim it.",
+    ("How to read these definitions", (
+        "Every figure in this report has an entry below, under the name the "
+        "report gives it. Each one says which accounts or which pieces of work "
+        "it counts, which column it reads, and which date decides the period it "
+        "falls in.",
+        "**Anything in bold is in the spreadsheet**: either a column name, "
+        "written exactly as the file heads it — **Nom. Approval Date**, "
+        "**Migration Status**, **Total ACR** — or a value written exactly as "
+        "that column holds it — **7 - Completed**, **On Track**, **AVS "
+        "Migration Nominations**. Everything not in bold is description. So any "
+        "number here can be checked by opening the export, finding the column "
+        "and reading the same value the report read.",
+        Definition("Account", (
+            "One customer, identified by its **TPID**. Reports count customers, "
+            "not spreadsheet rows: an account with five pieces of work in "
+            "flight is still one account. **TPID** is what every count, match "
+            "and lookup is keyed on — never the **Customer Name**, which is "
+            "spelled differently between worksheets and source systems.",
+        )),
+        Definition("Wave", (
+            "One piece of work for that account, one row of the export, "
+            "numbered in the **Phase** column — **Wave 1**, **Wave 2** and so "
+            "on. A migration is usually delivered in waves, so one account can "
+            "have several, each with its own status, its own dates and its own "
+            "**Total ACR**.",
+            "The **first wave** of an account is the one with the lowest number "
+            "in **Phase**; where two waves share a number, the one with the "
+            "earlier **Nom. Created Date** is treated as the earlier wave. The "
+            "**latest wave** is the one with the highest number.",
+        )),
+        Definition("ACR", (
+            "The annual revenue a piece of work is expected to bring in, as the "
+            "**Total ACR** column records it. Money is written short "
+            "throughout: $12.5K is twelve and a half thousand, $1.25M is one "
+            "and a quarter million.",
+        )),
     )),
-    ("Which wave a number comes from", (
+    ("Which wave a figure is read from", (
         "An account's waves rarely agree with each other — one may be finished "
         "while the next has not started — so each figure is read from the wave "
         "that can answer for it.",
-        "**Where the account stands now** — its status, its stage, its region, "
-        "its dates and the people on it — comes from its **most recent wave**, "
-        "the one with the highest wave number. Where two waves share a number, "
-        "the one created later is treated as the more recent.",
-        "**When the account joined the programme** comes from its **first "
-        "wave** — the lowest wave number — and specifically from that wave's "
-        "*Nom. Approval Date*, **whatever state or status the wave is in**. A "
-        "first wave that was later cancelled, blocked or never approved still "
-        "dates the engagement, because the account joined when it joined. Only "
-        "when the first wave has no approval date at all does the report look "
-        "at the next wave, and the one after that, until it finds one. An "
-        "account with no approval date anywhere is not counted as having "
-        "joined.",
-        "**The account's money** is every wave's *Total ACR* added together. An "
-        "account with waves worth 10M, 15M and 20M is a 45M account; reading "
-        "only its most recent wave would understate it by more than half.",
-        "Every account-level figure counts an account **once**, however many "
-        "waves it has, so nothing is double-counted.",
+        Definition("Read from the latest wave", (
+            "Where the account stands **now**: its **Migration Status**, its "
+            "**Current State**, its **WW Region**, its **Total Cores**, its "
+            "**Actual Start Date** and **Actual End Date**, its **Assigned To "
+            "(Factory PM)** and its **Solution Architect**.",
+            "Where the latest wave leaves one of those cells empty, the "
+            "account's own most recent answer for that column stands in, rather "
+            "than the report showing a blank it could fill.",
+        )),
+        Definition("Read from the first wave", (
+            "When the account joined the programme: its **Nom. Approval Date**, "
+            "read from the first wave whatever state or status that wave is in. "
+            "A first wave that was later cancelled, blocked or never approved "
+            "still dates the engagement, because the account joined when it "
+            "joined.",
+            "Only when the first wave has no **Nom. Approval Date** at all does "
+            "the report move on to the next wave, and the one after that, until "
+            "it finds a wave that has one. An account with no **Nom. Approval "
+            "Date** on any wave is not counted as having joined.",
+        )),
+        Definition("Read across every wave", (
+            "An account's **Total ACR** is every one of its waves added "
+            "together. An account with waves worth 10M, 15M and 20M is a 45M "
+            "account; reading only its latest wave would understate it by more "
+            "than half.",
+            "Every account-level figure counts an account **once**, however "
+            "many waves it has, so nothing is double-counted.",
+        )),
     )),
-    ("Is an account moving, or finished?", (
-        "Two questions a report has to answer honestly: which accounts are "
-        "being worked on right now, and which are done. Both are read from what "
-        "the programme itself has recorded, never from \"it has not finished, "
-        "so it must be moving\".",
-        "**A single wave counts as on track only when three things are all "
-        "true.** Its *Nomination Status* says it has been **approved**. Its "
-        "*Migration Status* is one of the four stages that mean the work is "
-        "under way — validating the commitment and initial scope, executing "
-        "pre-requisites, finalising scope, or executing the migration. And its "
-        "*Current State* says **\"On Track\"**, in those words and nothing "
-        "else.",
-        "If nobody has said it is on track — the *Current State* is blank — the "
-        "report does not say so either. The same goes for work nobody has "
-        "approved yet: it may be progressing, but nothing has been committed "
-        "to. Both are left out rather than counted. A wave that has already "
-        "finished, or that the customer has deferred or cancelled, is not on "
-        "track either, whatever its *Current State* still reads.",
-        "**An account is then given one state, and the first of these to fit "
-        "is the one it gets.** It is *On-Track* if **any** of its waves is on "
-        "track by the test above. It is *Completed* only when its most recent "
-        "wave reads **\"7 - Completed\"** and none of its other waves is "
-        "still on track. Failing both, its most recent wave decides: "
-        "*Cancelled* when that wave reads \"6 - Cancelled / Archived\", "
-        "*Blocked* when its *Current State* mentions being blocked, *Deferred* "
-        "when it reads \"5 - Deferred By Customer\", and *Other* for anything "
-        "left.",
-        "That order is the difference that matters: an account whose latest "
-        "wave has finished while an earlier one is still being worked on is "
-        "**still being delivered**, so it is counted as On-Track rather than "
-        "Completed. Every account lands in exactly one state, which is what "
-        "lets the numbers add up.",
+    ("The headline figures", (
+        Definition("New Engagements", (
+            "The number of **distinct accounts (TPID)** whose **Nom. Approval "
+            "Date** falls inside the reporting period.",
+            "The date is taken from the account's **first wave** — the lowest "
+            "**Phase** number — whatever that wave's **Nomination Status** or "
+            "**Current State** says. If that wave has no **Nom. Approval "
+            "Date**, the next wave that carries one supplies it instead.",
+            "Each account is counted once, in one period only. Later waves of "
+            "the same account never add to it, and an account with no **Nom. "
+            "Approval Date** anywhere is not counted at all.",
+            "It is the one figure that still counts accounts which have since "
+            "stopped: an account approved during the period joined the "
+            "programme then, whatever happened to it afterwards.",
+        )),
+        Definition("Migrations Completed", (
+            "The number of **distinct accounts (TPID)** that finished inside "
+            "the reporting period.",
+            "An account counts as finished when its **latest wave** has a "
+            "**Migration Status** of **7 - Completed** and **none** of its "
+            "other waves is still on track. An account whose latest wave has "
+            "finished while an earlier wave is still being worked on is still "
+            "being delivered, so it is counted under On-Track Accounts instead.",
+            "The account is placed in the period by the **Actual End Date** of "
+            "that latest wave.",
+        )),
+        Definition("Hosts Migrated (Cores Migrated on AVS to Azure Native)", (
+            "The **Total Cores** column added up across every **wave** whose "
+            "**Migration Status** is **7 - Completed** and whose **Actual End "
+            "Date** falls inside the reporting period.",
+            "It counts the work, not the customers: an account with three "
+            "completed waves contributes all three waves' cores. Each row of "
+            "the export is counted once, by its **Task ID**, so a duplicated "
+            "row cannot inflate it.",
+            "It stays a wave-level figure on purpose. A wave that completed "
+            "deployed its hardware, whatever the account as a whole is doing "
+            "now — so this figure can move in a month when Migrations "
+            "Completed does not.",
+            "The AVS motions deploy nodes onto AVS and call it **Hosts "
+            "Migrated**; the AVS to Azure Native motion moves cores to "
+            "Azure-native services and calls it **Cores Migrated**. Same "
+            "column, different noun.",
+        )),
+        Definition("On-Track Accounts", (
+            "The number of **distinct accounts (TPID)** with at least one wave "
+            "being worked on right now.",
+            "A wave is on track when all three of these are true: its "
+            "**Nomination Status** is **Approved**, its **Migration Status** is "
+            "one of the four stages that mean the work is under way (**1 - "
+            "Validating Commitment & Initial Scope**, **2 - Executing "
+            "Pre-Requisites**, **3 - Finalize Scope**, **4 - Executing "
+            "Migration**), and its **Current State** is **On Track** and "
+            "nothing else.",
+            "Any one such wave makes the whole account on track, whatever its "
+            "latest wave says.",
+            "It is a snapshot of where things stand today, so **no reporting "
+            "period narrows it**.",
+        )),
+        Definition("ACR Claimed", (
+            "The **Total ACR** column added up across every **wave** whose "
+            "**Actual End Date** falls inside the reporting period, whatever "
+            "state the account is in now.",
+            "Claiming is wave-level, not account-level. If waves 2 and 3 of one "
+            "account and wave 5 of another all ended inside the window, all "
+            "three waves' **Total ACR** is counted. A wave that ended outside "
+            "the window contributes nothing, even when a sibling wave of the "
+            "same account ended inside it, and a wave with no **Actual End "
+            "Date** has not claimed and never counts.",
+        )),
+        Definition("ACR Pipeline", (
+            "The **Total ACR** added up across every wave that is still to "
+            "land — the value of the approved work this report is responsible "
+            "for that is moving right now.",
+            "A wave is counted only when **all four** of these hold. It belongs "
+            "to this report's motion: a **Factory Offering** of **AVS Migration "
+            "Nominations** for the AVS and EOS reports, or a **Primary "
+            "Migration Path** containing **From AVS** for the AVS to Azure "
+            "Native report. Its **Nomination Status** is **Approved**. Its "
+            "**Current State** is **On Track** and nothing else. And its "
+            "**Migration Status** is neither **5 - Deferred By Customer** nor "
+            "**6 - Cancelled / Archived**.",
+            "Work that has already finished needs no exclusion of its own: a "
+            "finished wave reads **Done** rather than **On Track**, so the "
+            "third condition leaves it out.",
+            "**The reporting period does not narrow this figure.** Work "
+            "nominated before the window is still work still to do. Every other "
+            "filter applies, so a report cut to one region shows that region's "
+            "pipeline.",
+        )),
+        Definition("Nodes Deployment Planned (EOS reports only)", (
+            "The **Total Cores** added up across exactly the same waves ACR "
+            "Pipeline is read from — the hardware that approved, on-track work "
+            "still has to deploy.",
+            "Like ACR Pipeline, it is read over the whole dataset rather than "
+            "the reporting period.",
+        )),
+        Definition("Cumulative", (
+            "The last column of every monthly table: the running total of the "
+            "months actually shown, added up as you read down. It is not a "
+            "separate figure counted a different way, and it does not reach "
+            "back before the first month on display.",
+        )),
     )),
-    ("Accounts that have stopped", (
-        "Work that has stalled is worth more attention than work that is going "
-        "well, so every account that is neither moving nor finished is reported "
-        "on its own, grouped by why it stopped.",
-        "**Every account that is neither On-Track nor Completed is here** — "
-        "that is the whole test for being included, so this section and the "
-        "charts above it add up to the report's own account count.",
-        "**Each one is labelled with the reason, and the first reason that fits "
-        "is the one shown.** A *Migration Status* of \"6 - Cancelled / "
-        "Archived\" makes it cancelled; \"5 - Deferred By Customer\" makes "
-        "it deferred. Failing those, the *Current State* is the reason in its "
-        "own words — blocked, blocked on the account team, on the customer or "
-        "on a partner, or waiting on a follow-up date. Failing that, an "
-        "unapproved nomination is labelled as not approved, and an account with "
-        "nothing recorded at all is labelled as such rather than guessed at.",
-        "**Cancelled and deferred accounts are named by their Migration "
-        "Status**, not by their Current State: somebody has decided those, and "
-        "an account deferred while its state still reads *Blocked - Customer* "
-        "is deferred. A review reads a decision differently from a blockage.",
-        "This section is reported **apart from every other figure** and nowhere "
-        "else: not in the headline tiles, the trends, the state chart or the "
-        "regional cut. Every row carries the programme's own **Status "
-        "Summary**, the note saying what the account is waiting for.",
-        "One figure deliberately still counts them: **New Engagements**. An "
-        "account approved during the period joined the programme then, whatever "
-        "happened afterwards, and a number that changed when an account got "
-        "blocked would be answering a different question.",
+    ("How an account's state is decided", (
+        "Every account is given exactly one state, which is what lets the "
+        "charts and the stopped-accounts section add up to the report's own "
+        "account count.",
+        Definition("The order the state is decided in", (
+            "The first of these to fit is the state the account gets. "
+            "**On-Track** when any of its waves is on track by the three-part "
+            "test under On-Track Accounts. **Completed** when its latest wave "
+            "reads **7 - Completed** and no wave of the account is on track.",
+            "Failing both, its latest wave decides: **Cancelled** when that "
+            "wave's **Migration Status** is **6 - Cancelled / Archived**, "
+            "**Blocked** when its **Current State** mentions being blocked, "
+            "**Deferred** when its **Migration Status** is **5 - Deferred By "
+            "Customer**, and **Other** for anything left.",
+            "On-Track is tested before Completed on purpose: an account whose "
+            "latest wave has finished while an earlier wave is still running is "
+            "still being delivered.",
+        )),
+        Definition("What is not on track", (
+            "A wave nobody has approved is not on track, however far along it "
+            "looks: nothing has been committed to. A wave with a blank "
+            "**Current State** is not on track either — that column is how the "
+            "programme says an engagement is moving, and a wave nobody has said "
+            "it about is left out rather than assumed. There is no fallback for "
+            "either; both land in **Other**.",
+            "A wave that has finished, been deferred or been cancelled is not "
+            "on track whatever its **Current State** still reads, because its "
+            "**Migration Status** is no longer one of the four in-flight "
+            "stages.",
+        )),
+        Definition("Blocked, deferred and cancelled accounts", (
+            "Every account that is neither On-Track nor Completed is reported "
+            "in this section, and nowhere else. That is the whole test for "
+            "being included, so this section and the pipeline charts above it "
+            "add up to the report's accounts.",
+            "Each account is labelled with why it stopped, and the first reason "
+            "that fits is the one shown. A **Migration Status** of **6 - "
+            "Cancelled / Archived** labels it cancelled and **5 - Deferred By "
+            "Customer** labels it deferred — those are decisions somebody took, "
+            "so the **Migration Status** wins over the **Current State** even "
+            "when the state still reads **Blocked - Customer**.",
+            "Failing those, the **Current State** is the reason in its own "
+            "words: **Blocked**, **Blocked - Account team**, **Blocked - "
+            "Customer**, **Blocked - Partner / ISD** or **Waiting action on "
+            "follow up date**. Failing that, a nomination whose **Nomination "
+            "Status** is not **Approved** is labelled as not approved, and an "
+            "account with nothing recorded at all is labelled as such rather "
+            "than guessed at.",
+            "None of these accounts is in any other figure: not the headline "
+            "tiles, the trends, the state chart or the regional cut. New "
+            "Engagements is the one deliberate exception, for the reason given "
+            "in its own entry. Every row carries the account's **Status "
+            "Summary** — the programme's own note on what it is waiting for.",
+        )),
+        Definition("Where every account sits", (
+            "A table under the pipeline lists every state, how many accounts "
+            "are in it, how much **Total ACR** they carry, and where those "
+            "accounts are reported. Two states are charted — On-Track and "
+            "Completed — and every other state is in the stopped-accounts "
+            "section.",
+            "Because each account is in exactly one state, those rows add up to "
+            "the report's own account count. It is the answer to "
+            "the chart shows 32 of my 36 accounts, where are the other four.",
+        )),
     )),
-    ("Where every account sits", (
-        "A chart that shows some accounts and not others invites the question "
-        "\"where are the rest?\". Each report answers it with a table under "
-        "the pipeline: every state, how many accounts are in it, and where "
-        "those accounts are reported.",
-        "Two rows are charted — On-Track and Completed — and every other row "
-        "is in the stopped-accounts section, whatever stopped it. Nothing is "
-        "reported nowhere.",
-        "Because every account is in exactly one state, the rows add up to the "
-        "report's own account count. If the charts appear to be missing "
-        "accounts, that table is where they are.",
+    ("Which report an account appears in", (
+        "Each report covers one migration motion, decided per nomination from "
+        "what it is moving and where it is moving to.",
+        Definition("All AVS Migrations", (
+            "Every nomination whose target platform is AVS — read from the "
+            "**Primary Migration Path**, the **Factory Offering** and the "
+            "**Linked Offering Name**. On-premises, VMG, AWS/VMC, AVS-to-AVS "
+            "and EOS refreshes all land here.",
+            "Every EOS account is included too, whatever its own path reads.",
+        )),
+        Definition("AVS to Azure Native", (
+            "Nominations whose **Primary Migration Path** contains **From "
+            "AVS** — work moving off AVS onto an Azure-native service, such as "
+            "**SQL Server MI Migration (From AVS)** or **OSS DB Migration (From "
+            "AVS)**.",
+            "**Reported here and nowhere else.** This motion is leaving AVS, so "
+            "counting it under All AVS Migrations (which is onboarding to AVS) "
+            "or under EOS (which is refreshing ageing AVS hosts) would file it "
+            "in the wrong story. Not even a Gen-1 or Gen-2 tag pulls one in.",
+            "The Azure-native service each one lands on is read from the same "
+            "**Primary Migration Path**: SQL MI, SQL Database, SQL on IaaS, "
+            "PostgreSQL/MySQL, Windows or Linux virtual machines, Oracle "
+            "Database@Azure or AKS.",
+        )),
+        Definition("EOS Migration", (
+            "Accounts refreshing ageing AVS hardware, reported by the "
+            "generation they are moving on to — Gen-1 and Gen-2, with a "
+            "combined view and a page each.",
+            "An account is in EOS scope when its generation is known (see "
+            "below), or when any of its waves carries an EOS offering: a "
+            "**Primary Migration Path**, **Factory Offering** or **Linked "
+            "Offering Name** reading **AV36/AV36P/AV52 - EOS**. One qualifying "
+            "wave brings the whole account in.",
+        )),
+        Definition("The generation (Gen-1 or Gen-2)", (
+            "Decided per account, across all of its waves, by the first of "
+            "these that answers.",
+            "**The manual EOS tracking sheet first.** Its **Target SDDC "
+            "Generation** column reading **Gen1** or **Gen2** settles it — that "
+            "is the programme stating, in its own document, which generation "
+            "the account is landing on.",
+            "**Failing that, the Tags column.** A **Tags** value containing "
+            "**AVS Migration - Gen1** on any one wave makes the whole account "
+            "Gen-1, and **AVS Migration - Gen2** makes it Gen-2. Tags arrive "
+            "run together with no separator, so the marker is matched inside "
+            "the cell whatever sits either side of it. If both appear on "
+            "different waves, Gen-1 wins.",
+            "**Failing both, the account has no generation.** It may still be "
+            "in EOS scope through its offering, but there is no block to report "
+            "it under.",
+        )),
+        Definition("EOS accounts with no generation", (
+            "An account in EOS scope through **AV36/AV36P/AV52 - EOS** with no "
+            "**Target SDDC Generation** and no Gen-1 or Gen-2 **Tags** value is "
+            "**left out of every EOS figure**. EOS is reported by generation, "
+            "and counting an ungenerationed account in the combined total would "
+            "make that total disagree with the sum of its own two blocks.",
+            "It is not discarded: it stays inside All AVS Migrations, and it is "
+            "listed on the Data Inconsistency review so the missing tag can be "
+            "fixed at source — which brings it straight into the EOS reports.",
+        )),
     )),
-    ("What is still to come — ACR Pipeline and Nodes", (
-        "The headline figures otherwise look backwards: what has been "
-        "delivered, what has been claimed. These two look forward — the value "
-        "and the hardware still to land.",
-        "**A wave is counted here only when all four of these hold.** It "
-        "belongs to the motion this report covers: for the AVS and EOS reports "
-        "that means a *Factory Offering* of **\"AVS Migration Nominations\"**, "
-        "and for the AVS → Azure Native report a *Primary Migration Path* that "
-        "says the work is moving **\"From AVS\"**. Its *Nomination Status* "
-        "says it has been **\"Approved\"**. Its *Current State* says **\"On "
-        "Track\"** and nothing else. And the customer has neither deferred it "
-        "(\"5 - Deferred By Customer\") nor cancelled it (\"6 - Cancelled / "
-        "Archived\").",
-        "**ACR Pipeline** adds up the *Total ACR* on those waves. On the EOS "
-        "reports, **Nodes Deployment Planned** adds up the *Total Cores* on the "
-        "same waves — the hardware that work still has to deploy.",
-        "Work that has already finished is not in either figure, and does not "
-        "need to be excluded by name: a finished wave reads *Done* rather than "
-        "*On Track*, so the third condition leaves it out on its own.",
-        "**Factory Offering and Primary Migration Path are different "
-        "columns.** The offering says which team delivers the work; the path "
-        "says what is moving where. Each report is scoped by the one that "
-        "defines it, so an AVS report does not count another factory's work.",
-        "**Both figures cover the whole dataset, not the reporting period.** "
-        "Work nominated before the window is still work still to do, so "
-        "narrowing the dates cannot shrink the pipeline. Every other filter "
-        "still applies: a report cut to one region shows that region's "
-        "pipeline.",
+    ("The manual EOS tracking sheet", (
+        "The EOS programme keeps its own spreadsheet beside the nominations "
+        "export, and it is uploaded separately. Where it is loaded, it leads on "
+        "three things; everything else still comes from the export.",
+        Definition("How it is matched", (
+            "On **TPID**, and on nothing else. Every other detail an EOS report "
+            "needs — **Assigned To (Factory PM)**, **Solution Architect**, "
+            "**WW Region**, **Factory Offering**, **Total ACR**, the waves — is "
+            "looked up in the nominations export by that **TPID**, so the sheet "
+            "never has to repeat or contradict them.",
+            "A **TPID** in the sheet that the export has never heard of has no "
+            "nomination behind it — no offering, no ACR, no wave — so it "
+            "appears in no report. It is named on the Data Inconsistency "
+            "review instead of being invented.",
+        )),
+        Definition("What it decides", (
+            "**Target SDDC Generation** decides the account's generation, as "
+            "described above. **Migration Start Date** and **Actual Migration "
+            "End Date** supply the two date rows of the monthly programme "
+            "matrix. **Total SDDCs in Scope for Migration** and **Number of "
+            "SDDCs Migrated** are read and shown but feed no headline figure.",
+            "Where the sheet is silent — a blank cell, or an account it does "
+            "not cover — the export answers exactly as it did before there was "
+            "a sheet. A report built with no sheet loaded at all is unchanged.",
+        )),
     )),
-    ("EOS by generation", (
-        "The EOS reports also cut their accounts by generation against state: "
-        "how much of Gen-1 is finished, how much of Gen-2 is still running, how "
-        "much of either has stopped. Every state is a column, and an **All "
-        "EOS** row adds the generations together, so the grid reads as the "
-        "programme first and its generations second — and each row totals the "
-        "accounts it covers.",
+    ("The EOS monthly programme matrix", (
+        "A month-by-month grid in two blocks, **Gen1 to Gen1** and **Gen1 to "
+        "Gen2**. Every EOS account is refreshing away from ageing Gen-1 "
+        "hardware, so the constant half of each heading is where it is coming "
+        "from, and the account's own generation names where it is landing.",
+        "The grid ignores the reporting period the rest of the report uses. It "
+        "runs from July 2025 to the current month — further if a completion is "
+        "dated ahead of it — and shows **every** month in between, because a "
+        "month with nothing in it is itself the number being reported. Each "
+        "fiscal year closes with its own total column.",
+        Definition("Total number of new engagement", (
+            "Accounts, counted once each, in the month of the **Nom. Approval "
+            "Date** that New Engagements reads.",
+        )),
+        Definition("Total number of migration start", (
+            "Accounts, counted once each, in the month their migration began.",
+            "The date is the tracking sheet's **Migration Start Date** wherever "
+            "it has one. For an account the sheet does not cover, it is worked "
+            "out from the export instead: take the earliest wave whose "
+            "**Current State** reads **On Track** or **Done** — the first wave "
+            "actually under way — and read its **Actual Start Date**, falling "
+            "back to its **Planned Start Date**, and failing that its **Nom. "
+            "Approval Date**. An account with no such wave has not started and "
+            "is not counted.",
+        )),
+        Definition("Total number of migration end", (
+            "Accounts, counted once each, in the month their migration ended.",
+            "The date is the tracking sheet's **Actual Migration End Date** "
+            "wherever it has one. For an account the sheet does not cover, it "
+            "is the **Actual End Date** of the latest wave of an account that "
+            "counts as finished — the same test Migrations Completed uses.",
+        )),
+        Definition("Total number of engagement end", (
+            "The same figure as migration end. The export marks when a wave "
+            "ended but has no separate closure date for the engagement itself, "
+            "so an account whose latest wave has completed is the closest the "
+            "data comes to an engagement that ended. The two rows carry "
+            "identical values by construction, not by coincidence.",
+        )),
+        Definition("Number of hosts migrated", (
+            "The **Total Cores** on every wave reading **7 - Completed**, added "
+            "up in the month of each wave's **Actual End Date** — the same "
+            "figure as Hosts Migrated, month by month.",
+        )),
     )),
-    ("EOS reporting — Gen-1 and Gen-2 only", (
-        "EOS accounts are those refreshing ageing AVS hardware, and the "
-        "programme reports them by which generation they are moving on to. An "
-        "account whose generation nobody recorded therefore cannot be reported "
-        "under either.",
-        "**The programme's own EOS tracking sheet decides the generation "
-        "wherever it states one.** Its *Target SDDC Generation* column reading "
-        "Gen1 or Gen2 settles the matter, because that is the programme saying "
-        "in its own document which generation the account is landing on.",
-        "**Failing that, the account's tags decide it.** A tag reading \"AVS "
-        "Migration - Gen1\" on any one of its waves makes the whole account "
-        "Gen-1, and \"AVS Migration - Gen2\" makes it Gen-2; if both appear "
-        "on different waves, Gen-1 wins.",
-        "**Failing both, the offering can still put an account in scope but "
-        "cannot name its generation.** A migration path, factory offering or "
-        "linked offering reading \"AV36/AV36P/AV52 - EOS\" means the account "
-        "is doing EOS work — but with no generation recorded anywhere, there is "
-        "no block to report it under, so the EOS reports leave it out. Those "
-        "accounts are **not discarded**: they stay in All AVS Migrations and "
-        "are listed under **Data Inconsistency**, and adding the tag at source "
-        "brings them straight in. Counting them in the combined total meanwhile "
-        "would make that total disagree with the sum of its own two blocks.",
-        "The **EOS tracking sheet is joined on by TPID**, and by TPID alone: "
-        "every other detail on an account — Factory PM, Solution Architect, "
-        "region, offering, ACR, waves — is looked up in the FDO dataset, so the "
-        "sheet never has to repeat or contradict them. A TPID in the sheet that "
-        "the FDO dataset does not hold has no nomination behind it and so "
-        "appears in no report; it is named under **Data Inconsistency** "
-        "instead.",
-        "**The month-by-month programme matrix takes its two dates from the "
-        "sheet as well, wherever it has them.** A *Migration Start Date* in the "
-        "sheet is when the migration started, and an *Actual Migration End "
-        "Date* is when it ended. For any account the sheet does not cover, the "
-        "export answers instead: the start is taken from the earliest wave "
-        "somebody recorded as on track or done — its actual start date, or "
-        "failing that its planned start, or failing that its approval date — "
-        "and the end is the date the account's most recent wave completed. A "
-        "report built with no tracking sheet at all therefore reads exactly as "
-        "it did before there was one.",
+    ("Dates and durations the app works out", (
+        "These are derived from the export's own dates rather than read from a "
+        "column of their own. They drive the insights and the delivery-health "
+        "wording; none of them changes a headline figure.",
+        Definition("Approved, closed, open", (
+            "An account or wave counts as **approved** when it has a **Nom. "
+            "Approval Date**, or its **Nomination Status** contains approved.",
+            "It counts as **closed** when its **Migration Status** reads **7 - "
+            "Completed**, or its **Current State** says done or complete, or "
+            "its **Milestone Status** says complete, or it simply has an "
+            "**Actual End Date**. Anything neither closed nor cancelled is "
+            "**open**.",
+        )),
+        Definition("Aging (days)", (
+            "**Nom. Created Date** to the day the work closed — or to the "
+            "reporting as-of date when it is still open. It answers how long "
+            "this has been going on.",
+            "A negative result means the dates contradict each other, so it is "
+            "dropped rather than reported.",
+        )),
+        Definition("Cycle time (days)", (
+            "**Nom. Created Date** to **Actual End Date**, for closed work "
+            "only. It answers how long this took, so unfinished work is left "
+            "out rather than counted as fast.",
+        )),
+        Definition("Approval latency (days)", (
+            "**Nom. Created Date** to **Nom. Approval Date** — how long a "
+            "nomination waited to be approved. The insights report the median "
+            "across the selection, and the region with the slowest median.",
+        )),
+        Definition("Closure rate", (
+            "Closed items divided by all items in the current selection, as a "
+            "percentage.",
+        )),
+        Definition("Delivery health, and Risk", (
+            "Each wave is given a health status from several columns at once, "
+            "the first matching rule winning: **Completed**, then "
+            "**Cancelled**, then **Blocked**, then **At Risk** when it is "
+            "deferred, then **Delayed** when its **Planned End Date** has "
+            "passed and there is no **Actual End Date**, then **At Risk** again "
+            "when its **Next Follow-up Date** has passed or it is waiting, and "
+            "otherwise **On Track**.",
+            "**Risk** on the insights means any wave sitting in **At Risk**, "
+            "**Delayed** or **Blocked**. It is a direct count of those three, "
+            "with no scoring model behind it.",
+            "This is a different thing from the account states above, which the "
+            "pipeline charts use. The two are not interchangeable.",
+        )),
     )),
-    ("The other headline figures", (
-        "**Three figures count customers, each one once.** *New Engagements* is "
-        "how many accounts were approved inside the period, dated by the "
-        "approval on their first wave as described above. *Migrations "
-        "Completed* is how many accounts finished inside it, counting only "
-        "accounts whose state is Completed and dating each by the day its most "
-        "recent wave ended. *On-Track Accounts* is how many are being worked on "
-        "right now — a snapshot, so no reporting period narrows it.",
-        "**Two figures count work rather than customers.** *Hosts Migrated* "
-        "(called *Cores Migrated* on the AVS → Azure Native report) adds up the "
-        "*Total Cores* on every wave that reads \"7 - Completed\" and ended "
-        "inside the period. *ACR Claimed* adds up the *Total ACR* on every wave "
-        "that ended inside the period, whatever state the account is in now.",
-        "These two are counted per wave on purpose: a finished wave deployed "
-        "its hardware and claimed its money whatever the account is doing now, "
-        "and one account can claim in several months. A wave with no end date "
-        "has not claimed and never counts.",
-        "**Cumulative**, the last column of every trend table, is the running "
-        "total of the months actually shown — not a separate figure counted a "
-        "different way.",
+    ("Trends, periods and the fiscal year", (
+        Definition("The monthly trends", (
+            "Four measures, each by the date that places it. Nominations per "
+            "month puts each account in the month of the **Nom. Approval Date** "
+            "New Engagements reads (or its **Nom. Created Date**, if you switch "
+            "the basis). ACR claimed per month splits ACR Claimed by the "
+            "**Actual End Date** of each claiming wave. Hosts and migrations "
+            "completed per month do the same for their own figures.",
+            "Every account appears in one month only on the account-level "
+            "measures, so the months add back up to the tile above them.",
+        )),
+        Definition("Fiscal years side by side", (
+            "The same four measures again, with each fiscal year drawn as its "
+            "own line over a shared July-to-June axis, so the years can be read "
+            "against one another. All twelve months are always listed, "
+            "including the empty ones.",
+            "**It covers the whole dataset, whatever period the rest of the "
+            "report is cut to**: a year-on-year comparison narrowed to a single "
+            "month would have nothing to compare. There is no cumulative column "
+            "in this view — a running total across unrelated fiscal years would "
+            "not mean anything.",
+        )),
+        Definition("Top 10 accounts by ACR", (
+            "The ten accounts carrying the most **Total ACR**, largest first, "
+            "on the All AVS Migrations and AVS to Azure Native reports.",
+            "**Total ACR** is summed across every wave of an account, so the "
+            "order is the account-level one. Accounts with no ACR are left out "
+            "rather than listed as zeroes, and each bar is labelled with the "
+            "**Customer Name** and its **TPID** so no two bars can be the same "
+            "account. It covers the whole dataset, not the reporting period.",
+        )),
+        Definition("The reporting period, and the This FY row", (
+            "The period narrows the figures that are about a span of time: New "
+            "Engagements, Migrations Completed, Hosts Migrated, ACR Claimed and "
+            "the monthly trends.",
+            "It does **not** narrow On-Track Accounts, the current pipeline, "
+            "the regional cut, the stopped accounts, ACR Pipeline, Nodes "
+            "Deployment Planned, the programme matrix or the fiscal-year "
+            "comparison. Each of those says so under its own title.",
+            "Selecting any period other than the current fiscal year adds a "
+            "**This FY** row of tiles above the selected one, so a month's "
+            "numbers keep the year they sit in. The two rows are worked out "
+            "independently, each from its own window. All time gets that row "
+            "too, because it spans several fiscal years and so loses the one "
+            "you are in.",
+        )),
     )),
-    ("Periods, regions and money", (
-        "The reporting period narrows the figures that are about a span of "
-        "time. **On-Track Accounts, the current pipeline, the regional cut and "
-        "the stopped accounts are snapshots** of where things stand today, and "
-        "**ACR Pipeline and Nodes Deployment Planned cover the whole "
-        "dataset** — each says so under its own title.",
-        "Selecting any period other than the current fiscal year adds a **This "
-        "FY row above it**, each measured over its own window, so a month's "
-        "numbers keep the year they sit in. *All time* gets that row too: it "
-        "spans several fiscal years, so it loses the one you are in.",
-        "**The fiscal-year comparison covers the whole dataset**, whatever "
-        "period the rest of the report is cut to. Laying one year against "
-        "another is the point of it, and a comparison narrowed to a single "
-        "month would have nothing to compare.",
-        "The **regional breakdown** counts accounts once each, at their most "
-        "recent wave, over the stages a migration passes through. It is one "
-        "heatmap: a second chart of the same numbers is one too many.",
-        "**Money is written short** — $12.5K, $125K, $1.25M — in tiles, tables, "
-        "chart axes and chart tooltips alike, so the same amount reads the same "
-        "way wherever it appears.",
+    ("Region, money and the reporting floor", (
+        Definition("WW Region", (
+            "Every regional grouping, filter and chart reads the **WW Region** "
+            "column and is labelled with that name — the value the business "
+            "reports on, such as **Americas - Enterprise**, **Americas SME&C** "
+            "or **MS Elevate**. Nothing reduces it to a geography.",
+            "A leading number on the value (as in 1800 Americas) is stripped "
+            "and flagged on the Data Inconsistency review. **Customer "
+            "Segment** is a separate column and is reported separately.",
+            "The regional breakdown counts accounts once each, at their latest "
+            "wave, over the stages a migration passes through — the four "
+            "in-flight ones plus **7 - Completed**. Deferred and cancelled work "
+            "is not a stage a migration progresses through, so it is left out, "
+            "which is why these counts are lower than the report's total "
+            "accounts.",
+        )),
+        Definition("Money", (
+            "Written short — $12.5K, $125K, $1.25M — in tiles, tables, chart "
+            "axes and chart tooltips alike, so the same amount reads the same "
+            "way wherever it appears.",
+        )),
+        Definition("The reporting floor", (
+            "Waves nominated before FY25 are dropped as the file is read, "
+            "before anything is counted. A wave belongs to the fiscal year of "
+            "its **Nom. Approval Date**, or its **Nom. Created Date** when it "
+            "was never approved; a wave carrying neither cannot be shown to be "
+            "out of scope, so it stays.",
+            "This is why **All time** means FY25 onwards everywhere, in every "
+            "chart, table, total and export.",
+        )),
     )),
 )
