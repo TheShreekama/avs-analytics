@@ -199,12 +199,12 @@ def test_new_engagements_counts_unique_tpids_on_wave1_approval(fact):
 
 
 def _approval_fixture():
-    """Three accounts whose Wave-1 approval date is present, missing, or nowhere."""
+    """Four accounts, covering both halves of the New Engagements rule."""
     rows = [
-        # P: Wave-1 approved in January — the date the engagement is counted on,
-        #    even though Wave-1 was cancelled and Wave-2 approved in March.
+        # P: Wave-1 approved in January and since cancelled and blocked — the
+        #    delivery columns do not affect which wave dates the engagement.
         ("700", "Papa",   "p1", "Wave 1", "01-15-2026", "6 - Cancelled / Archived",
-         "Rejected", "Blocked - Customer"),
+         "Approved", "Blocked - Customer"),
         ("700", "Papa",   "p2", "Wave 2", "03-15-2026", "4 - Executing Migration",
          "Approved", "On Track"),
         # Q: Wave-1 carries no approval date at all, so the rule moves on to
@@ -218,6 +218,13 @@ def _approval_fixture():
         # R: no wave anywhere carries one — never counted, never crashes.
         ("900", "Romeo",  "r1", "Wave 1", "",           "1 - Validating",
          "Pending",  "On Track"),
+        # S: Wave-1 holds a date its Nomination Status never backed up, and a
+        #    later wave was approved.  The date decides which wave answers, so
+        #    S is not counted at all rather than counted on Wave-2's date.
+        ("950", "Sierra", "s1", "Wave 1", "02-10-2026", "1 - Validating",
+         "Declined", "On Track"),
+        ("950", "Sierra", "s2", "Wave 2", "06-10-2026", "4 - Executing Migration",
+         "Approved", "On Track"),
     ]
     raw = pd.DataFrame(rows, columns=[
         "TPID", "Customer Name", "Task ID", "Phase", "Nom. Approval Date",
@@ -234,15 +241,37 @@ def _approval_fixture():
     return built
 
 
-def test_wave1_dates_the_engagement_whatever_its_state_or_status():
-    """Wave-1's approval date counts even when Wave-1 was cancelled and unapproved."""
+def test_wave1_dates_the_engagement_whatever_its_delivery_state():
+    """Wave-1's approval date counts even when that wave was cancelled and blocked.
+
+    The delivery columns — **Migration Status**, **Current State** — never
+    decide which wave dates an engagement. The account joined when it joined.
+    """
     built = _approval_fixture()
     papa = built[built["tpid"] == "700"]
     january = kpi.new_engagements(papa, "2026-01-01", "2026-01-31")
     assert january.count == 1
     assert list(january.records["phase"]) == ["Wave 1"]
-    # …and the later, approved wave does not date it a second time.
+    assert list(january.records["migration_status_label"]) == ["Cancelled / Archived"]
+    # …and the later, still-running wave does not date it a second time.
     assert kpi.new_engagements(papa, "2026-03-01", "2026-03-31").count == 0
+
+
+def test_the_dating_wave_must_also_be_an_approved_nomination():
+    """Nomination Status is the second half of the rule, read from that wave.
+
+    It is not a search for an approved wave: the date decides which wave
+    answers, and if that wave was never approved the account is not counted —
+    quietly counting it on a later wave's date would report it as joining in a
+    month nobody approved anything in.
+    """
+    built = _approval_fixture()
+    sierra = built[built["tpid"] == "950"]
+    assert kpi.new_engagements(sierra, "2026-02-01", "2026-02-28").count == 0
+    assert kpi.new_engagements(sierra, "2026-06-01", "2026-06-30").count == 0
+    assert kpi.new_engagements(sierra, None, None).count == 0
+    # The approval frame still holds the account, so nothing downstream loses it.
+    assert list(kpi.dated_wave(sierra, "approval_date")["phase"]) == ["Wave 1"]
 
 
 def test_the_next_wave_dates_it_only_when_wave1_has_no_approval_date():
@@ -275,14 +304,18 @@ def test_the_first_wave_frame_is_one_real_wave_not_a_composite():
     assert list(kpi.dated_wave(quebec, "approval_date")["phase"]) == ["Wave 2"]
 
 
-def test_the_trend_and_the_tile_date_an_engagement_the_same_way():
+def test_the_trend_and_the_tile_count_the_same_population():
+    """One rule, both halves of it, whichever way the figure is drawn."""
     built = _approval_fixture()
     waves = kpi.wave_index(built)
-    table, _rows = kpi.monthly_unique_tpids(built, "approval_date", waves=waves)
+    table, rows = kpi.monthly_unique_tpids(built, "approval_date", waves=waves)
     months = dict(zip(table["period"], table["Nominations"]))
+    # Papa on Wave-1's January date, Quebec on Wave-2's April one.  Sierra and
+    # Romeo are in neither: one was never approved, the other never dated.
     assert months == {"2026-01": 1, "2026-04": 1}
     assert kpi.new_engagements(built, None, None,
                                approvals=waves.approval).count == 2
+    assert sorted(rows["tpid"].astype(str)) == ["700", "800"]
 
 
 def test_migrations_completed_requires_the_latest_wave_to_be_completed(fact):
@@ -2040,18 +2073,82 @@ def test_methodology_is_opt_in_and_out_of_the_contents(state_doc):
     assert "Methodology" not in nav
 
 
+def _methodology_lines():
+    """Every paragraph in the methodology, whether or not it has a title."""
+    for _heading, items in glossary.REPORT_METHODOLOGY:
+        for item in items:
+            if isinstance(item, glossary.Definition):
+                yield from item.body
+            else:
+                yield item
+
+
 def test_the_report_states_its_own_methodology(state_doc):
-    """The rules travel with the report — every paragraph of them."""
+    """The rules travel with the report — every figure, under its own name."""
     body = _main(state_doc)
     assert 'id="methodology"' in body
     for heading, items in glossary.REPORT_METHODOLOGY:
         assert esc(heading) in body, heading
         for item in items:
-            # ``rich`` renders **bold** as markup, so compare on the plain text
-            # between the markers rather than on the source string.
-            for fragment in item.split("**"):
-                if len(fragment.strip()) > 40:
-                    assert esc(fragment) in body, fragment[:60]
+            if isinstance(item, glossary.Definition):
+                assert esc(item.title) in body, item.title
+    for line in _methodology_lines():
+        # ``rich`` renders **bold** as markup, so compare on the plain text
+        # between the markers rather than on the source string.
+        for fragment in line.split("**"):
+            if len(fragment.strip()) > 40:
+                assert esc(fragment) in body, fragment[:60]
+
+
+def test_every_headline_figure_is_defined_under_the_name_it_is_shown_by(state_doc):
+    """A reader with a number in front of them can look it up by its label.
+
+    The tiles say "ACR Pipeline"; the methodology has to have an entry called
+    "ACR Pipeline", not a paragraph somewhere that happens to mention it.
+    """
+    titles = {d.title for _h, items in glossary.REPORT_METHODOLOGY
+              for d in items if isinstance(d, glossary.Definition)}
+    for figure in ("New Engagements", "Migrations Completed", "On-Track Accounts",
+                   "ACR Claimed", "ACR Pipeline", "Aging (days)",
+                   "Cycle time (days)", "Approval latency (days)",
+                   "Top 10 accounts by ACR", "WW Region"):
+        assert figure in titles, figure
+    # The two that carry a qualifier travel with it.
+    assert any(t.startswith("Hosts Migrated") for t in titles)
+    assert any(t.startswith("Nodes Deployment Planned") for t in titles)
+    # …and each title is printed as its own heading in the report.
+    body = _main(state_doc)
+    for title in titles:
+        assert f"<h5>{esc(title)}</h5>" in body, title
+
+
+def test_a_definition_names_the_columns_it_is_read_from(state_doc):
+    """Bold marks something that is in the spreadsheet, and it is used.
+
+    A definition that names no column cannot be checked against the file, which
+    is the whole point of writing them this way.
+    """
+    import re
+    columns = {f.source_default for f in schema.CANONICAL_FIELDS}
+    # The five entries that read no column of their own: four are worked out
+    # from figures defined above them, and one is a formatting rule.  Anything
+    # else arriving without a column to check it against should fail this test.
+    derived = {"Cumulative", "Total number of engagement end (monthly)",
+               "Closure rate", "Fiscal years side by side", "Money"}
+    for _heading, items in glossary.REPORT_METHODOLOGY:
+        for item in items:
+            if not isinstance(item, glossary.Definition):
+                continue
+            bolded = set(re.findall(r"\*\*(.+?)\*\*", " ".join(item.body)))
+            assert bolded or item.title in derived, item.title
+    # Every column the definitions lean on is a real header in the export.
+    named = set(re.findall(r"\*\*(.+?)\*\*", " ".join(_methodology_lines())))
+    for column in ("Nom. Approval Date", "Migration Status", "Current State",
+                   "Nomination Status", "Actual End Date", "Total Cores",
+                   "Total ACR", "Phase", "TPID", "WW Region", "Status Summary",
+                   "Nom. Created Date", "Planned End Date", "Tags"):
+        assert column in named, column
+        assert column in columns or column == "TPID", column
 
 
 def test_the_methodology_is_plain_english_not_formulas(state_doc):
@@ -2067,18 +2164,34 @@ def test_the_methodology_is_plain_english_not_formulas(state_doc):
     for artefact in ("COUNT(DISTINCT", "SUM(Total", "NOT IN", "<pre>",
                      'class="rule"', "ELIF", "first match wins"):
         assert artefact not in methodology, artefact
-    text = " ".join(item for _h, items in glossary.REPORT_METHODOLOGY
-                    for item in items)
-    for operator in ("COUNT(", "SUM(", " IN (", "←", "--", "IF ", "ELSE"):
+    text = " ".join(_methodology_lines())
+    for operator in ("COUNT(", "SUM(", " IN (", "←", "→", "--", "IF ", "ELSE"):
         assert operator not in text, operator
-    # An arrow is a name here ("AVS → Azure Native"), never "maps to".
-    assert text.count("→") == text.count("AVS → Azure Native")
-    # Every item is a paragraph of prose, not a structure to decode.
+    # Every line is one readable step, not a structure to decode.
+    for line in _methodology_lines():
+        assert "\n" not in line, line[:60]
+        assert line.strip() == line and line.endswith((".", "!")), line[:60]
+
+
+def test_a_definition_is_a_list_of_steps_not_a_wall_of_prose(state_doc):
+    """The format a reader asked for: a title, then one short step per line.
+
+    A definition that grows a paragraph is one nobody will read at the moment
+    they are checking a number, which is the only moment it matters.
+    """
+    body = _main(state_doc)
     for _heading, items in glossary.REPORT_METHODOLOGY:
         for item in items:
-            assert isinstance(item, str), item
-            assert "\n" not in item, item[:60]
-            assert len(item.split()) >= 12, item
+            if not isinstance(item, glossary.Definition):
+                continue
+            assert 2 <= len(item.body) <= 10, (item.title, len(item.body))
+            for step in item.body:
+                # Terse enough to scan; a step running past this is really two.
+                assert len(step.split()) <= 45, (item.title, step)
+    # …and they print as real lists, not as runs of paragraphs.
+    steps = sum(len(d.body) for _h, items in glossary.REPORT_METHODOLOGY
+                for d in items if isinstance(d, glossary.Definition))
+    assert body.count("<li>") >= steps
 
 
 def test_no_generated_report_names_the_application_or_the_file(state_ctx, state_doc):
@@ -2228,8 +2341,7 @@ def test_each_optional_section_is_included_only_when_asked_for(
 # The methodology is written as the rules, and stays legible where it prints
 # --------------------------------------------------------------------------- #
 def _methodology_text() -> str:
-    return " ".join(item for _h, items in glossary.REPORT_METHODOLOGY
-                    for item in items)
+    return " ".join(_methodology_lines())
 
 
 def test_the_methodology_states_every_rule_a_reader_comes_looking_for():
@@ -2240,7 +2352,7 @@ def test_the_methodology_states_every_rule_a_reader_comes_looking_for():
     for topic in (
             "on track",              # when a wave counts as moving
             "first wave",            # which wave dates an engagement
-            "most recent wave",      # which wave answers for the rest
+            "latest wave",           # which wave answers for the rest
             "neither On-Track nor Completed",   # what the stopped section holds
             "whole dataset",         # what the period does not narrow
             "Target SDDC Generation",           # how a generation is decided
@@ -2255,11 +2367,10 @@ def test_the_methodology_fits_the_printed_page():
     from app.core import pdf_kit as kit
 
     available = kit.CONTENT_WIDTH[kit.PORTRAIT] - 14      # the cell's padding
-    for _heading, items in glossary.REPORT_METHODOLOGY:
-        for item in items:
-            for word in item.replace("**", "").split():
-                width = stringWidth(word, "Helvetica", 9)
-                assert width <= available, (word, round(width))
+    for line in _methodology_lines():
+        for word in line.replace("**", "").split():
+            width = stringWidth(word, "Helvetica", 9)
+            assert width <= available, (word, round(width))
 
 
 def test_the_pipeline_rule_is_documented_exactly_as_implemented():
@@ -2269,18 +2380,22 @@ def test_the_pipeline_rule_is_documented_exactly_as_implemented():
     and every literal value the code tests for still has to appear in it — a
     rule a reader cannot check against the file is a rule they have to trust.
     """
-    section = next(items for heading, items in glossary.REPORT_METHODOLOGY
-                   if "still to come" in heading)
-    text = " ".join(section)
-    assert kpi.PIPELINE_OFFERING in text
-    assert "From AVS" in text
-    assert '"Approved"' in text and '"On Track"' in text
+    entry = next(item for _heading, items in glossary.REPORT_METHODOLOGY
+                 for item in items
+                 if isinstance(item, glossary.Definition)
+                 and item.title == "ACR Pipeline")
+    text = " ".join(entry.body)
+    # Every value is written in bold, exactly as the column holds it, so a
+    # reader can find it in the file.
+    assert f"**{kpi.PIPELINE_OFFERING}**" in text
+    assert "**From AVS**" in text
+    assert "**Approved**" in text and "**On Track**" in text
     for status in kpi.PIPELINE_EXCLUDED_STATUSES:
-        assert status in text, status
+        assert f"**{status}**" in text, status
     # …and the rule says why a finished wave needs no exclusion of its own,
     # rather than listing one the code does not apply.
     assert "7 - Completed" not in text
-    assert "already finished" in text
+    assert "Finished work needs no exclusion" in text
 
 
 def test_an_unapproved_nomination_is_never_on_track():
@@ -2526,11 +2641,14 @@ def test_the_eos_report_cuts_accounts_by_generation_and_state(every_state_fact):
     assert generations.sum(axis=1).to_dict() == per_generation
     # …the All EOS row is exactly those rows added up…
     assert grid.loc[exp.ALL_EOS_ROW].to_dict() == generations.sum().to_dict()
-    # …and it totals the report's accounts, which over all time is what New
-    # Engagements counts.
+    # …and it totals the report's accounts.
     assert int(grid.loc[exp.ALL_EOS_ROW].sum()) == pop["tpid_key"].nunique()
-    assert int(grid.loc[exp.ALL_EOS_ROW].sum()) == kpi.new_engagements(
-        pop, None, None, approvals=waves.approval).count
+    # New Engagements over all time is the approved subset of exactly those
+    # accounts — never more than the grid, and never an account the grid omits.
+    intake = kpi.new_engagements(pop, None, None, approvals=waves.approval)
+    approved = int(kpi.is_nomination_approved(waves.approval).sum())
+    assert intake.count == approved <= int(grid.loc[exp.ALL_EOS_ROW].sum())
+    assert set(intake.records["tpid_key"]) <= set(pop["tpid_key"])
     # A cell opens its own accounts, and every account belongs to two cells:
     # its generation's, and the total row's.
     buckets = set(html_report_module()._by_generation_state(rows))
@@ -2750,11 +2868,15 @@ def test_both_reports_carry_the_top_accounts_on_the_two_broad_motions(state_ctx)
     assert {"avs", "native"} == set(_exp().TOP_ACCOUNT_REPORTS)
     for key in ("avs", "native"):
         assert _exp().shows_top_accounts(_exp()._BY_KEY[key])
+    # The section's own note, not its title: the methodology defines the figure
+    # by name in every report, and would answer for it.
+    marker = _exp().TOP_ACCOUNTS_NOTE.split(".")[0]
     # The fixture only populates the AVS motions, so that is the one both
     # renderers can be read for.
-    assert title in _pdf_text(state_ctx, reports=["avs"], drilldown=False)
+    avs_pdf = _pdf_text(state_ctx, reports=["avs"], drilldown=False)
+    assert title in avs_pdf and marker in avs_pdf
     assert title in _main(html_report.build_html_report(
         state_ctx, reports=["avs"]).decode())
     # Not on the EOS report: its question is which generation, not which account.
     assert not _exp().shows_top_accounts(_exp()._BY_KEY["eos"])
-    assert title not in _pdf_text(state_ctx, reports=["eos"], drilldown=False)
+    assert marker not in _pdf_text(state_ctx, reports=["eos"], drilldown=False)

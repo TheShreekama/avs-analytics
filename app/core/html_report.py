@@ -1123,6 +1123,19 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec
               "</section>")
 
 
+def _method_item(item) -> str:
+    """One methodology item: a paragraph of context, or a named figure.
+
+    A named figure is a heading and its own paragraphs, so a reader with a
+    number in front of them can find it by the name the report gave it.
+    """
+    if isinstance(item, glossary.Definition):
+        steps = "".join(f"<li>{rich(line)}</li>" for line in item.body)
+        return (f'<div class="def"><h5>{esc(item.title)}</h5>'
+                f"<ul>{steps}</ul></div>")
+    return f"<p>{rich(item)}</p>"
+
+
 def _methodology(doc: _Builder) -> None:
     """How every figure above was calculated — behind a checkbox, like the rest.
 
@@ -1137,7 +1150,7 @@ def _methodology(doc: _Builder) -> None:
     """
     blocks = "".join(
         f'<h4 class="sub">{esc(heading)}</h4><div class="prose">'
-        + "".join(f"<p>{rich(item)}</p>" for item in items) + "</div>"
+        + "".join(_method_item(item) for item in items) + "</div>"
         for heading, items in glossary.REPORT_METHODOLOGY)
     doc.write('<section class="report" id="methodology">'
               + _optional_card(

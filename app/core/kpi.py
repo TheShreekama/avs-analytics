@@ -260,19 +260,33 @@ def in_window(dates: pd.Series, start, end) -> pd.Series:
 # --------------------------------------------------------------------------- #
 def new_engagements(fact: pd.DataFrame, start=None, end=None,
                     approvals: pd.DataFrame | None = None) -> Metric:
-    """Unique TPIDs whose nomination approval date falls in the period.
+    """Unique TPIDs approved inside the period, dated by their **Wave-1** approval.
 
-    The date is read from **Wave-1 whatever state or status that wave is in** —
-    an unapproved, blocked, deferred or cancelled Wave-1 still dates the
-    engagement — and only when Wave-1 has no *Nom. Approval Date* does the rule
-    move on to the next wave, and the next, until one carries a date
-    (:func:`dated_wave`).  An account with no approval date on any wave has
-    never been nominated as far as this metric can tell, and is not counted.
+    Two conditions, both read from the **same wave** — the one that answers for
+    the account's nomination, so the row a drill-down shows carries the date and
+    the status a reader is checking:
+
+    1. its *Nom. Approval Date* falls inside the period, and
+    2. its *Nomination Status* reads **Approved** (:func:`is_nomination_approved`
+       — the column itself, not an approval date standing in for it).
+
+    **Which wave answers is decided by the date alone.**  Wave-1 does, whatever
+    its *Migration Status* or *Current State* says: a cancelled or blocked
+    Wave-1 still dates the engagement.  Only when Wave-1 has no *Nom. Approval
+    Date* at all does the rule move on to the next wave, and the next, until one
+    carries a date (:func:`dated_wave`).  The status is then read from **that**
+    wave — it is not a search for an approved wave, so an account whose dating
+    wave was declined is not counted at all, rather than quietly counted on a
+    later wave's date.
+
+    An account with no approval date on any wave has never been nominated as far
+    as this metric can tell, and is not counted either.
     """
     if fact.empty:
         return Metric(0, "customers")
     approvals = dated_wave(fact, "approval_date") if approvals is None else approvals
-    hit = approvals[in_window(approvals["approval_date"], start, end)]
+    hit = approvals[in_window(approvals["approval_date"], start, end)
+                    & is_nomination_approved(approvals)]
     return Metric(len(hit), "customers", hit)
 
 
@@ -525,10 +539,11 @@ def monthly_unique_tpids(fact: pd.DataFrame, date_col: str = "approval_date",
                          ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Unique TPIDs per month, each counted once in the month of its Wave-1 date.
 
-    Wave-1's date whatever that wave's state, falling through to the next wave
-    only when Wave-1 has none — the same :func:`dated_wave` rule
-    :func:`new_engagements` counts on, so a trend and the tile above it cannot
-    disagree about which month an account belongs to.
+    The same population :func:`new_engagements` counts: Wave-1's date whatever
+    that wave's *Migration Status* or *Current State*, falling through to the
+    next wave only when Wave-1 carries no date, and only where that wave's
+    *Nomination Status* reads **Approved**.  Only the column placing an account
+    in a month changes with ``date_col``.
     """
     if waves is not None and date_col == "approval_date":
         dated = waves.approval
@@ -536,7 +551,11 @@ def monthly_unique_tpids(fact: pd.DataFrame, date_col: str = "approval_date",
         dated = dated_wave(fact, date_col) if not fact.empty else fact
     if dated.empty:
         return _empty_trend("Nominations"), dated
-    rows = dated[in_window(dated[date_col], start, end)].copy()
+    # The same population :func:`new_engagements` counts, so the trend and the
+    # tile above it cannot disagree — only the date placing each account in a
+    # month changes with the basis.
+    rows = dated[in_window(dated[date_col], start, end)
+                 & is_nomination_approved(dated)].copy()
     rows["month"] = _month(rows[date_col])
     summary = (rows.groupby("month", as_index=False)
                    .agg(value=("tpid_key", "nunique")))

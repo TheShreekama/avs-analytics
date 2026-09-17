@@ -114,6 +114,16 @@ section.report {{ margin-bottom: 2.4rem; }}
 h3.block {{ font-size: 1.06rem; margin: 0 0 .2rem; letter-spacing: -.01em; }}
 h4.sub {{ font-size: .95rem; margin: 1rem 0 .4rem; color: var(--ink); }}
 .note {{ color: var(--muted); font-size: .86rem; margin: 0 0 .8rem; }}
+/* A named figure inside the methodology: its title, then how it is worked out. */
+.def {{ margin: 0 0 .9rem; padding: .1rem 0 0 .8rem;
+        border-left: 3px solid var(--border); }}
+.def h5 {{ margin: 0 0 .35rem; font-size: .9rem; font-weight: 650;
+           color: var(--ink); }}
+.def p:last-child {{ margin-bottom: 0; }}
+.def ul {{ margin: 0; padding-left: 1.1rem; }}
+.def li {{ margin: 0 0 .22rem; font-size: .9rem; line-height: 1.5; }}
+.def li:last-child {{ margin-bottom: 0; }}
+
 /* Running text (the methodology section): measured for reading, not for data. */
 .prose p {{ margin: 0 0 .6rem; font-size: .92rem; line-height: 1.55;
             max-width: 78ch; }}

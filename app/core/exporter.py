@@ -1417,10 +1417,18 @@ def _methodology(ss) -> list:
                        "intended.", ss["Body2"]),
              kit.spacer(0.3)]
     for heading, items in glossary.REPORT_METHODOLOGY:
-        block = [Paragraph(_esc(heading), ss["H2"])]
+        story.append(Paragraph(_esc(heading), ss["H2"]))
         for item in items:
-            block += [Paragraph(_strip(item), ss["Body2"]), kit.spacer(0.1)]
-        story += [KeepTogether(block), kit.spacer(0.25)]
+            if isinstance(item, glossary.Definition):
+                # Title and steps stay on one page: a figure's name on its own
+                # at the foot of a page is a heading with nothing under it.
+                block = [Paragraph(_esc(item.title), ss["H3"]), kit.spacer(0.06)]
+                block += [Paragraph(_strip(line), ss["Rule"], bulletText="\u2022")
+                          for line in item.body]
+                story += [KeepTogether(block), kit.spacer(0.18)]
+            else:
+                story += [Paragraph(_strip(item), ss["Body2"]), kit.spacer(0.1)]
+        story.append(kit.spacer(0.25))
     return story
 
 
