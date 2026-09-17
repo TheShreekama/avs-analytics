@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from app import state
-from app.core import glossary, kpi, segments
+from app.core import eos_tracker, glossary, kpi, segments
 from app.core.metrics import fmt_int
 from app.ui import charts, components
 from app.ui.theme import banner, page_header, section, subheading
@@ -72,6 +72,30 @@ _CHECK_HELP = {
     "duplicate_task": (
         "The same Task ID appearing on more than one row. Hosts and ACR are summed "
         "over records, so a duplicated row inflates them."
+    ),
+    "tracker_unmatched": (
+        "TPIDs in the manual EOS tracking sheet that the FDO dataset has never "
+        "heard of. Nothing can be reported for them — there is no offering, no "
+        "ACR and no wave behind them — so they appear in no report until the "
+        "nomination exists. Raise the nomination, or correct the TPID in the sheet."
+    ),
+    "tracker_missing": (
+        "Accounts in EOS scope that the tracking sheet does not cover. Their "
+        "generation still comes from the Gen-1/Gen-2 tag and their dates from "
+        "the export's own derivation — which is what the reports did before "
+        "there was a sheet, so nothing is lost; the sheet simply is not leading "
+        "for them."
+    ),
+    "tracker_generation": (
+        "Accounts whose Target SDDC Generation in the sheet disagrees with the "
+        "'AVS Migration - Gen1/Gen2' tag in the export. The sheet wins — it is "
+        "the programme's own statement of what an account is landing on — so "
+        "this is the list of accounts it overrode."
+    ),
+    "tracker_sddcs": (
+        "Accounts the sheet gives an Actual Migration End Date while fewer SDDCs "
+        "are migrated than are in scope. Reported exactly as the sheet states it; "
+        "listed here because the two cells cannot both be right."
     ),
 }
 
@@ -155,6 +179,21 @@ _LABELS = {
     "missing_tpid": "Rows with no TPID",
     "duplicate_task": "Duplicate Task IDs",
     "state_vs_status": "Current State contradicts Migration Status",
+    "tracker_unmatched": "In the EOS tracking sheet, not in the FDO dataset",
+    "tracker_missing": "In EOS scope, not in the EOS tracking sheet",
+    "tracker_generation": "EOS tracking sheet and tag disagree on the generation",
+    "tracker_sddcs": "Ended in the sheet, with SDDCs still outstanding",
+}
+
+#: Tracker check key -> the frame :func:`app.core.eos_tracker.inconsistencies`
+#: returns it under.  The sheet is a second document, so its disagreements are
+#: with the export rather than inside it — but they are the same question this
+#: page exists to answer, so they are listed here alongside the rest.
+_TRACKER_CHECKS = {
+    "tracker_unmatched": "unmatched_tpids",
+    "tracker_missing": "untracked_eos_accounts",
+    "tracker_generation": "generation_disagrees",
+    "tracker_sddcs": "ended_with_sddcs_outstanding",
 }
 
 
@@ -180,6 +219,15 @@ def _collect(ctx, fact: pd.DataFrame, scoped: pd.DataFrame) -> list[tuple[str, p
     if not untagged.empty:
         untagged = untagged.groupby("tpid_key", as_index=False).first()
     checks.append((_LABELS["eos_unclassified"], untagged))
+
+    # The manual EOS tracking sheet against the dataset it is joined onto.
+    if ctx.has_tracker:
+        issues = eos_tracker.inconsistencies(fact, ctx.tracker,
+                                             ctx.report.get("tracker"))
+        for key, name in _TRACKER_CHECKS.items():
+            frame = issues.get(name)
+            checks.append((_LABELS[key],
+                           frame if frame is not None else pd.DataFrame()))
 
     # Data-quality flags raised during cleaning, resolved back to their rows.
     cols = [c for c in ("tpid", "customer_name", "phase", "migration_path",

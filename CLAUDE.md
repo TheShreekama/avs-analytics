@@ -38,6 +38,7 @@ under Streamlit's AppTest in both counting modes.
   combining, staged failure diagnostics, DuckDB), `nulls` (NA-safe blank/mask helpers),
   `cleaning` (parsing/derivations/DQ), `rollup` (wave dedup → `customer` table),
   `segments` (migration category, source/target platform, Gen-1/Gen-2, EOS population),
+  `eos_tracker` (the manual EOS tracking sheet — read, rolled up per TPID, joined on),
   `kpi` (requirement-defined metrics in pandas, each returning its source records),
   `mapping`, `metrics` (periods, date presets, KPIs), `analytics` (**all SQL lives here**),
   `insights` (deterministic rules), `exporter` (ReportLab PDF),
@@ -99,10 +100,12 @@ under Streamlit's AppTest in both counting modes.
   every EOS report** — EOS is reported by generation, and an ungenerationed account would
   make the combined total disagree with the sum of its blocks — but it stays in `all_avs`
   and is listed on Data Inconsistency. There is only ever **one dataset**.
-  **An account is EOS when ANY of its waves carries an "AVS Migration - Gen1/Gen2" tag**
-  (that tag sets both scope and generation); with no tag on any wave, an
-  "AV36/AV36P/AV52 - EOS" path/offering is the fallback (`segments.eos_population`) and the
-  account lands on the "No generation tag" page.
+  **The manual EOS tracking sheet decides an account's generation wherever it states
+  one** (`Target SDDC Generation` = Gen1/Gen2); failing that, **an account is EOS when ANY
+  of its waves carries an "AVS Migration - Gen1/Gen2" tag** (that tag sets both scope and
+  generation); with no tag on any wave, an "AV36/AV36P/AV52 - EOS" path/offering is the
+  fallback (`segments.eos_population`) and the account lands on the "No generation tag"
+  page. Each row carries `generation_source` so a reader can see which document answered.
 - **TPID is authoritative** for joins, dedup and counts (`segments.tpid_key`; falls back to
   the account name only when a row has no TPID). The `customer` rollup keys on it — never
   on the account name, which differs between worksheets.
@@ -110,9 +113,16 @@ under Streamlit's AppTest in both counting modes.
   column alone decides — "AVS Migration - Gen1"/"- Gen2" matched against the cell stripped
   to letters+digits, because tags arrive concatenated ("Qualify and AccelerateAVS
   Migration - Gen1"); Gen-1 wins if both appear. No tag → Unclassified (and not EOS).
-  Host SKUs are no longer part of the classification.
+  Host SKUs are no longer part of the classification. **The EOS tracking sheet overrides
+  all of it** where it states a `Target SDDC Generation` (`eos_tracker.resolve_generation`,
+  applied inside `cleaning.build_fact_frame` *before* scope is decided, because the
+  generation is what puts an account in EOS scope).
 - **Metric rules** (`core/kpi.py`, all with `records` for drill-down): new engagements =
-  unique TPIDs by **Wave-1** approval date; migration ends = unique TPIDs classified
+  unique TPIDs by **Wave-1** approval date — read from Wave-1 **whatever state or status
+  that wave is in** (a cancelled, blocked or unapproved Wave-1 still dates the engagement),
+  moving on to the next wave **only** when Wave-1 has no *Nom. Approval Date*
+  (`kpi.dated_wave`, carried as `WaveIndex.approval`; the record returned is the wave the
+  date came from, so a drill-down names it); migration ends = unique TPIDs classified
   Completed, dated by actual end; hosts migrated = **sum of Total Cores** over completed
   records (never a TPID count, and deliberately wave-level — a completed wave deployed its
   nodes whatever the account's state is now); Cumulative is the final column and runs over
@@ -194,6 +204,16 @@ under Streamlit's AppTest in both counting modes.
   content fingerprint, shown in the sidebar, on Data & Upload and printed to the console
   at startup — the app is distributed by copying a folder, so "am I running the new code"
   needs an answer that does not rely on someone bumping a number.
+- **Two documents, uploaded separately.** The **FDO Dataset** is the nominations export;
+  the **manual EOS tracking sheet** is the programme's own spreadsheet, keyed on **TPID and
+  nothing else**. The sheet is *joined* onto the dataset (`eos_tracker.apply_to_fact`),
+  never stacked with it — stacking would put rows with no offering, wave or ACR into every
+  count. Every other detail (PM, SA, region, offering, ACR, waves) is looked up in the FDO
+  dataset by TPID; a sheet TPID the dataset does not hold is reported as unmatched on Data
+  & Upload and Data Inconsistency, never invented. `state.build_dataset(files,
+  tracker_files=…)`; overlay columns arrive prefixed `eos_` plus `eos_tracked` and
+  `generation_source`, and the `customer` rollup carries them. With no sheet loaded every
+  EOS figure is exactly what it was before the sheet existed — that is the test.
 - **Uploads.** A dataset is **one or more files**: `loader.read_files` +
   `combine_raw` stack them on headers matched case/whitespace-insensitively (first
   spelling wins), a column a file lacks is blank for its rows, and every row keeps
@@ -209,10 +229,14 @@ under Streamlit's AppTest in both counting modes.
 - **EOS monthly matrix** (`kpi.monthly_matrix`, on Status Report → EOS Migrations
   (All)): **Gen1 to Gen1** / **Gen1 to Gen2** blocks — every EOS account comes *from*
   Gen-1 hardware, so the account's own tag names the generation it lands *on*. Rows
-  reuse `monthly_unique_tpids` / `monthly_migrations_completed` / `monthly_hosts`;
-  *migration start* is **derived** (`kpi.migration_start_dates`: earliest wave whose
-  Current State reads On Track/Done → Actual Start, else Planned Start, else Nom.
-  Approval); *engagement end* **mirrors migration end** (`MATRIX_ROWS_MIRRORED`) — the
+  reuse `monthly_unique_tpids` / `monthly_hosts`; *migration start* and *migration end*
+  take the **EOS tracking sheet's** `Migration Start Date` / `Actual Migration End Date`
+  for every account it covers and fall back to the export for the rest
+  (`kpi.migration_start_dates`: earliest wave whose Current State reads On Track/Done →
+  Actual Start, else Planned Start, else Nom. Approval; `kpi.migration_end_dates`: the
+  account's latest wave completing, by its Actual End Date). Only the matrix reads them —
+  `monthly_migrations_completed`, which the trends and tiles use, is untouched.
+  *Engagement end* **mirrors migration end** (`MATRIX_ROWS_MIRRORED`) — the
   export has no closure date distinct from the last wave completing, so the two rows
   carry identical values by construction. Columns run from `config.EOS_MATRIX_START_FY` (FY26 =
   Jul 2025) to the as-of month or the latest completion, **every month shown**, each
@@ -224,11 +248,30 @@ under Streamlit's AppTest in both counting modes.
   month with no nominations is itself the number being reported.
 - **Two export formats, one report.** `exporter.build_report` (PDF) and
   `html_report.build_html_report` (single-file interactive HTML) take the same
-  arguments and select the same populations through the shared public helpers in
-  `exporter` (`headline`, `region_status`, `trend_table`, `account_rows`,
-  `format_accounts`, `labelled`, `clean`, `REPORTS`) — add a measure in one place,
-  not two. The HTML inlines the Plotly bundle, the CSS and its script, so it opens
-  offline from an email attachment; that is what makes it ~5 MB.
+  arguments and carry **the same sections in the same order**: summary (over a This-FY row
+  whenever the period is something else), EOS programme matrix, trends month by month,
+  fiscal years side by side, top accounts by ACR, pipeline, offering cut, regional cut,
+  generations, insights, blocked accounts last. They select the same populations through
+  the shared public helpers in `exporter` (`headline`, `trends`, `fiscal_year_split`,
+  `top_accounts`, `this_fiscal_year`, `unit_noun`, `region_status`, `trend_table`,
+  `account_rows`, `format_accounts`, `labelled`, `clean`, `REPORTS`) — add a measure in
+  one place, not two, and `test_both_reports_carry_the_same_sections` fails if one drifts.
+  The PDF keeps a Part 2 the HTML has no need for: the regional matrix, pipeline counts and
+  account records, which a printed page cannot open on demand. The HTML inlines the Plotly
+  bundle, the CSS and its script, so it opens offline from an email attachment; that is
+  what makes it ~5 MB.
+- **Every trend, twice.** `exporter.trends` builds the four monthly measures once for both
+  renderers; `exporter.fiscal_year_split` re-cuts each one as one series per fiscal year
+  over a shared Jul → Jun axis (`pc.fy_lines_png` in print, `charts.fy_lines` on screen),
+  with the month × FY grid beneath it. **The fiscal-year view is read over the whole
+  dataset**, never the reporting period — a year-on-year comparison cut to one month has
+  nothing to compare — so both renderers pass it the `all_time` population.
+- **Top 10 accounts by ACR** (`kpi.top_accounts_by_acr`, `kpi.TOP_ACCOUNTS`): the two broad
+  motions only (`exporter.TOP_ACCOUNT_REPORTS` = All AVS, AVS → Azure Native — the EOS
+  report's question is which generation, not which account). ACR is summed across **every
+  wave**, accounts with none are left out, and the bar is labelled `Customer (TPID)` so no
+  two bars can be the same account. All time, never the window. On the dashboards, the ACR
+  Trend page and both exports.
 - **Stage codes on the regional cut.** `kpi.stage_labels` turns "4 - Executing
   Migration" into the axis label **"Stage 4"** plus a key `[("Stage 4", "Executing
   Migration"), …]`; five full status names on one axis leave the plot a sliver.
@@ -295,17 +338,18 @@ under Streamlit's AppTest in both counting modes.
   whenever the two differ, mirroring the dashboards — **including over "All time"**, which
   resolves to no window at all: reading "no window" as "nothing to compare against" is what
   used to drop the row from the report while the dashboard still showed it.
-- **Each report states its own methodology, as rules rather than prose.**
-  `glossary.REPORT_METHODOLOGY` is the single source rendered by the PDF
-  (`pdf_kit.rule_block`), the HTML report (`.rule` / `<pre>`) and the Methodology page
-  (`st.code`), so one rule cannot be documented three ways. An item is either a paragraph
-  or a `glossary.Rule(title, lines, plain)` whose lines are **monospaced and aligned as
-  written** — alignment carries the meaning, and a test asserts every rule's trailing
-  comments line up and every line still fits the PDF column. `plain` is the same rule in
-  one ordinary sentence, printed under the block as **"In plain words —"**: the sections
-  lead in plain language and define their vocabulary (account, wave, ACR) first, so the
-  methodology can be read by whoever picks the report up and checked by whoever doubts a
-  number.
+- **Each report states its own methodology, in plain English rather than as formulas.**
+  `glossary.REPORT_METHODOLOGY` is the single source rendered by the PDF, the HTML report
+  and the Methodology page, so one rule cannot be documented three ways. It is
+  `(heading, paragraphs)` and **every item is a plain string** — no `Rule` class, no
+  monospaced block, no pseudo-SQL: a report goes to the people it is circulated to, and a
+  rule they must decode before they can check a number is a rule they end up trusting
+  instead. Column names and the literal values a cell holds ("Current State",
+  "7 - Completed") are still quoted, because that is what keeps a number checkable
+  against the file. `test_the_methodology_is_plain_english_not_formulas` fails on a
+  `COUNT(`, a `SUM(`, an `IF`/`ELSE` ladder or an assignment arrow creeping back in, and
+  `test_the_pipeline_rule_is_documented_exactly_as_implemented` still holds the prose to
+  naming every column and value the code tests for.
 - **A generated report names neither the app nor the file it read.** No `Source:` line, no
   dataset on the cover, no app name in the PDF furniture or the HTML footer; the default
   title is `exporter.DEFAULT_TITLE` ("Migration Programme Report").

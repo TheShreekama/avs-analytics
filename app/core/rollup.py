@@ -93,6 +93,24 @@ def build_customer_rollup(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFra
     # Category membership = ANY wave.
     out["tpid_key"] = first.index.to_series().to_numpy()
     out["generation"] = last["generation"]          # one value per TPID by construction
+    # The EOS tracking sheet is keyed on TPID, so every wave of an account
+    # already carries the same values — the rollup simply keeps them, and the
+    # dates keep their extremes so a multi-wave account reads the same in both
+    # counting modes.
+    for column in ("generation_source", "eos_target_generation",
+                   "eos_tracker_status", "eos_tracker_state",
+                   "eos_tracker_region", "eos_tracker_customer"):
+        if column in df.columns:
+            out[column] = last[column]
+    if "eos_tracked" in df.columns:
+        out["eos_tracked"] = g["eos_tracked"].any()
+    if "eos_start_date" in df.columns:
+        out["eos_start_date"] = g["eos_start_date"].min()
+    if "eos_end_date" in df.columns:
+        out["eos_end_date"] = g["eos_end_date"].max()
+    for column in ("eos_sddcs_in_scope", "eos_sddcs_migrated"):
+        if column in df.columns:
+            out[column] = g[column].max()   # the account's own figure, not a per-wave sum
     out["is_eos_population"] = g["is_eos_population"].any()
     out["migration_category"] = last["migration_category"]
     out["is_avs_target"] = g["is_avs_target"].any()

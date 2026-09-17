@@ -1,10 +1,21 @@
-"""Data & Upload — load one or more user files, or use the bundled sample.
+"""Data & Upload — load the FDO dataset and the manual EOS tracking sheet.
 
-A dataset can be assembled from several exports (the source system exports per
-offering, so AVS and "(From AVS)" nominations often arrive as separate files);
-they are stacked on their shared headers into one dataset.  When an upload
-fails, the whole diagnosis is rendered on the page — stage, cause, origin and
-traceback — because these machines have no console in view.
+Two **different documents**, uploaded separately because they are not the same
+kind of thing:
+
+* The **FDO Dataset** is the nominations export, and can itself be assembled
+  from several files (the source system exports per offering, so AVS and
+  "(From AVS)" nominations often arrive apart); they are stacked on their shared
+  headers into one dataset.
+* The **manual EOS tracking sheet** is the programme's own spreadsheet, keyed on
+  TPID.  It is *joined* onto the dataset rather than stacked with it, and
+  supplies three answers the export cannot give as well: the Target SDDC
+  Generation, the migration start date and the actual migration end date.  Every
+  other detail — Factory PM, Solution Architect, region, ACR — is looked up in
+  the FDO dataset by TPID.  See :mod:`app.core.eos_tracker`.
+
+When an upload fails, the whole diagnosis is rendered on the page — stage,
+cause, origin and traceback — because these machines have no console in view.
 """
 from __future__ import annotations
 
@@ -14,11 +25,11 @@ import pandas as pd
 import streamlit as st
 
 from app import state
-from app.core import loader, mapping as mapmod, segments
+from app.core import eos_tracker, loader, mapping as mapmod, segments
 from app.version import build_stamp
 from app.core.metrics import fmt_int
 from app.ui import components
-from app.ui.theme import banner, page_header, section
+from app.ui.theme import banner, page_header, section, subheading
 
 
 def render() -> None:
@@ -31,44 +42,46 @@ def render() -> None:
            f"the copy you just installed, the Streamlit server is still running the old "
            f"code: stop it (Ctrl+C) and start it again.")
 
-    section("Upload a dataset")
-    st.caption("One file, or several that make up one dataset — an AVS export and "
-               "an Azure-native export, say. Files are combined on their shared "
-               "column headers and analysed together; every row remembers which "
-               "file it came from.")
-    ups = st.file_uploader("Choose file(s) (CSV, XLSX or XLS)", type=["csv", "xlsx", "xls"],
-                           accept_multiple_files=True)
+    section("1 · FDO Dataset")
+    st.caption("The nominations export. One file, or several that make up one "
+               "dataset — an AVS export and an Azure-native export, say. Files "
+               "are combined on their shared column headers and analysed "
+               "together; every row remembers which file it came from.")
+    ups = st.file_uploader("FDO Dataset — choose file(s) (CSV, XLSX or XLS)",
+                           type=["csv", "xlsx", "xls"], accept_multiple_files=True,
+                           key="upload_fdo")
+
+    section("2 · Manual EOS tracking sheet")
+    st.caption("Optional, and a **different document**: the EOS programme's own "
+               "sheet, keyed on **TPID**. It decides each account's generation "
+               "(*Target SDDC Generation*) and supplies the *Migration Start "
+               "Date* and *Actual Migration End Date* the programme matrix "
+               "reports; everything else — Factory PM, Solution Architect, "
+               "region, ACR — is looked up against the FDO dataset by TPID. "
+               "Columns it does not recognise are left alone.")
+    tracker_ups = st.file_uploader(
+        "EOS tracking sheet — choose file(s) (CSV, XLSX or XLS)",
+        type=["csv", "xlsx", "xls"], accept_multiple_files=True, key="upload_eos")
+
     cols = st.columns([1, 1, 3])
     with cols[0]:
         if st.button("Use sample dataset", width="stretch"):
             state.load_sample()
             st.success("Loaded the bundled sample dataset.")
             st.rerun()
+    with cols[1]:
+        if st.button("Sample + EOS tracker", width="stretch",
+                     help="The bundled sample dataset with the bundled EOS "
+                          "tracking sheet joined onto it — the quickest way to "
+                          "see what the sheet changes."):
+            state.load_sample(with_tracker=True)
+            st.success("Loaded the bundled sample dataset and EOS tracking sheet.")
+            st.rerun()
 
-    if ups:
-        files = [(u.name, u.getvalue()) for u in ups]
-        label = loader.dataset_label(files)
-        try:
-            new = state.build_dataset(files)
-        except loader.IngestError as err:
-            _failure_panel(err.failure)
-            return
-        except Exception as exc:  # noqa: BLE001 - anything the stages missed
-            _failure_panel(loader.IngestFailure(
-                filename=label, stage="read", exc_type=type(exc).__name__,
-                message=str(exc), hint=loader.explain(str(exc)),
-                origin="", detail={}, traceback=_format_exc(exc)))
-            return
-        state.remember_files(files)
-        state.set_context(new)
-        cov = mapmod.mapping_coverage(new.mapping)
-        if cov["ok"]:
-            banner(f"✅ Loaded <b>{label}</b> — {fmt_int(len(new.raw))} rows, "
-                   f"{len(new.raw.columns)} columns. {cov['mapped']} fields auto-mapped.")
-        else:
-            banner(f"⚠️ Loaded <b>{label}</b>, but required fields are unmapped: "
-                   f"{', '.join(cov['missing_required'])}. Open <b>Column Mapping</b> to fix.", "warn")
-        st.rerun()
+    files = [(u.name, u.getvalue()) for u in (ups or [])]
+    tracker_files = [(u.name, u.getvalue()) for u in (tracker_ups or [])]
+    if not _load_uploads(ctx, files, tracker_files):
+        return
 
     # Active dataset summary
     section("Active dataset")
@@ -88,6 +101,8 @@ def render() -> None:
 
     _sources_panel(ctx)
 
+    _tracker_panel(ctx)
+
     _classification_panel(ctx)
 
     section("Source column profile")
@@ -97,6 +112,130 @@ def render() -> None:
     st.dataframe(fill, width="stretch", height=420, hide_index=True,
                  column_config={"fill_pct": st.column_config.ProgressColumn(
                      "Fill %", min_value=0, max_value=100, format="%.0f%%")})
+
+
+def _load_uploads(ctx, files: list, tracker_files: list) -> bool:
+    """Rebuild the context when what is attached to the uploaders has changed.
+
+    Signatures are compared rather than "is anything attached", because a
+    Streamlit uploader keeps handing its files back on every rerun: rebuilding
+    on their mere presence reloads the dataset forever, and — now that there are
+    two uploaders — would undo the other one's upload on every pass.  Removing a
+    file from the sheet's uploader is a change too, and means *build without the
+    sheet*.
+
+    Returns False when the page should stop (an upload failed and the diagnosis
+    is on screen); the previously active dataset is left untouched.
+    """
+    if not files and not tracker_files:
+        return True
+    signature = loader.files_signature(files) if files else ctx.signature
+    tracker_signature = (loader.files_signature(tracker_files)
+                         if tracker_files else "")
+    if (signature, tracker_signature) == (ctx.signature, ctx.tracker_signature):
+        return True
+
+    label = loader.dataset_label(files) if files else ctx.filename
+    try:
+        if files:
+            new = state.build_dataset(files, tracker_files=tracker_files)
+            state.remember_files(files, tracker_files)
+            state.set_context(new)
+        else:
+            # Only the sheet changed: keep the dataset that is loaded — which may
+            # be the bundled sample — and rebuild it with the new sheet.
+            new = state.reload_with(tracker_files=tracker_files)
+    except loader.IngestError as err:
+        _failure_panel(err.failure)
+        return False
+    except Exception as exc:  # noqa: BLE001 - anything the stages missed
+        _failure_panel(loader.IngestFailure(
+            filename=label, stage="read", exc_type=type(exc).__name__,
+            message=str(exc), hint=loader.explain(str(exc)),
+            origin="", detail={}, traceback=_format_exc(exc)))
+        return False
+
+    if files:
+        cov = mapmod.mapping_coverage(new.mapping)
+        if cov["ok"]:
+            banner(f"✅ Loaded <b>{label}</b> — {fmt_int(len(new.raw))} rows, "
+                   f"{len(new.raw.columns)} columns. {cov['mapped']} fields auto-mapped.")
+        else:
+            banner(f"⚠️ Loaded <b>{label}</b>, but required fields are unmapped: "
+                   f"{', '.join(cov['missing_required'])}. Open <b>Column Mapping</b> "
+                   f"to fix.", "warn")
+    if new.has_tracker:
+        read = new.tracker_report or {}
+        overlay = (new.report.get("tracker") or {})
+        banner(f"🧾 EOS tracking sheet <b>{new.tracker_filename}</b> — "
+               f"{fmt_int(read.get('rows', 0))} rows covering "
+               f"{fmt_int(read.get('accounts', 0))} accounts, of which "
+               f"{fmt_int(overlay.get('matched_accounts', 0))} matched a TPID in "
+               f"the FDO dataset.")
+    st.rerun()
+    return False
+
+
+def _tracker_panel(ctx) -> None:
+    """What the EOS tracking sheet is answering for, and what it could not.
+
+    The sheet is the reason an EOS number can differ from what the export alone
+    would say, so the page states plainly which accounts it reached, which
+    generations it decided, and which of its TPIDs the FDO dataset has never
+    heard of — those can be reported on nowhere until the nomination exists.
+    """
+    section("Manual EOS tracking sheet")
+    if not ctx.has_tracker:
+        st.caption("No sheet loaded. Every EOS figure is read from the FDO "
+                   "dataset alone: generation from the **AVS Migration - "
+                   "Gen1/Gen2** tag, migration start derived from the earliest "
+                   "wave under way, migration end from the latest wave "
+                   "completing. Upload a sheet above to let the programme's own "
+                   "dates and generations lead.")
+        return
+
+    read = ctx.tracker_report or {}
+    overlay = ctx.report.get("tracker") or {}
+    unmatched = overlay.get("unmatched_tpids") or []
+    components.kpi_row([
+        {"label": "Sheet", "value": ctx.tracker_filename},
+        {"label": "Accounts in sheet", "value": fmt_int(read.get("accounts", 0))},
+        {"label": "Matched in FDO", "value": fmt_int(overlay.get("matched_accounts", 0))},
+        {"label": "Not in FDO", "value": fmt_int(len(unmatched)),
+         "tone": "warn" if unmatched else "good"},
+        {"label": "Generation stated", "value": fmt_int(
+            read.get("accounts", 0) - read.get("no_generation", 0))},
+    ])
+    st.caption(f"**{fmt_int(read.get('with_start', 0))}** accounts carry a "
+               f"*Migration Start Date* and **{fmt_int(read.get('with_end', 0))}** "
+               f"an *Actual Migration End Date*; the programme matrix uses those "
+               f"and falls back to the FDO derivation for the rest.")
+
+    subheading("Which document decided each generation")
+    components.show_table(eos_tracker.summary(ctx.fact))
+
+    extra = read.get("extra_columns") or []
+    if extra:
+        st.caption("Columns the sheet carries that the reports do not read: "
+                   + ", ".join(f"**{c}**" for c in extra[:20])
+                   + (f" (+{len(extra) - 20} more)" if len(extra) > 20 else "")
+                   + ". They are left exactly as they are.")
+
+    issues = eos_tracker.inconsistencies(ctx.fact, ctx.tracker, overlay)
+    labels = {
+        "unmatched_tpids": "In the sheet, not in the FDO dataset",
+        "untracked_eos_accounts": "In EOS scope, not in the sheet",
+        "generation_disagrees": "Sheet and tag disagree on the generation",
+        "ended_with_sddcs_outstanding": "Ended, with SDDCs still outstanding",
+    }
+    for key, label in labels.items():
+        frame = issues.get(key)
+        rows = 0 if frame is None or frame.empty else len(frame)
+        with st.expander(f"{label} — {fmt_int(rows)} account(s)"):
+            if rows:
+                components.show_table(frame, height=260)
+            else:
+                st.caption("None.")
 
 
 def _classification_panel(ctx) -> None:
@@ -116,7 +255,8 @@ def _classification_panel(ctx) -> None:
                .reset_index(name="Accounts (TPID)"))
     cols = st.columns(2)
     with cols[0]:
-        st.markdown("**Generation split** (per TPID, from the Tags column)")
+        st.markdown("**Generation split** (per TPID — the sheet's *Target SDDC "
+                    "Generation* where it has one, else the Tags column)")
         components.show_table(gen)
     with cols[1]:
         st.markdown("**Most common Tags values**")

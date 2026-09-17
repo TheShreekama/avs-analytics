@@ -555,7 +555,7 @@ def test_report_figures_match_the_dashboard_calculation_layer():
     text = _text(exporter.build_story(ctx, reports=["avs"], drilldown=False))
     pop = segments.population(ctx.fact, segments.CAT_ALL_AVS)
     waves = kpi.wave_index(pop)
-    expected = kpi.new_engagements(pop, None, None, firsts=waves.first).value
+    expected = kpi.new_engagements(pop, None, None, approvals=waves.approval).value
     on_track = kpi.on_track_accounts(pop, lasts=waves.last).value
     upper = text.upper()
     assert "NEW ENGAGEMENTS" in upper and "ON-TRACK ACCOUNTS" in upper
@@ -668,7 +668,7 @@ def test_fiscal_year_totals_reconcile_with_the_underlying_records():
     pop = segments.population(ctx.fact, segments.CAT_ALL_AVS)
     waves = kpi.wave_index(pop)
     table, rows = kpi.monthly_unique_tpids(pop, "approval_date", None, None,
-                                           firsts=waves.first)
+                                           waves=waves)
     split = kpi.split_by_fiscal_year(table, "Nominations", FY_START_MONTH)
     labelled = kpi.label_fiscal_year(rows, "approval_date", FY_START_MONTH)
     charted = split.groupby("fy")["Nominations"].sum()
@@ -768,9 +768,7 @@ def test_unfloored_trend_would_have_charted_fy24():
     from app.core import kpi, segments
     ctx = _floored_context(3000)
     pop = segments.population(ctx.fact, segments.CAT_ALL_AVS)
-    waves = kpi.wave_index(pop)
-    table, _ = kpi.monthly_unique_tpids(pop, "created_date", None, None,
-                                        firsts=waves.first)
+    table, _ = kpi.monthly_unique_tpids(pop, "created_date", None, None)
     years = {metrics.fiscal_year_label(m, FY_START_MONTH)
              for m in pd.to_datetime(table["month"])}
     assert "FY24" in years, years

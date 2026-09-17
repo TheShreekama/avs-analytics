@@ -4,11 +4,15 @@ The document is deliberately two-part, so one file serves both a leadership
 review and the questions that follow it:
 
 * **Part 1 — Executive reports.** One page-set per migration motion (AVS
-  Migrations, EOS Migrations, AVS to Azure Native): headline metrics, trends,
-  pipeline, regional cut and insights.  Charts and summaries only.
-* **Part 2 — Supporting detail.** The drill-down behind each report — the
-  monthly numbers, the matrices the charts are drawn from, and the account
-  records, on landscape pages.
+  Migrations, EOS Migrations, AVS to Azure Native), section for section as the
+  interactive HTML report renders them: headline metrics over a This-FY row,
+  the EOS programme matrix, every trend month by month and then fiscal year
+  against fiscal year, the largest accounts by ACR, the pipeline, the regional
+  cut, the generations, the insights, and the accounts that have stopped.  Each
+  chart carries its own numbers underneath it.
+* **Part 2 — Supporting detail.** What a printed report cannot click through
+  to: the regional matrix, the pipeline counts and the account records, on
+  landscape pages.
 
 Every report links to its drill-down and every drill-down links back, as real
 PDF destinations rather than styled text, alongside a clickable contents page
@@ -30,8 +34,9 @@ import pandas as pd
 from reportlab.lib.units import cm
 from reportlab.platypus import KeepTogether, PageBreak, Paragraph
 
+from ..config import EOS_MATRIX_START_FY, FY_START_MONTH
 from ..ui import pdf_charts as pc
-from . import (analytics, glossary, insights as insights_mod, kpi,
+from . import (analytics, glossary, insights as insights_mod, kpi, metrics,
                pdf_kit as kit, segments)
 from .metrics import fmt_currency, fmt_int
 
@@ -176,7 +181,8 @@ def headline(pop: pd.DataFrame, waves: kpi.WaveIndex, start, end,
     """
     ahead = pop if all_time is None else all_time
     return {
-        "engagements": kpi.new_engagements(pop, start, end, firsts=waves.first),
+        "engagements": kpi.new_engagements(pop, start, end,
+                                           approvals=waves.approval),
         "completed": kpi.migrations_completed(pop, start, end, lasts=waves.last),
         "hosts": kpi.hosts_migrated(pop, start, end),
         "on_track": kpi.on_track_accounts(pop, lasts=waves.last),
@@ -350,6 +356,174 @@ def _insight_lines(pop: pd.DataFrame, ss, limit: int = 14) -> list:
     return out
 
 
+# --------------------------------------------------------------------------- #
+# Trends — one definition, both renderers
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class Trend:
+    """One monthly measure: what it is called, its table, and its records.
+
+    The four measures the Trend Analysis pages chart, assembled once here so the
+    PDF and the HTML report cannot end up carrying different trends — or the
+    same trend under two names.
+    """
+    key: str
+    title: str
+    value_col: str
+    currency: bool
+    table: pd.DataFrame
+    rows: pd.DataFrame
+    #: Which record date places a row in a month, for the fiscal-year split.
+    date_col: str
+
+
+def unit_noun(spec: "ReportSpec") -> str:
+    """What a report calls the Total Cores column.
+
+    The AVS motions deploy **Nodes**; only the "(From AVS)" motion moves
+    **Cores** to Azure-native services.  One noun per report, decided here and
+    used by both renderers' tiles and trend titles, so the two cannot disagree.
+    """
+    return "Cores" if spec.key == "native" else "Nodes"
+
+
+def trends(pop: pd.DataFrame, waves: kpi.WaveIndex, start, end,
+           spec: "ReportSpec", noun: str = "") -> list[Trend]:
+    """Every month-over-month measure a report carries, in reporting order.
+
+    ``noun`` overrides what the Total Cores column is called; left out, it is
+    :func:`unit_noun`, which is what both renderers pass anyway.
+    """
+    noun = noun or unit_noun(spec)
+    noms, nom_rows = kpi.monthly_unique_tpids(pop, "approval_date", start, end,
+                                              waves=waves)
+    acr, acr_rows = kpi.monthly_acr_claimed(pop, start, end)
+    hosts, host_rows = kpi.monthly_hosts(pop, start, end)
+    done, done_rows = kpi.monthly_migrations_completed(pop, start, end,
+                                                       lasts=waves.last)
+    return [
+        Trend("nominations", "Nominations per month (unique TPIDs)",
+              "Nominations", False, noms, nom_rows, "approval_date"),
+        Trend("acr", "ACR claimed per month", "ACR Claimed", True, acr, acr_rows,
+              "actual_end_date"),
+        Trend("hosts", f"{spec.unit_label} per month (Total {noun})",
+              "Hosts", False, hosts, host_rows, "actual_end_date"),
+        Trend("completed", "Migrations completed per month (unique TPIDs)",
+              "Migrations Completed", False, done, done_rows, "actual_end_date"),
+    ]
+
+
+def fiscal_year_split(trend: Trend, fy_start_month: int = FY_START_MONTH
+                      ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The same measure re-cut as one series per fiscal year, plus its grid.
+
+    The "fiscal years side by side" view the Trend Analysis pages draw: the
+    years laid over a shared Jul → Jun axis, where a single continuous line only
+    ever gets longer.  Returns ``(split, grid)`` — long-form rows for the chart,
+    and months down / fiscal years across with a Total row for the table.
+
+    Every one of the twelve months is a row even when nothing happened in it: a
+    quiet month is itself the finding, and dropping the row shifts the ones
+    below it so the table stops lining up against the chart.
+    """
+    split = kpi.split_by_fiscal_year(trend.table, trend.value_col, fy_start_month)
+    if split.empty:
+        return split, pd.DataFrame()
+    order = metrics.fiscal_month_order(fy_start_month)
+    grid = split.pivot_table(index="fy_month", columns="fy",
+                             values=trend.value_col, aggfunc="sum")
+    grid = grid.reindex(order).fillna(0)
+    grid.loc["Total"] = grid.sum()
+    out = grid.reset_index().rename(columns={"fy_month": "Month"})
+    out.columns.name = None
+    fmt = fmt_currency if trend.currency else fmt_int
+    for col in out.columns[1:]:
+        out[col] = out[col].map(fmt)
+    return split, out
+
+
+#: What the fiscal-year comparison is called, and why it ignores the period.
+FISCAL_YEARS_TITLE = "Fiscal years side by side"
+FISCAL_YEARS_NOTE = (
+    "The same four measures again, each fiscal year its own series over a "
+    "shared July → June axis, so the years read against one another rather "
+    "than stretching into one ever-longer line. **Read over the whole dataset, "
+    "never the reporting period**: a year-on-year comparison cut to one month "
+    "would have nothing to compare. Every month is shown, including the empty "
+    "ones, and each series is the fiscal year it is labelled with."
+)
+
+
+def top_accounts_title(limit: int = kpi.TOP_ACCOUNTS) -> str:
+    return f"Top {limit} accounts by ACR"
+
+
+#: Which reports carry the largest-accounts cut.  The two broad motions: the
+#: EOS report's generations would repeat much of the same list, and its own
+#: question is which generation, not which account.
+TOP_ACCOUNT_REPORTS = ("avs", "native")
+
+TOP_ACCOUNTS_NOTE = (
+    "The accounts this category's money sits in, largest first. Total ACR is "
+    "summed across **every wave** of an account — an account with waves of 10M, "
+    "15M and 20M is a 45M account — so the order is the account-level one the "
+    "reconciliation and the account records both use. Accounts with no ACR are "
+    "left out rather than listed as zeroes. **Read over the whole dataset, not "
+    "the reporting period**: the question is where the money is, which a window "
+    "would answer only for the window."
+)
+
+
+def shows_top_accounts(spec: "ReportSpec") -> bool:
+    return spec.key in TOP_ACCOUNT_REPORTS
+
+
+def top_accounts(pop: pd.DataFrame, waves: kpi.WaveIndex,
+                 limit: int = kpi.TOP_ACCOUNTS) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The largest accounts by ACR, and the account rows behind them."""
+    return kpi.top_accounts_by_acr(pop, limit, approvals=waves.approval,
+                                   lasts=waves.last)
+
+
+def top_accounts_line(summary: pd.DataFrame, pop: pd.DataFrame) -> str:
+    """One sentence stating what share of the category these accounts carry."""
+    if summary.empty:
+        return ""
+    total = float(pd.to_numeric(pop.get("total_acr"), errors="coerce").sum())
+    shown = float(summary["acr"].sum())
+    share = f" — {shown / total:.0%} of the category's ACR" if total else ""
+    return (f"These {fmt_int(len(summary))} accounts carry "
+            f"{fmt_currency(shown)}{share}.")
+
+
+def this_fiscal_year(as_of, start, end) -> tuple[tuple | None, str]:
+    """The fiscal year *as_of* sits in — unless that is already the window.
+
+    Mirrors the dashboards' Executive Summary, which puts a This-FY row above
+    the selected period whenever the two differ, so a month's numbers keep the
+    year they sit in.  Returns ``(None, "")`` only when the report already
+    covers exactly This FY.
+
+    **An unbounded period is not This FY.**  "All time" resolves to no window at
+    all, and reading that as "nothing to compare against" is what used to drop
+    the row from a report while the dashboard — which decides on the preset, not
+    on the dates — still showed it.  All time spans several fiscal years, so the
+    year you are in is exactly the context it loses.
+    """
+    span = metrics.date_preset_range(as_of, "This FY", FY_START_MONTH)
+    if not span:
+        return None, ""
+    fy_start, fy_end = pd.Timestamp(span[0]).date(), pd.Timestamp(span[1]).date()
+    same = (start is not None and end is not None
+            and pd.Timestamp(start).date() == fy_start
+            and pd.Timestamp(end).date() == fy_end)
+    if same:
+        return None, ""
+    label = (f"This FY ({metrics.fiscal_year_label(fy_start, FY_START_MONTH)}) — "
+             f"{fy_start:%d %b %Y} → {fy_end:%d %b %Y}")
+    return (fy_start, fy_end), label
+
+
 def trend_table(table: pd.DataFrame, value_col: str, currency: bool) -> pd.DataFrame:
     """A monthly trend as printable rows — Month, the measure, Cumulative last."""
     out = table.drop(columns=["month"]).rename(columns={"period": "Month"})
@@ -397,7 +571,46 @@ def _population_line(spec: ReportSpec, pop: pd.DataFrame, ss) -> Paragraph:
     return Paragraph(" &nbsp;·&nbsp; ".join(bits), ss["Muted"])
 
 
-def _summary_block(spec: ReportSpec, metrics_: dict, ss, period_label: str) -> list:
+def _summary_block(spec: ReportSpec, pop: pd.DataFrame, waves: kpi.WaveIndex,
+                   start, end, ss, period_label: str,
+                   all_time: pd.DataFrame | None = None,
+                   fy_window=None, fy_label: str = "") -> list:
+    """The headline tiles, over a This-FY row when the period is something else.
+
+    The same two-row rule the dashboards and the HTML report use: selecting
+    "This Month" answers how the month went but loses the year it sits in, so
+    anything other than This FY gets the fiscal year above it.  Each row is
+    measured over its own window — never one derived from the other.
+    """
+    out = [Paragraph("Executive summary", ss["H2"])]
+    if fy_window and fy_window[0] is not None:
+        out += [Paragraph("Two periods: the fiscal year you are in, then the "
+                          "period selected for this report. Each row is measured "
+                          "over its own window — except ACR Pipeline and any "
+                          "planned deployment, which are read over the whole "
+                          "dataset and so read the same on both rows.",
+                          ss["Muted"]),
+                kit.spacer(0.2),
+                Paragraph(_esc(fy_label), ss["H3"]),
+                kit.spacer(0.1),
+                _summary_cards(spec, headline(pop, waves, fy_window[0],
+                                              fy_window[1], all_time), ss),
+                kit.spacer(0.3),
+                Paragraph(_esc(period_label), ss["H3"]),
+                kit.spacer(0.1)]
+    else:
+        out += [Paragraph(f"Reporting period: {_esc(period_label)}. On-Track is a "
+                          "snapshot of where things stand now; <b>ACR Pipeline and "
+                          "Nodes Deployment Planned are read over the whole "
+                          "dataset</b> — work nominated before the window is still "
+                          "work still to do. No date window narrows any of the "
+                          "three.", ss["Muted"]),
+                kit.spacer(0.2)]
+    out.append(_summary_cards(spec, headline(pop, waves, start, end, all_time), ss))
+    return out
+
+
+def _summary_cards(spec: ReportSpec, metrics_: dict, ss):
     tiles = [
         ("New Engagements", fmt_int(metrics_["engagements"].value),
          "unique TPIDs, Wave-1 approval"),
@@ -415,52 +628,165 @@ def _summary_block(spec: ReportSpec, metrics_: dict, ss, period_label: str) -> l
         tiles.append(("Nodes Deployment Planned",
                       fmt_int(metrics_["nodes_planned"].value),
                       "Total Cores, eligible waves, all time"))
-    return [Paragraph("Executive summary", ss["H2"]),
-            Paragraph(f"Reporting period: {_esc(period_label)}. On-Track is a "
-                      "snapshot of where things stand now; <b>ACR Pipeline and "
-                      "Nodes Deployment Planned are read over the whole dataset</b> "
-                      "— work nominated before the window is still work still to "
-                      "do. No date window narrows any of the three.", ss["Muted"]),
-            kit.spacer(0.2),
-            kit.kpi_cards(tiles, ss, per_row=3)]
+    return kit.kpi_cards(tiles, ss, per_row=3)
 
 
 def _trend_block(pop: pd.DataFrame, waves: kpi.WaveIndex, start, end,
                  spec: ReportSpec, ss) -> list:
-    noms, _ = kpi.monthly_unique_tpids(pop, "approval_date", start, end,
-                                       firsts=waves.first)
-    acr, _ = kpi.monthly_acr_claimed(pop, start, end)
-    hosts, _ = kpi.monthly_hosts(pop, start, end)
-    done, _ = kpi.monthly_migrations_completed(pop, start, end, lasts=waves.last)
+    """Every month-over-month measure, each with the numbers under its chart.
 
-    series = [
-        ("Nominations per month (unique TPIDs)", noms, "Nominations", False),
-        ("ACR claimed per month", acr, "ACR Claimed", True),
-        (f"{spec.unit_label} per month (Total Cores)", hosts, "Hosts", False),
-        ("Migrations completed per month (unique TPIDs)", done, "Migrations Completed",
-         False),
-    ]
+    The same four :func:`trends` builds for the HTML report, drawn with the same
+    tables — the two reports are one report in two renderings, so a measure the
+    screen shows is a measure this prints.
+    """
     out = [Paragraph("Trends — month over month", ss["H2"]),
-           Paragraph("Each measure over the reporting period. The running totals "
-                     "behind these lines are tabulated in the drill-down.",
-                     ss["Muted"]), kit.spacer(0.15)]
+           Paragraph("Each measure over the reporting period, with its running "
+                     "total tabulated beneath it.", ss["Muted"]), kit.spacer(0.15)]
     drawn = 0
-    for title, table, value_col, currency in series:
-        if table.empty:
+    for trend in trends(pop, waves, start, end, spec, unit_noun(spec)):
+        if trend.table.empty:
             continue
         drawn += 1
-        colour = "#5C2E91" if currency else "#0F6CBD"
+        colour = "#5C2E91" if trend.currency else "#0F6CBD"
+        frame = trend_table(trend.table, trend.value_col, trend.currency)
+        col = min(kit.CONTENT_WIDTH[kit.PORTRAIT] / 3, 5.5 * cm)
         out.append(KeepTogether([
-            Paragraph(title, ss["H3"]),
-            kit.image(pc.line_png(table, "period", value_col, area=not currency,
-                                  color=colour, currency=currency, height_px=250),
+            Paragraph(trend.title, ss["H3"]),
+            kit.image(pc.line_png(trend.table, "period", trend.value_col,
+                                  area=not trend.currency, color=colour,
+                                  currency=trend.currency, height_px=250),
                       width_cm=16.6),
+            kit.spacer(0.12),
+            kit.df_table(frame, ss, col_widths=[col] * 3, align_right=[1, 2],
+                         font_size=8),
         ]))
-        out.append(kit.spacer(0.15))
+        out.append(kit.spacer(0.2))
     if not drawn:
         out.append(Paragraph("No activity dated inside the reporting period.",
                              ss["Muted"]))
     return out
+
+
+def _fiscal_year_block(pop: pd.DataFrame, waves: kpi.WaveIndex,
+                       spec: ReportSpec, ss) -> list:
+    """The same measures again, fiscal year against fiscal year.
+
+    ``pop`` is the population the reporting period never narrowed: a year-on-year
+    comparison cut to one month has nothing to compare, so this reads the whole
+    dataset while every other filter still binds.
+    """
+    out = [Paragraph(FISCAL_YEARS_TITLE, ss["H2"]),
+           Paragraph(_strip(FISCAL_YEARS_NOTE), ss["Muted"]), kit.spacer(0.15)]
+    drawn = 0
+    for trend in trends(pop, waves, None, None, spec, unit_noun(spec)):
+        split, grid = fiscal_year_split(trend)
+        if split.empty or grid.empty:
+            continue
+        drawn += 1
+        years = [str(y) for y in sorted(split["fy"].unique())]
+        wide = split.pivot_table(index="fy_month", columns="fy",
+                                 values=trend.value_col, aggfunc="sum")
+        wide = wide.reindex(metrics.fiscal_month_order(FY_START_MONTH)).fillna(0)
+        wide = wide.reset_index().rename(columns={"fy_month": "month"})
+        wide.columns = [str(c) for c in wide.columns]
+        widths = _grid_widths(grid, kit.CONTENT_WIDTH[kit.PORTRAIT])
+        out.append(KeepTogether([
+            Paragraph(trend.title, ss["H3"]),
+            kit.image(pc.fy_lines_png(wide, "month", years,
+                                      currency=trend.currency, height_px=250),
+                      width_cm=16.6),
+            kit.spacer(0.12),
+            kit.df_table(grid, ss, col_widths=widths,
+                         align_right=list(range(1, len(grid.columns))),
+                         font_size=8),
+        ]))
+        out.append(kit.spacer(0.2))
+    if not drawn:
+        out.append(Paragraph("Nothing in this report is dated, so there is no "
+                             "fiscal year to compare.", ss["Muted"]))
+    return out
+
+
+def _grid_widths(frame: pd.DataFrame, width: float) -> list[float]:
+    """Column widths for a month × fiscal-year grid, first column wider."""
+    others = max(len(frame.columns) - 1, 1)
+    first = min(4.0 * cm, width * 0.3)
+    rest = min((width - first) / others, 4.0 * cm)
+    return [first] + [rest] * others
+
+
+def _top_accounts_block(pop: pd.DataFrame, waves: kpi.WaveIndex,
+                        ss) -> list:
+    """The ten accounts carrying the most ACR, charted and listed."""
+    summary, rows = top_accounts(pop, waves)
+    out = [Paragraph(top_accounts_title(), ss["H2"]),
+           Paragraph(_strip(TOP_ACCOUNTS_NOTE), ss["Muted"]), kit.spacer(0.15)]
+    if summary.empty:
+        out.append(Paragraph("No account in this category carries any ACR.",
+                             ss["Muted"]))
+        return out
+    out.append(Paragraph(_esc(top_accounts_line(summary, pop)), ss["Body2"]))
+    out.append(kit.spacer(0.12))
+    out.append(KeepTogether([
+        kit.image(pc.bar_png(summary, "category", "acr", horizontal=True,
+                             currency=True, height_px=300), width_cm=16.6)]))
+    printable = summary.rename(columns={"category": "Account", "acr": "Total ACR",
+                                        "count": "Waves"})
+    printable["Total ACR"] = printable["Total ACR"].map(fmt_currency)
+    printable["Waves"] = printable["Waves"].map(fmt_int)
+    out += [kit.spacer(0.2),
+            kit.df_table(printable, ss, col_widths=[9.6 * cm, 3.5 * cm, 2.5 * cm],
+                         align_right=[1, 2], font_size=8)]
+    return out
+
+
+def _matrix_block(ctx, pop: pd.DataFrame, ss) -> list:
+    """The EOS programme's month-by-month grid, as the dashboard shows it.
+
+    ``pop`` is deliberately the population the reporting period never narrowed:
+    the grid runs from a fixed July start to the as-of date whatever window the
+    rest of the report covers, because a month with no nominations is itself the
+    number being reported.
+    """
+    start = metrics.named_fiscal_year_start(EOS_MATRIX_START_FY, FY_START_MONTH)
+    out = [Paragraph("Monthly programme matrix", ss["H2"]),
+           Paragraph(f"From {start:%b %Y} to {pd.Timestamp(ctx.as_of):%b %Y}, "
+                     "every month included, each fiscal year closing with its "
+                     "own total column — the whole programme, not narrowed by "
+                     "the reporting period the rest of this report uses. Blocks "
+                     "are the generation each account is refreshing on to; all "
+                     "EOS accounts are coming from Gen-1 hardware. Migration "
+                     "start and migration end are the manual EOS tracking "
+                     "sheet's own dates wherever it covers an account, and "
+                     "otherwise the export's. Engagement end repeats migration "
+                     "end, the closest the export comes to it.", ss["Muted"]),
+           kit.spacer(0.2)]
+    width = kit.CONTENT_WIDTH[kit.PORTRAIT]
+    for generation, title in ((segments.GEN_1, "Gen1 to Gen1"),
+                              (segments.GEN_2, "Gen1 to Gen2")):
+        block = pop[pop["generation"] == generation] if not pop.empty else pop
+        accounts = segments.tpid_key(block).nunique() if not block.empty else 0
+        months = kpi.matrix_month_span(block, start, ctx.as_of)
+        grid = kpi.monthly_matrix(block, months, fy_start_month=FY_START_MONTH)
+        # A month per column runs off a portrait page long before the matrix
+        # does, so the grid prints on its own landscape spread.
+        out += [Paragraph(f"{_esc(title)} — {fmt_int(accounts)} account(s), "
+                          f"{fmt_int(len(block))} nomination wave(s)", ss["H3"]),
+                kit.spacer(0.1),
+                *_matrix_grid(grid, ss, width), kit.spacer(0.25)]
+    return out
+
+
+def _matrix_grid(grid: pd.DataFrame, ss, width: float) -> list:
+    """The matrix as a printable table, sized so every month still fits."""
+    if grid.empty:
+        return [Paragraph("No months to report.", ss["Muted"])]
+    first = min(4.6 * cm, width * 0.3)
+    others = max(len(grid.columns) - 1, 1)
+    rest = (width - first) / others
+    return [kit.df_table(grid, ss, col_widths=[first] + [rest] * others,
+                         align_right=list(range(1, len(grid.columns))),
+                         font_size=5.6)]
 
 
 def _pipeline_block(pop: pd.DataFrame, waves: kpi.WaveIndex, ss) -> list:
@@ -713,7 +1039,7 @@ def _generation_block(fact: pd.DataFrame, spec: ReportSpec, start, end, ss) -> l
             fmt_currency(m["acr"].value),
         ])
         trend, _ = kpi.monthly_unique_tpids(pop, "approval_date", start, end,
-                                            firsts=waves.first)
+                                            waves=waves)
         if not trend.empty:
             monthly[label] = trend.set_index("period")["Nominations"]
 
@@ -786,12 +1112,22 @@ def _generation_pipeline(fact: pd.DataFrame, category: str, ss) -> list:
     return [kit.spacer(0.25), KeepTogether(block)]
 
 
-def _report_section(fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
+def _report_section(ctx, fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
                     period_label: str, with_drilldown: bool,
                     sections: ReportSections,
-                    all_time: pd.DataFrame | None = None) -> list:
+                    all_time: pd.DataFrame | None = None,
+                    fy_window=None, fy_label: str = "") -> list:
+    """One report, section for section as the HTML report renders it.
+
+    The two are one report in two renderings, so the order here is the order
+    there: summary (over a This-FY row when the period is something else), the
+    EOS programme matrix, the trends, the fiscal-year comparison, the largest
+    accounts, the pipeline, the offering cut, the regional cut, the generations,
+    the insights, and the accounts that have stopped last.
+    """
     pop = segments.population(fact, spec.category)
-    # The forward-looking tiles read the whole programme, not the window.
+    # The forward-looking tiles, the programme matrix and the fiscal-year
+    # comparison all read the whole programme rather than the window.
     ahead = None if all_time is None else segments.population(all_time, spec.category)
     links = [("View drill-down →", f"dd_{spec.key}")] if with_drilldown else []
     links.append(("Contents", "toc"))
@@ -821,15 +1157,24 @@ def _report_section(fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
         return story
 
     waves = kpi.wave_index(pop)
-    blocks = [_summary_block(spec, headline(pop, waves, start, end, ahead), ss,
-                             period_label),
-              _trend_block(pop, waves, start, end, spec, ss),
-              _pipeline_block(pop, waves, ss)]
+    # The whole-dataset population, for everything a reporting period must not
+    # narrow; it falls back to the report's own population when the caller has
+    # no period to drop.
+    whole = pop if ahead is None else ahead
+    whole_waves = waves if whole is pop else kpi.wave_index(whole)
+
+    blocks = [_summary_block(spec, pop, waves, start, end, ss, period_label,
+                             ahead, fy_window, fy_label)]
+    if spec.key == "eos":
+        blocks.append(_matrix_block(ctx, whole, ss))
+    blocks.append(_trend_block(pop, waves, start, end, spec, ss))
+    blocks.append(_fiscal_year_block(whole, whole_waves, spec, ss))
+    if shows_top_accounts(spec):
+        blocks.append(_top_accounts_block(whole, whole_waves, ss))
+    blocks.append(_pipeline_block(pop, waves, ss))
     if spec.key == "native":
         blocks.append(_offering_block(pop, ss))
     blocks.append(_regional_block(waves, ss))
-    if sections.blocked:
-        blocks.append(_blocked_block(pop, waves, ss))
     if spec.breakdown:
         blocks.append(_generation_block(fact, spec, start, end, ss))
     for block in blocks:
@@ -842,7 +1187,10 @@ def _report_section(fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
                             "one states the figures it is read from.",
                             ss["Muted"]),
                   kit.spacer(0.15),
-                  *_insight_lines(pop, ss)]
+                  *_insight_lines(pop, ss), kit.spacer(0.35)]
+    # Last, as in the HTML report: the accounts none of the above counts.
+    if sections.blocked:
+        story += [*_blocked_block(pop, waves, ss), kit.spacer(0.35)]
     story.append(kit.page_break())
     return story
 
@@ -859,7 +1207,7 @@ def account_rows(pop: pd.DataFrame, waves: kpi.WaveIndex,
     every wave — so the PDF and the screen cannot report different ACR for the
     same account.
     """
-    detail = kpi.account_detail(pop, firsts=waves.first, lasts=waves.last)
+    detail = kpi.account_detail(pop, approvals=waves.approval, lasts=waves.last)
     if detail.empty:
         return pd.DataFrame(), [], 0
     wave_counts = pop.groupby("tpid_key").size()
@@ -958,8 +1306,10 @@ def _drilldown_section(fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
                                       ("Contents", "toc")], width=width),
               kit.spacer(0.15),
               Paragraph(f"The detail behind the <b>{_esc(spec.title)}</b> report: "
-                        f"the monthly numbers its charts are drawn from, the "
-                        f"regional matrix, and the account records. "
+                        f"the regional matrix, the pipeline counts and the "
+                        f"account records, at the grain every unique-TPID metric "
+                        f"is counted at. Each trend's own monthly numbers are "
+                        f"printed under its chart in the report itself. "
                         f"Reporting period {_esc(period_label)}.", ss["Body2"]),
               kit.spacer(0.3)]
     if pop.empty:
@@ -969,54 +1319,17 @@ def _drilldown_section(fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
         return story
 
     waves = kpi.wave_index(pop)
-    story += [Paragraph("Monthly numbers", ss["H2"]),
-              Paragraph("Every trend in the report, tabulated. Cumulative is the "
-                        "running total of the months shown.", ss["Muted"]),
-              kit.spacer(0.2)]
-    story += _monthly_tables(pop, waves, start, end, spec, ss, width)
-
     pivot, _heat, _legend = region_status(waves.last)
     if not pivot.empty:
-        story += [kit.spacer(0.3),
-                  Paragraph("Accounts by migration status and WW Region", ss["H2"]),
+        story += [Paragraph("Accounts by migration status and WW Region", ss["H2"]),
                   Paragraph("Account counts (each TPID's latest wave) — the numbers "
                             "the regional charts are drawn from.", ss["Muted"]),
                   kit.spacer(0.2),
                   *_matrix_table(pivot, "Migration Status", ss, width)]
 
-    story += [kit.spacer(0.3), *_pipeline_tables(pop, waves, ss, width)]
+    story += _pipeline_tables(pop, waves, ss, width)
     story += [kit.spacer(0.3), *_accounts_table(pop, waves, spec, ss, max_rows)]
     return story
-
-
-def _monthly_tables(pop: pd.DataFrame, waves: kpi.WaveIndex, start, end,
-                    spec: ReportSpec, ss, width: float) -> list:
-    noms, _ = kpi.monthly_unique_tpids(pop, "approval_date", start, end,
-                                       firsts=waves.first)
-    acr, _ = kpi.monthly_acr_claimed(pop, start, end)
-    hosts, _ = kpi.monthly_hosts(pop, start, end)
-    done, _ = kpi.monthly_migrations_completed(pop, start, end, lasts=waves.last)
-    series = [("Nominations (unique TPIDs)", noms, "Nominations", False),
-              ("ACR claimed", acr, "ACR Claimed", True),
-              (spec.unit_label, hosts, "Hosts", False),
-              ("Migrations completed (unique TPIDs)", done, "Migrations Completed",
-               False)]
-    out, printed = [], 0
-    for title, table, value_col, currency in series:
-        if table.empty:
-            continue
-        printed += 1
-        frame = trend_table(table, value_col, currency)
-        col = min(width / 3, 5.5 * cm)
-        out.append(KeepTogether([
-            Paragraph(title, ss["H3"]),
-            kit.df_table(frame, ss, col_widths=[col] * 3, align_right=[1, 2],
-                         font_size=8)]))
-        out.append(kit.spacer(0.25))
-    if not printed:
-        out.append(Paragraph("No activity dated inside the reporting period.",
-                             ss["Muted"]))
-    return out
 
 
 def _pipeline_tables(pop: pd.DataFrame, waves: kpi.WaveIndex, ss,
@@ -1092,24 +1405,21 @@ def _methodology(ss) -> list:
 
     The same words the HTML report and the Methodology page carry
     (:data:`app.core.glossary.REPORT_METHODOLOGY`), so a rule cannot be
-    documented three ways.
+    documented three ways — and in plain English rather than as formulas,
+    because the people a report is circulated to should not have to decode a
+    rule before they can check a number.
     """
     story = [kit.Anchor("methodology", "Methodology & logic", level=1),
              kit.nav_bar(ss, "Methodology & logic", [("Contents", "toc")]),
              kit.spacer(0.15),
-             Paragraph("How every figure in this report is calculated — the "
-                       "rules as implemented, not as intended.", ss["Body2"]),
+             Paragraph("How every figure in this report is calculated, in "
+                       "ordinary words — the rules as implemented, not as "
+                       "intended.", ss["Body2"]),
              kit.spacer(0.3)]
     for heading, items in glossary.REPORT_METHODOLOGY:
         block = [Paragraph(_esc(heading), ss["H2"])]
         for item in items:
-            if isinstance(item, glossary.Rule):
-                block += [kit.spacer(0.05),
-                          *kit.rule_block(item.title, item.lines, ss,
-                                          plain=_strip(item.plain)),
-                          kit.spacer(0.12)]
-            else:
-                block += [Paragraph(_strip(item), ss["Body2"]), kit.spacer(0.08)]
+            block += [Paragraph(_strip(item), ss["Body2"]), kit.spacer(0.1)]
         story += [KeepTogether(block), kit.spacer(0.25)]
     return story
 
@@ -1188,6 +1498,7 @@ def build_story(ctx, where: str = "", scope_label: str = "All data",
     chosen = [a for a in (appendices or []) if a in _APPENDIX_FN]
     sections = sections or ReportSections()
     start, end = date_window or (None, None)
+    fy_window, fy_label = this_fiscal_year(ctx.as_of, start, end)
     ss = kit.styles()
     fact = analytics.select_all(ctx.con, where, table="fact")
     # The same filters with the reporting period dropped — what ACR Pipeline and
@@ -1204,8 +1515,9 @@ def build_story(ctx, where: str = "", scope_label: str = "All data",
                        "One page-set per migration motion: headline metrics, "
                        "trends, current pipeline, regional cut and insights.", ss)
         for spec in specs:
-            story += _report_section(fact, spec, ss, start, end, period_label,
-                                     drilldown, sections, all_time)
+            story += _report_section(ctx, fact, spec, ss, start, end, period_label,
+                                     drilldown, sections, all_time,
+                                     fy_window, fy_label)
 
     if specs and drilldown:
         story += _part("part_detail", "Part 2 — Supporting Detail",

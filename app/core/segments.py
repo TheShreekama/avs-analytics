@@ -27,7 +27,7 @@ import re
 
 import pandas as pd
 
-from .nulls import is_blank
+from .nulls import as_bool_mask, is_blank
 
 # --------------------------------------------------------------------------- #
 # Migration categories
@@ -206,14 +206,18 @@ def eos_population(fact: pd.DataFrame) -> pd.Series:
     if fact.empty:
         return pd.Series(dtype=bool)
     if "generation" in fact.columns:
-        tagged = fact["generation"].isin((GEN_1, GEN_2))
+        tagged = as_bool_mask(fact["generation"].isin((GEN_1, GEN_2)), fact.index)
     else:
         tagged = tpid_key(fact).map(generation_by_tpid(fact)).isin((GEN_1, GEN_2))
     keys = fact["tpid_key"] if "tpid_key" in fact.columns else tpid_key(fact)
     marker = fact["is_av36_eos"].astype(bool).groupby(keys).transform("any")
     # A "(From AVS)" wave is leaving AVS, not refreshing ageing AVS hosts, so it
     # is never EOS — whatever tag it happens to carry.  See ``population``.
-    return (tagged | marker) & ~fact["is_from_avs"].astype(bool)
+    # ``as_bool_mask`` because ``generation`` is a nullable string column: an
+    # ``isin`` over it answers in ``boolean`` dtype, and a plain ``bool`` column
+    # is what every caller (and DuckDB) expects back.
+    return as_bool_mask((tagged | marker) & ~fact["is_from_avs"].astype(bool),
+                        fact.index)
 
 
 # --------------------------------------------------------------------------- #

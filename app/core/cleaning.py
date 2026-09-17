@@ -16,7 +16,7 @@ import re
 import numpy as np
 import pandas as pd
 
-from . import metrics, schema, segments
+from . import eos_tracker, metrics, schema, segments
 from .nulls import as_bool_mask, is_blank
 from ..config import DIR_FROM_AVS, DIR_OTHER, DIR_TO_AVS
 
@@ -312,10 +312,18 @@ def build_fact_frame(
     raw: pd.DataFrame,
     mapping: dict[str, str | None],
     as_of: pd.Timestamp | None = None,
+    tracker: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     """Build the tidy fact frame + a cleaning report.
 
     ``mapping`` maps canonical key -> source column name (or None if unmapped).
+    ``tracker`` is the manual EOS tracking sheet rolled up to one row per TPID
+    (:func:`app.core.eos_tracker.build_tracker`).  It is joined on before the
+    generation is decided, because its *Target SDDC Generation* column decides
+    it wherever it is filled in — and the generation is what puts an account in
+    EOS scope, so the join has to happen first or the categories would be
+    settled against the export alone.
+
     Returns ``(fact_df, report)`` where report summarises parse stats and any
     data-quality issues encountered.
     """
@@ -438,12 +446,17 @@ def build_fact_frame(
     fact["avs_sku_codes"] = fact["avs_sku"].map(lambda v: " ".join(sorted(segments.sku_codes(v))))
 
     # TPID is the authoritative identifier for every join, lookup and count, and
-    # the generation is decided from the SKUs of *all* waves belonging to it.
+    # the generation is decided from the Tags of *all* waves belonging to it —
+    # unless the EOS tracking sheet states one, which it is joined on here to do.
     fact["tpid_key"] = segments.tpid_key(fact)
+    fact, report["tracker"] = eos_tracker.apply_to_fact(fact, tracker)
     gen_by_tpid = segments.generation_by_tpid(fact)
-    fact["generation"] = fact["tpid_key"].map(gen_by_tpid).fillna(segments.GEN_UNCLASSIFIED)
-    # An "AVS Migration - Gen1/Gen2" tag on ANY wave makes the whole account an
-    # EOS Migration account, so membership follows the generation.
+    tagged = fact["tpid_key"].map(gen_by_tpid).fillna(segments.GEN_UNCLASSIFIED)
+    fact["generation"], fact[eos_tracker.GENERATION_SOURCE] = \
+        eos_tracker.resolve_generation(fact, tagged)
+    # An "AVS Migration - Gen1/Gen2" tag on ANY wave — or a Target SDDC
+    # Generation in the tracking sheet — makes the whole account an EOS
+    # Migration account, so membership follows the generation.
     fact["is_eos_population"] = segments.eos_population(fact)
     fact["migration_category"] = segments.category_label_series(fact)
     code, label = split_migration_status(fact["migration_status"])

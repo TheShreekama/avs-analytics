@@ -14,6 +14,9 @@ from pathlib import Path
 APP_DIR = Path(__file__).resolve().parent
 ROOT_DIR = APP_DIR.parent
 SAMPLE_DATA = ROOT_DIR / "sample_data" / "avs_raw_data.csv"
+#: The bundled manual EOS tracking sheet, for the "use the sample" path.
+#: It is a *second* document keyed on TPID, not more rows of the export.
+SAMPLE_EOS_TRACKER = ROOT_DIR / "sample_data" / "eos_tracker.csv"
 ASSETS_DIR = APP_DIR / "assets"
 
 # User-writable directory for saved column mappings / cached uploads.

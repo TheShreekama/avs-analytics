@@ -19,8 +19,10 @@ def render() -> None:
     unit = state.unit_label().title()
     page_header("Reports & Export",
                 "One management report, in two formats: a PDF to print or file, "
-                "and a single interactive HTML file to email. Everything renders "
-                "locally.",
+                "and a single interactive HTML file to email. **The two carry "
+                "the same sections in the same order** — the same metrics, "
+                "trends, matrices and accounts, from the same code. Everything "
+                "renders locally.",
                 help="The cover and contents are always included. Sidebar filters "
                      "and the reporting period below both apply to the report's "
                      "contents.")
@@ -58,9 +60,11 @@ def render() -> None:
     with d1:
         drilldown = st.checkbox(
             "Include drill-down sections", value=True, key="rep_drill",
-            help="Part 2 of the PDF: the monthly numbers, the regional matrix and "
-                 "the account records behind each report, on landscape pages. "
-                 "Each report links to its drill-down and back.")
+            help="Part 2 of the PDF: the regional matrix, the pipeline counts "
+                 "and the account records behind each report, on landscape "
+                 "pages — what a printed report cannot click through to. Each "
+                 "report links to its drill-down and back. Every trend's own "
+                 "monthly numbers are printed under its chart either way.")
     with d2:
         max_rows = st.slider(
             "Account rows per drill-down", 50, 1000, exporter.MAX_DRILLDOWN_ROWS, 50,
@@ -119,6 +123,11 @@ def render() -> None:
                "sidebar's counting mode does not change the report. Each report "
                "closes with a **Methodology & logic** section stating every rule "
                "it applied.")
+    if ctx.has_tracker:
+        st.caption(f"The **manual EOS tracking sheet** ({ctx.tracker_filename}) is "
+                   f"loaded, so the EOS generations and the programme matrix's "
+                   f"start and end dates come from it wherever it covers an "
+                   f"account. Both formats read it the same way.")
     ready = bool(selected or appendices)
     if not ready:
         st.info("Tick at least one report above.")
@@ -134,7 +143,9 @@ def render() -> None:
     pdf_col, html_col = st.columns(2)
     with pdf_col:
         subheading("PDF", help="The printable record — fixed layout, page "
-                               "numbers, bookmarks and internal links.")
+                               "numbers, bookmarks and internal links. The same "
+                               "sections as the HTML report, plus the account "
+                               "records a printed page cannot open on demand.")
         st.caption("Best for filing, printing and formal circulation.")
         if st.button("📄 Generate PDF", type="primary", width="stretch",
                      disabled=not ready):
