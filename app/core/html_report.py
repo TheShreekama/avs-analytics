@@ -1123,35 +1123,27 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec
               "</section>")
 
 
-def _method_item(item) -> str:
-    """One methodology item: a paragraph, or a rule shown as the rule itself."""
-    if isinstance(item, glossary.Rule):
-        plain = (f'<div class="rule-plain"><b>In plain words</b> — '
-                 f"{rich(item.plain)}</div>" if item.plain else "")
-        return (f'<div class="rule"><div class="rule-title">{esc(item.title)}'
-                f'</div><pre>{esc(chr(10).join(item.lines))}</pre>{plain}</div>')
-    return f"<p>{rich(item)}</p>"
-
-
 def _methodology(doc: _Builder) -> None:
     """How every figure above was calculated — behind a checkbox, like the rest.
 
     The same text the PDF prints and the Methodology page shows
     (:data:`app.core.glossary.REPORT_METHODOLOGY`) — one source, so a rule
-    cannot be documented three ways.  It is reference material rather than
+    cannot be documented three ways, and written as ordinary paragraphs rather
+    than as formulas: a report goes to people who should not have to decode a
+    rule before they can check a number.  It is reference material rather than
     reporting, so it is **opt-in and deliberately not in the contents**: a
     reader who wants the rules ticks the box at the end; nobody navigating the
     report has to scroll past it.
     """
     blocks = "".join(
         f'<h4 class="sub">{esc(heading)}</h4><div class="prose">'
-        + "".join(_method_item(item) for item in items) + "</div>"
+        + "".join(f"<p>{rich(item)}</p>" for item in items) + "</div>"
         for heading, items in glossary.REPORT_METHODOLOGY)
     doc.write('<section class="report" id="methodology">'
               + _optional_card(
                   "opt-methodology", "Methodology & logic",
-                  "How every figure in this report is calculated — the rules as "
-                  "implemented, not as intended.", blocks,
+                  "How every figure in this report is calculated, in ordinary "
+                  "words — the rules as implemented, not as intended.", blocks,
                   "Show methodology & logic")
               + "</section>")
 

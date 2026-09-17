@@ -338,17 +338,18 @@ under Streamlit's AppTest in both counting modes.
   whenever the two differ, mirroring the dashboards — **including over "All time"**, which
   resolves to no window at all: reading "no window" as "nothing to compare against" is what
   used to drop the row from the report while the dashboard still showed it.
-- **Each report states its own methodology, as rules rather than prose.**
-  `glossary.REPORT_METHODOLOGY` is the single source rendered by the PDF
-  (`pdf_kit.rule_block`), the HTML report (`.rule` / `<pre>`) and the Methodology page
-  (`st.code`), so one rule cannot be documented three ways. An item is either a paragraph
-  or a `glossary.Rule(title, lines, plain)` whose lines are **monospaced and aligned as
-  written** — alignment carries the meaning, and a test asserts every rule's trailing
-  comments line up and every line still fits the PDF column. `plain` is the same rule in
-  one ordinary sentence, printed under the block as **"In plain words —"**: the sections
-  lead in plain language and define their vocabulary (account, wave, ACR) first, so the
-  methodology can be read by whoever picks the report up and checked by whoever doubts a
-  number.
+- **Each report states its own methodology, in plain English rather than as formulas.**
+  `glossary.REPORT_METHODOLOGY` is the single source rendered by the PDF, the HTML report
+  and the Methodology page, so one rule cannot be documented three ways. It is
+  `(heading, paragraphs)` and **every item is a plain string** — no `Rule` class, no
+  monospaced block, no pseudo-SQL: a report goes to the people it is circulated to, and a
+  rule they must decode before they can check a number is a rule they end up trusting
+  instead. Column names and the literal values a cell holds ("Current State",
+  "7 - Completed") are still quoted, because that is what keeps a number checkable
+  against the file. `test_the_methodology_is_plain_english_not_formulas` fails on a
+  `COUNT(`, a `SUM(`, an `IF`/`ELSE` ladder or an assignment arrow creeping back in, and
+  `test_the_pipeline_rule_is_documented_exactly_as_implemented` still holds the prose to
+  naming every column and value the code tests for.
 - **A generated report names neither the app nor the file it read.** No `Source:` line, no
   dataset on the cover, no app name in the PDF furniture or the HTML footer; the default
   title is `exporter.DEFAULT_TITLE` ("Migration Programme Report").

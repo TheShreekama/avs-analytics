@@ -114,21 +114,6 @@ section.report {{ margin-bottom: 2.4rem; }}
 h3.block {{ font-size: 1.06rem; margin: 0 0 .2rem; letter-spacing: -.01em; }}
 h4.sub {{ font-size: .95rem; margin: 1rem 0 .4rem; color: var(--ink); }}
 .note {{ color: var(--muted); font-size: .86rem; margin: 0 0 .8rem; }}
-/* A rule, printed as the rule: monospaced and aligned as written, because a
-   reader checks a number against the columns and values it came from. */
-.rule {{ margin: 0 0 .9rem; border: 1px solid var(--border); border-radius: 8px;
-         overflow: hidden; background: #FBFCFE; }}
-.rule-title {{ font-size: .82rem; font-weight: 600; color: var(--ink);
-               padding: .45rem .7rem; border-bottom: 1px solid var(--border);
-               background: var(--bg); }}
-.rule-plain {{ padding: .5rem .7rem; border-top: 1px solid var(--border);
-               font-size: .84rem; line-height: 1.5; color: var(--muted);
-               background: var(--card); }}
-.rule-plain b {{ color: var(--ink); }}
-.rule pre {{ margin: 0; padding: .7rem; overflow-x: auto; font-size: .78rem;
-             line-height: 1.5; color: var(--ink);
-             font-family: "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace; }}
-
 /* Running text (the methodology section): measured for reading, not for data. */
 .prose p {{ margin: 0 0 .6rem; font-size: .92rem; line-height: 1.55;
             max-width: 78ch; }}

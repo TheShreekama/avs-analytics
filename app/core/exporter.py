@@ -1405,24 +1405,21 @@ def _methodology(ss) -> list:
 
     The same words the HTML report and the Methodology page carry
     (:data:`app.core.glossary.REPORT_METHODOLOGY`), so a rule cannot be
-    documented three ways.
+    documented three ways — and in plain English rather than as formulas,
+    because the people a report is circulated to should not have to decode a
+    rule before they can check a number.
     """
     story = [kit.Anchor("methodology", "Methodology & logic", level=1),
              kit.nav_bar(ss, "Methodology & logic", [("Contents", "toc")]),
              kit.spacer(0.15),
-             Paragraph("How every figure in this report is calculated — the "
-                       "rules as implemented, not as intended.", ss["Body2"]),
+             Paragraph("How every figure in this report is calculated, in "
+                       "ordinary words — the rules as implemented, not as "
+                       "intended.", ss["Body2"]),
              kit.spacer(0.3)]
     for heading, items in glossary.REPORT_METHODOLOGY:
         block = [Paragraph(_esc(heading), ss["H2"])]
         for item in items:
-            if isinstance(item, glossary.Rule):
-                block += [kit.spacer(0.05),
-                          *kit.rule_block(item.title, item.lines, ss,
-                                          plain=_strip(item.plain)),
-                          kit.spacer(0.12)]
-            else:
-                block += [Paragraph(_strip(item), ss["Body2"]), kit.spacer(0.08)]
+            block += [Paragraph(_strip(item), ss["Body2"]), kit.spacer(0.1)]
         story += [KeepTogether(block), kit.spacer(0.25)]
     return story
 

@@ -2041,34 +2041,44 @@ def test_methodology_is_opt_in_and_out_of_the_contents(state_doc):
 
 
 def test_the_report_states_its_own_methodology(state_doc):
-    """The rules travel with the report — as rules, not as sentences."""
+    """The rules travel with the report — every paragraph of them."""
     body = _main(state_doc)
     assert 'id="methodology"' in body
-    for heading, _items in glossary.REPORT_METHODOLOGY:
+    for heading, items in glossary.REPORT_METHODOLOGY:
         assert esc(heading) in body, heading
+        for item in items:
+            # ``rich`` renders **bold** as markup, so compare on the plain text
+            # between the markers rather than on the source string.
+            for fragment in item.split("**"):
+                if len(fragment.strip()) > 40:
+                    assert esc(fragment) in body, fragment[:60]
 
-    # Every rule block is printed, aligned as written, in its own frame.
-    rules = [item for _h, items in glossary.REPORT_METHODOLOGY for item in items
-             if isinstance(item, glossary.Rule)]
-    assert len(rules) >= 6
-    assert body.count('<div class="rule">') == len(rules)
-    for rule in rules:
-        assert esc(rule.title) in body, rule.title
-        for line in rule.lines:
-            if line.strip():
-                assert esc(line) in body, line
 
-    # …and the rules a reader would go looking for say what the code does.
-    for phrase in ('Current State      =   "On Track"',
-                   'Nomination Status  =   "Approved"',
-                   'Nomination Status       =        "Approved"',
-                   'Factory Offering        =        "AVS Migration Nominations"',
-                   'Primary Migration Path  CONTAINS "From AVS"',
-                   '"5 - Deferred By Customer"',
-                   "AND no wave of the account is On Track",
-                   "ACR Pipeline             = SUM(Total ACR)",
-                   "Nodes Deployment Planned = SUM(Total Cores)"):
-        assert esc(phrase) in body, phrase
+def test_the_methodology_is_plain_english_not_formulas(state_doc):
+    """It is read by whoever the report is sent to, not only by its author.
+
+    No pseudo-SQL, no aligned operator columns, no monospaced rule blocks — the
+    rules are sentences.  Column names and the values a cell actually holds are
+    still quoted, because that is what makes a number checkable against the
+    file; the machinery around them is not.
+    """
+    body = _main(state_doc)
+    methodology = body.split('id="methodology"', 1)[1]
+    for artefact in ("COUNT(DISTINCT", "SUM(Total", "NOT IN", "<pre>",
+                     'class="rule"', "ELIF", "first match wins"):
+        assert artefact not in methodology, artefact
+    text = " ".join(item for _h, items in glossary.REPORT_METHODOLOGY
+                    for item in items)
+    for operator in ("COUNT(", "SUM(", " IN (", "←", "--", "IF ", "ELSE"):
+        assert operator not in text, operator
+    # An arrow is a name here ("AVS → Azure Native"), never "maps to".
+    assert text.count("→") == text.count("AVS → Azure Native")
+    # Every item is a paragraph of prose, not a structure to decode.
+    for _heading, items in glossary.REPORT_METHODOLOGY:
+        for item in items:
+            assert isinstance(item, str), item
+            assert "\n" not in item, item[:60]
+            assert len(item.split()) >= 12, item
 
 
 def test_no_generated_report_names_the_application_or_the_file(state_ctx, state_doc):
@@ -2203,60 +2213,74 @@ def test_each_optional_section_is_included_only_when_asked_for(
     assert ('id="optx-avs"' in body) is blocked
     assert ('<h3 class="block">Insights</h3>' in body) is insights
 
-    # The PDF answers to the same selector.  Its marker is the section's note,
-    # which likewise appears nowhere else.
+    # The PDF answers to the same selector.  The marker is the closing sentence
+    # of the section's own note: the methodology now describes the section in
+    # ordinary words too, so anything more general than this answers for it.
+    marker = "Status Summary carries the programme's own note on each one"
+    assert marker in exp.BLOCKED_NOTE
     text = _flowable_text(exp.build_story(state_ctx, reports=["avs"],
                                           sections=sections))
-    assert ("Every account that is neither On-Track nor Completed" in text) is blocked
+    assert (marker in text) is blocked
     assert ("Derived from this report's own population" in text) is insights
 
 
 # --------------------------------------------------------------------------- #
 # The methodology is written as the rules, and stays legible where it prints
 # --------------------------------------------------------------------------- #
-def _rules():
-    return [item for _h, items in glossary.REPORT_METHODOLOGY for item in items
-            if isinstance(item, glossary.Rule)]
+def _methodology_text() -> str:
+    return " ".join(item for _h, items in glossary.REPORT_METHODOLOGY
+                    for item in items)
 
 
-def test_the_methodology_states_rules_not_only_sentences():
-    """Every section that has logic to state, states it as logic."""
-    rules = {rule.title for rule in _rules()}
-    assert len(rules) >= 6, rules
-    # The rules a reader comes looking for.
-    assert any("On Track" in t for t in rules)
-    assert any("eligible" in t for t in rules)
-    assert any("state, first match wins" in t for t in rules)
-    for rule in _rules():
-        assert rule.lines and all(isinstance(line, str) for line in rule.lines)
+def test_the_methodology_states_every_rule_a_reader_comes_looking_for():
+    """Stated in sentences, but every rule is still stated."""
+    headings = {heading for heading, _items in glossary.REPORT_METHODOLOGY}
+    assert len(headings) >= 8, headings
+    text = _methodology_text()
+    for topic in (
+            "on track",              # when a wave counts as moving
+            "first wave",            # which wave dates an engagement
+            "most recent wave",      # which wave answers for the rest
+            "neither On-Track nor Completed",   # what the stopped section holds
+            "whole dataset",         # what the period does not narrow
+            "Target SDDC Generation",           # how a generation is decided
+            "Migration Start Date",  # where the matrix's dates come from
+    ):
+        assert topic in text, topic
 
 
-def test_rule_blocks_stay_aligned_and_fit_the_printed_page():
-    """Alignment carries the meaning, so it must survive the PDF's column."""
+def test_the_methodology_fits_the_printed_page():
+    """Prose reflows, but a long unbroken token would still run off the column."""
     from reportlab.pdfbase.pdfmetrics import stringWidth
     from app.core import pdf_kit as kit
 
     available = kit.CONTENT_WIDTH[kit.PORTRAIT] - 14      # the cell's padding
-    for rule in _rules():
-        # A trailing comment lines up down the block, or it is not a column.
-        comments = {line.index("--") for line in rule.lines if "--" in line}
-        assert len(comments) <= 1, (rule.title, comments)
-        for line in rule.lines:
-            width = stringWidth(line, "Courier", 7)
-            assert width <= available, (rule.title, line, round(width))
+    for _heading, items in glossary.REPORT_METHODOLOGY:
+        for item in items:
+            for word in item.replace("**", "").split():
+                width = stringWidth(word, "Helvetica", 9)
+                assert width <= available, (word, round(width))
 
 
 def test_the_pipeline_rule_is_documented_exactly_as_implemented():
-    """The printed rule and the code must name the same columns and values."""
-    rule = next(r for r in _rules() if "eligible" in r.title)
-    text = "\n".join(rule.lines)
+    """The written rule and the code must name the same columns and values.
+
+    Described in a sentence rather than set out as a formula, but every column
+    and every literal value the code tests for still has to appear in it — a
+    rule a reader cannot check against the file is a rule they have to trust.
+    """
+    section = next(items for heading, items in glossary.REPORT_METHODOLOGY
+                   if "still to come" in heading)
+    text = " ".join(section)
     assert kpi.PIPELINE_OFFERING in text
     assert "From AVS" in text
     assert '"Approved"' in text and '"On Track"' in text
     for status in kpi.PIPELINE_EXCLUDED_STATUSES:
         assert status in text, status
-    # …and nothing the rule does not exclude is listed as an exclusion.
-    assert "7 - Completed" not in text.split("NOT IN")[-1]
+    # …and the rule says why a finished wave needs no exclusion of its own,
+    # rather than listing one the code does not apply.
+    assert "7 - Completed" not in text
+    assert "already finished" in text
 
 
 def test_an_unapproved_nomination_is_never_on_track():
