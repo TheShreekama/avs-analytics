@@ -1130,8 +1130,9 @@ def _method_item(item) -> str:
     number in front of them can find it by the name the report gave it.
     """
     if isinstance(item, glossary.Definition):
-        body = "".join(f"<p>{rich(line)}</p>" for line in item.body)
-        return (f'<div class="def"><h5>{esc(item.title)}</h5>{body}</div>')
+        steps = "".join(f"<li>{rich(line)}</li>" for line in item.body)
+        return (f'<div class="def"><h5>{esc(item.title)}</h5>'
+                f"<ul>{steps}</ul></div>")
     return f"<p>{rich(item)}</p>"
 
 

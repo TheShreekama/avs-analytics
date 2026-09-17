@@ -1420,13 +1420,12 @@ def _methodology(ss) -> list:
         story.append(Paragraph(_esc(heading), ss["H2"]))
         for item in items:
             if isinstance(item, glossary.Definition):
-                # Title and body stay on one page: a figure's name on its own
+                # Title and steps stay on one page: a figure's name on its own
                 # at the foot of a page is a heading with nothing under it.
                 block = [Paragraph(_esc(item.title), ss["H3"]), kit.spacer(0.06)]
-                for line in item.body:
-                    block += [Paragraph(_strip(line), ss["Body2"]),
-                              kit.spacer(0.08)]
-                story += [KeepTogether(block), kit.spacer(0.12)]
+                block += [Paragraph(_strip(line), ss["Rule"], bulletText="\u2022")
+                          for line in item.body]
+                story += [KeepTogether(block), kit.spacer(0.18)]
             else:
                 story += [Paragraph(_strip(item), ss["Body2"]), kit.spacer(0.1)]
         story.append(kit.spacer(0.25))

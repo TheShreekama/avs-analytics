@@ -118,11 +118,17 @@ under Streamlit's AppTest in both counting modes.
   applied inside `cleaning.build_fact_frame` *before* scope is decided, because the
   generation is what puts an account in EOS scope).
 - **Metric rules** (`core/kpi.py`, all with `records` for drill-down): new engagements =
-  unique TPIDs by **Wave-1** approval date — read from Wave-1 **whatever state or status
-  that wave is in** (a cancelled, blocked or unapproved Wave-1 still dates the engagement),
-  moving on to the next wave **only** when Wave-1 has no *Nom. Approval Date*
-  (`kpi.dated_wave`, carried as `WaveIndex.approval`; the record returned is the wave the
-  date came from, so a drill-down names it); migration ends = unique TPIDs classified
+  unique TPIDs by **Wave-1** approval date, **and** that wave's `Nomination Status =
+  "Approved"`. Two halves, and they are separate: **which wave answers is decided by the
+  date alone** — Wave-1 whatever its *Migration Status* or *Current State* (a cancelled or
+  blocked Wave-1 still dates the engagement), moving on to the next wave **only** when
+  Wave-1 has no *Nom. Approval Date* (`kpi.dated_wave`, carried as `WaveIndex.approval`;
+  the record returned is the wave the date came from, so a drill-down names it) — and the
+  **status is then read from that same wave**. It is deliberately *not* a search for an
+  approved wave: an account whose dating wave was declined is not counted at all, rather
+  than counted on a later wave's date in a month nobody approved anything in.
+  `kpi.monthly_unique_tpids` applies the same two halves, so the trend and the tile count
+  one population; migration ends = unique TPIDs classified
   Completed, dated by actual end; hosts migrated = **sum of Total Cores** over completed
   records (never a TPID count, and deliberately wave-level — a completed wave deployed its
   nodes whatever the account's state is now); Cumulative is the final column and runs over
@@ -338,23 +344,36 @@ under Streamlit's AppTest in both counting modes.
   whenever the two differ, mirroring the dashboards — **including over "All time"**, which
   resolves to no window at all: reading "no window" as "nothing to compare against" is what
   used to drop the row from the report while the dashboard still showed it.
-- **Each report states its own methodology: one titled entry per figure, in plain
-  English.** `glossary.REPORT_METHODOLOGY` is the single source rendered by the PDF, the
-  HTML report and the Methodology page (which leads with it), so one figure cannot be
-  documented three ways. It is `(heading, items)` where an item is a context paragraph or
-  a `glossary.Definition(title, body)` — **43 of them**, titled with the name the reports
-  actually label the figure by (*New Engagements*, *ACR Pipeline*, *Aging (days)*), so a
-  reader holding a number can look it up. No formulas: a report goes to the people it is
-  circulated to, and a rule they must decode before they can check a number is one they
-  end up trusting instead.
+- **REQUIREMENT — the methodology on screen must state the logic the code actually
+  applies.** Not the intended rule, not a simplification, not an example: the rule as
+  implemented. A number a reader cannot reconcile against its stated definition is worse
+  than an undocumented one, because they will trust it. So when a metric changes, its
+  entry in `glossary.REPORT_METHODOLOGY` changes **in the same commit**, and a test binds
+  the two wherever it can (`..._the_pipeline_rule_is_documented_exactly_as_implemented`
+  drives its assertions off `kpi.PIPELINE_OFFERING` / `kpi.PIPELINE_EXCLUDED_STATUSES`, so
+  editing the code without the words fails the build). Where a stakeholder's description
+  of a rule differs from the code, **ask** — do not document the description, and do not
+  silently change the code to fit it.
+- **Each report states its own methodology: one titled entry per figure, as steps.**
+  `glossary.REPORT_METHODOLOGY` is the single source rendered by the PDF, the HTML report
+  and the Methodology page (which leads with it), so one figure cannot be documented three
+  ways. It is `(heading, items)` where an item is a context paragraph or a
+  `glossary.Definition(title, body)` — **43 of them, ~205 bullets**, titled with the name
+  the reports actually label the figure by (*New Engagements*, *ACR Pipeline*, *Aging
+  (days)*), so a reader holding a number can look it up. `body` is **short bullets, one
+  step each**, in the order the code applies them, closing with `Unit: …` on a counted
+  figure — never paragraphs and never formulas: a reader checking a number wants the steps,
+  and a rule they must decode is one they end up trusting instead of checking.
   **Bold means "this is in the spreadsheet"** — a column name exactly as the file heads it
   (`**Nom. Approval Date**`) or a value exactly as that column holds it
   (`**7 - Completed**`). That convention is the whole point: it is what lets a reader open
   the export and find the same cell. Keep it; do not bold for emphasis.
-  Four tests hold the line: `..._is_plain_english_not_formulas` (no `COUNT(`, `SUM(`,
-  `IF`/`ELSE`, arrows), `..._every_headline_figure_is_defined_under_the_name_it_is_shown_by`,
-  `..._a_definition_names_the_columns_it_is_read_from` (every entry names a real
-  `schema` header, bar four listed derived ones), and
+  Five tests hold the line: `..._is_plain_english_not_formulas` (no `COUNT(`, `SUM(`,
+  `IF`/`ELSE`, arrows), `..._is_a_list_of_steps_not_a_wall_of_prose` (2–10 bullets, ≤45
+  words each, rendered as real `<li>`s),
+  `..._every_headline_figure_is_defined_under_the_name_it_is_shown_by`,
+  `..._a_definition_names_the_columns_it_is_read_from` (every entry names a real `schema`
+  header, bar five listed derived ones), and
   `..._the_pipeline_rule_is_documented_exactly_as_implemented`.
   **The Methodology page carries no second copy**: it renders this constant first and then
   only what is about the *application* (counting modes, navigation, date presets, uploads,

@@ -44,9 +44,10 @@ def render() -> None:
         st.markdown(f"##### {heading}")
         for item in items:
             if isinstance(item, glossary.Definition):
-                st.markdown(f"**{item.title}**")
-                for line in item.body:
-                    st.markdown(f"> {line}")
+                # One markdown block, so the steps render as a single list
+                # rather than a run of one-item lists with gaps between them.
+                st.markdown(f"**{item.title}**\n\n"
+                            + "\n".join(f"- {line}" for line in item.body))
             else:
                 st.markdown(item)
     # The reporting floor above is stated in general terms because a circulated

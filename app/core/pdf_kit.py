@@ -73,6 +73,11 @@ def styles():
                           spaceBefore=8, spaceAfter=3))
     ss.add(ParagraphStyle("Body2", parent=ss["BodyText"], fontSize=9.5, leading=13.5,
                           textColor=INK, spaceAfter=0))
+    # A rule in a metric definition: one bullet, one step, hanging indent so a
+    # wrapped line lines up under the text rather than under the bullet.
+    ss.add(ParagraphStyle("Rule", parent=ss["BodyText"], fontSize=9.5, leading=13,
+                          textColor=INK, leftIndent=16, bulletIndent=5,
+                          spaceBefore=0, spaceAfter=2))
     ss.add(ParagraphStyle("Muted", parent=ss["BodyText"], fontSize=8.5, leading=12,
                           textColor=MUTED, spaceAfter=0))
     ss.add(ParagraphStyle("Nav", parent=ss["BodyText"], fontSize=8.5, leading=12,
