@@ -66,13 +66,20 @@ def _read_dataset(signature: str, files: tuple[tuple[str, bytes], ...]
 
 
 @st.cache_data(show_spinner=False, max_entries=4)
-def _read_tracker(signature: str, files: tuple[tuple[str, bytes], ...]
+def _read_tracker(signature: str, files: tuple[tuple[str, bytes], ...],
+                  dayfirst: bool | None = None
                   ) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
-    """The EOS tracking sheet: its raw rows, one row per TPID, and the read report."""
-    raw, _sources = loader.read_files(list(files))
+    """The EOS tracking sheet: its raw rows, one row per TPID, and the read report.
+
+    The sheet is read by :func:`app.core.eos_tracker.read_tracker_files`, which
+    finds the header row (a title above it is common in a hand-kept sheet) and,
+    in a workbook, the sheet that holds the TPID column.
+    """
+    raw, notes = trackermod.read_tracker_files(list(files))
     label = loader.dataset_label(list(files))
     with loader.ingest_stage("tracker", label, raw):
-        tracker, report = trackermod.build_tracker(raw)
+        tracker, report = trackermod.build_tracker(raw, dayfirst=dayfirst)
+    report["files"] = notes
     return raw, tracker, report
 
 
@@ -115,10 +122,30 @@ def build_context(filename: str, data: bytes, mapping: dict | None = None,
                          is_sample=is_sample, tracker_files=tracker_files)
 
 
+#: ``tracker_dayfirst`` left to the session's choice on Data & Upload.
+_FROM_SESSION = object()
+TRACKER_DATE_ORDER_KEY = "avs_tracker_dayfirst"
+
+
+def tracker_date_order() -> bool | None:
+    """How the session reads the sheet's ambiguous dates: day first (True),
+    month first (False) or inferred per column (None, the default)."""
+    try:
+        return st.session_state.get(TRACKER_DATE_ORDER_KEY)
+    except Exception:  # noqa: BLE001 - no Streamlit session (tests, scripts)
+        return None
+
+
+def set_tracker_date_order(dayfirst: bool | None) -> None:
+    st.session_state[TRACKER_DATE_ORDER_KEY] = dayfirst
+
+
 def build_dataset(files: list[tuple[str, bytes]], mapping: dict | None = None,
                   as_of: pd.Timestamp | None = None,
                   is_sample: bool = False,
-                  tracker_files: list[tuple[str, bytes]] | None = None) -> DataContext:
+                  tracker_files: list[tuple[str, bytes]] | None = None,
+                  tracker_dayfirst: "bool | None | object" = _FROM_SESSION
+                  ) -> DataContext:
     """Build a context from one or more files read as a single dataset.
 
     Several files are concatenated on their shared headers before anything else
@@ -131,7 +158,8 @@ def build_dataset(files: list[tuple[str, bytes]], mapping: dict | None = None,
     TPID, carries the programme's own generation and dates, and is joined onto
     the FDO rows (see :mod:`app.core.eos_tracker`) rather than stacked with
     them.  Stacking it would put rows with no offering, no wave and no ACR into
-    every count.
+    every count.  ``tracker_dayfirst`` fixes how the sheet's ambiguous dates
+    ("03-02-2026") are read; None infers it from each column.
     """
     files = [(name, data) for name, data in files]
     if not files:
@@ -155,21 +183,27 @@ def build_dataset(files: list[tuple[str, bytes]], mapping: dict | None = None,
 
     tracker_files = [(name, data) for name, data in (tracker_files or [])]
     tracker = tracker_raw = None
-    tracker_signature = tracker_label = ""
+    tracker_signature = tracker_label = tracker_key = ""
     tracker_report: dict = {}
     if tracker_files:
         tracker_signature = loader.files_signature(tracker_files)
+        if tracker_dayfirst is _FROM_SESSION:
+            tracker_dayfirst = tracker_date_order()
+        # A different reading of the dates is a different tracker, so the
+        # cached fact frame and connection are keyed on it too.
+        tracker_key = tracker_signature + {None: "", True: ":df",
+                                           False: ":mf"}[tracker_dayfirst]
         tracker_label = loader.dataset_label(tracker_files)
         tracker_raw, tracker, tracker_report = _read_tracker(
-            tracker_signature, tuple(tracker_files))
+            tracker_signature, tuple(tracker_files), tracker_dayfirst)
 
     as_of_str = pd.Timestamp(as_of).isoformat() if as_of is not None else ""
     mapping_json = json.dumps(mapping, sort_keys=True)
     fact, report, customer = _build_fact(signature, mapping_json, as_of_str,
-                                         label, raw, tracker_signature, tracker)
+                                         label, raw, tracker_key, tracker)
     report["sources"] = sources
     report["tracker_read"] = tracker_report
-    cache_key = f"{signature}:{hash(mapping_json)}:{as_of_str}:{tracker_signature}"
+    cache_key = f"{signature}:{hash(mapping_json)}:{as_of_str}:{tracker_key}"
     with loader.ingest_stage("register", label, raw, mapping):
         con = _make_con(cache_key, fact, customer)
 

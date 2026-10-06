@@ -29,6 +29,7 @@ PAGES = [
     "category_dashboard.eos_all",
     "category_dashboard.eos_gen1", "category_dashboard.eos_gen2",
     "category_dashboard.avs_native",
+    "eos_programme",
     # Trend Analysis (one module, one entry point per measure).
     "trend_analysis.nominations", "trend_analysis.acr", "trend_analysis.nodes",
     "trend_analysis.cores", "trend_analysis.completed",
@@ -46,7 +47,7 @@ TRACKER_PAGES = [
     "data_upload", "data_inconsistency", "reports",
     "category_dashboard.eos_all", "category_dashboard.eos_gen1",
     "category_dashboard.eos_gen2", "category_dashboard.all_avs",
-    "trend_analysis.nominations", "trend_analysis.acr",
+    "trend_analysis.nominations", "trend_analysis.acr", "eos_programme",
 ]
 
 
@@ -143,7 +144,7 @@ def test_the_tracking_sheet_populates_the_eos_reports():
 # summary for this test to read.
 _REPORT_PAGES = [p for p in PAGES
                  if p not in ("methodology", "data_upload", "column_mapping",
-                              "data_inconsistency")
+                              "data_inconsistency", "eos_programme")
                  and not p.startswith(("category_dashboard", "trend_analysis"))]
 
 

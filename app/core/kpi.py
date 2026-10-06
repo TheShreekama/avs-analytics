@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from . import metrics, segments
+from . import metrics, segments, statuses
 
 # Columns offered in every drill-down table, in this order (missing ones are skipped).
 #: ``factory_offering`` and ``migration_path`` are **two different columns** and
@@ -58,6 +58,7 @@ STATE_COMPLETED = "Completed"
 STATE_CANCELLED = "Cancelled"
 STATE_DEFERRED = "Deferred"
 STATE_BLOCKED = "Blocked"
+STATE_ON_HOLD = "On Hold"
 STATE_OTHER = "Other"
 
 #: The only two states reported on the pipeline chart.  Cancelled accounts and
@@ -81,7 +82,8 @@ BLOCKED_STATES: tuple[str, ...] = (
 #: :func:`excluded_accounts`) rather than padding the On-Track/Completed cut.
 #: The two sets are complementary and never overlap — every account resolves to
 #: exactly one state — so nothing is counted twice and nothing is dropped.
-EXCLUDED_STATES = (STATE_BLOCKED, STATE_DEFERRED, STATE_CANCELLED, STATE_OTHER)
+EXCLUDED_STATES = (STATE_BLOCKED, STATE_ON_HOLD, STATE_DEFERRED, STATE_CANCELLED,
+                   STATE_OTHER)
 
 #: "On Track", "On-Track", "on  track" — the Current State column is free text.
 _ON_TRACK_PATTERN = r"on\s*-?\s*track"
@@ -236,13 +238,9 @@ def _dated_wave_of(ordered: pd.DataFrame, column: str) -> pd.DataFrame:
 
 
 def is_completed(df: pd.DataFrame) -> pd.Series:
-    """Migration Status = "7 - Completed" (by code, or by label when uncoded)."""
-    if df.empty:
-        return pd.Series(dtype=bool)
-    code = pd.to_numeric(df.get("migration_status_code"), errors="coerce")
-    label = df.get("migration_status_label", pd.Series("", index=df.index))
-    return (code.eq(COMPLETED_CODE)
-            | label.astype("string").str.contains("complete", case=False, na=False)).fillna(False)
+    """Migration Status is completed: the export's "7 - Completed" or the
+    tracking sheet's "6. Completed" (read through ``status_class``)."""
+    return statuses.is_class(df, statuses.COMPLETED)
 
 
 def in_window(dates: pd.Series, start, end) -> pd.Series:
@@ -303,9 +301,23 @@ def migrations_completed(fact: pd.DataFrame, start=None, end=None,
     if fact.empty:
         return Metric(0, "customers")
     lasts = latest_wave(fact) if lasts is None else lasts
-    done = lasts[account_state(fact, lasts) == STATE_COMPLETED]
-    hit = done[in_window(done["actual_end_date"], start, end)]
+    done = lasts[account_state(fact, lasts) == STATE_COMPLETED].copy()
+    done["completion_date"] = completion_dates(done)
+    hit = done[in_window(done["completion_date"], start, end)]
     return Metric(len(hit), "customers", hit)
+
+
+def completion_dates(lasts: pd.DataFrame) -> pd.Series:
+    """When each completed account finished.
+
+    The tracking sheet's **Actual Migration End Date** where it gives one —
+    the programme's own record — else the latest wave's **Actual End Date**.
+    """
+    end = pd.to_datetime(lasts.get("actual_end_date"), errors="coerce")
+    if "eos_end_date" in lasts.columns:
+        stated = pd.to_datetime(lasts["eos_end_date"], errors="coerce")
+        end = stated.where(stated.notna(), end)
+    return end
 
 
 def migration_starts(fact: pd.DataFrame, start=None, end=None) -> Metric:
@@ -597,7 +609,7 @@ def monthly_migrations_completed(fact: pd.DataFrame, start=None, end=None,
     rows = done.records.copy()
     if rows.empty:
         return _empty_trend("Migrations Completed"), rows
-    rows["month"] = _month(rows["actual_end_date"])
+    rows["month"] = _month(rows["completion_date"])
     summary = rows.groupby("month", as_index=False).agg(value=("tpid_key", "nunique"))
     return _finish_trend(summary, "Migrations Completed"), rows
 
@@ -818,10 +830,7 @@ def in_flight(df: pd.DataFrame) -> pd.Series:
     A migration that is deferred, cancelled or completed is not in flight, so it
     can never be On-Track however its Current State reads.
     """
-    if df.empty:
-        return pd.Series(dtype=bool)
-    code = pd.to_numeric(df.get("migration_status_code"), errors="coerce")
-    return code.isin(IN_FLIGHT_CODES).fillna(False)
+    return statuses.is_class(df, statuses.IN_FLIGHT)
 
 
 def reported_stages(df: pd.DataFrame) -> pd.Series:
@@ -916,24 +925,19 @@ def is_blocking_state(df: pd.DataFrame) -> pd.Series:
 
 def is_deferred(df: pd.DataFrame) -> pd.Series:
     """Migration Status is "5 - Deferred by Customer" (by code, or by label)."""
-    if df.empty:
-        return pd.Series(dtype=bool)
-    code = pd.to_numeric(df.get("migration_status_code"), errors="coerce")
-    label = df.get("migration_status_label", pd.Series("", index=df.index))
-    return (code.eq(DEFERRED_CODE)
-            | label.astype("string").str.contains("defer", case=False, na=False)
-            ).fillna(False)
+    return statuses.is_class(df, statuses.DEFERRED)
+
+
+def is_on_hold(df: pd.DataFrame) -> pd.Series:
+    """Migration Status is the tracking sheet's "7. On Hold"."""
+    return statuses.is_class(df, statuses.ON_HOLD)
 
 
 def is_cancelled(df: pd.DataFrame) -> pd.Series:
     """Migration Status is "6 - Cancelled / Archived" (by code, label or status)."""
     if df.empty:
         return pd.Series(dtype=bool)
-    code = pd.to_numeric(df.get("migration_status_code"), errors="coerce")
-    label = df.get("migration_status_label", pd.Series("", index=df.index))
-    out = (code.eq(CANCELLED_CODE)
-           | label.astype("string").str.contains("cancel|archiv", case=False,
-                                                 regex=True, na=False))
+    out = statuses.is_class(df, statuses.CANCELLED)
     if "eos_status" in df.columns:
         out = out | df["eos_status"].eq(STATE_CANCELLED)
     return out.fillna(False)
@@ -978,10 +982,51 @@ def account_state(fact: pd.DataFrame,
     # Assigned in reverse precedence: each line overrides the ones above it.
     out = pd.Series(STATE_OTHER, index=lasts.index, dtype="object")
     out[is_deferred(lasts)] = STATE_DEFERRED
+    out[is_on_hold(lasts)] = STATE_ON_HOLD
     out[is_blocked(lasts)] = STATE_BLOCKED
     out[is_cancelled(lasts)] = STATE_CANCELLED
     out[is_completed(lasts)] = STATE_COMPLETED
     out[any_on_track.to_numpy()] = STATE_ON_TRACK
+    # Where the EOS tracking sheet states the account's status or state, it
+    # decides — whatever the export's waves say.
+    stated = tracker_account_state(lasts)
+    return out.where(stated.isna(), stated)
+
+
+def tracker_account_state(lasts: pd.DataFrame) -> pd.Series:
+    """The account state the EOS tracking sheet gives, or NA where it is silent.
+
+    Read from the sheet's **Migration Status** and **Current State**, the first
+    of these to hold deciding:
+
+    1. **Cancelled** — Migration Status "8. Cancelled".
+    2. **On Hold** — Migration Status "7. On Hold".
+    3. **Completed** — Migration Status "6. Completed", or Current State
+       "Completed".
+    4. **Blocked** — Current State "Blocked".
+    5. **On-Track** — Current State "On Track" with the migration in flight
+       (stages 1-5) or no stage stated.
+    6. **Other** — anything else the sheet states (a stage with no state).
+
+    An account the sheet does not cover, or covers with neither column filled
+    in, comes back NA and keeps the export's answer.
+    """
+    out = pd.Series(pd.NA, index=lasts.index, dtype="object")
+    if lasts.empty or "eos_status_class" not in lasts.columns:
+        return out
+    cls = lasts["eos_status_class"].astype("string")
+    state = (lasts["eos_tracker_state"].astype("string")
+             if "eos_tracker_state" in lasts.columns
+             else pd.Series(pd.NA, index=lasts.index, dtype="string"))
+    stated = (cls.notna() | state.notna()).to_numpy()
+    out[stated] = STATE_OTHER
+    moving = (cls.isna() | cls.eq(statuses.IN_FLIGHT)).fillna(False)
+    out[(state.eq("On Track").fillna(False) & moving).to_numpy()] = STATE_ON_TRACK
+    out[state.eq("Blocked").fillna(False).to_numpy()] = STATE_BLOCKED
+    out[(cls.eq(statuses.COMPLETED) | state.eq("Completed")).fillna(False).to_numpy()] \
+        = STATE_COMPLETED
+    out[cls.eq(statuses.ON_HOLD).fillna(False).to_numpy()] = STATE_ON_HOLD
+    out[cls.eq(statuses.CANCELLED).fillna(False).to_numpy()] = STATE_CANCELLED
     return out
 
 
@@ -998,6 +1043,7 @@ def state_of(df: pd.DataFrame) -> pd.Series:
         return pd.Series(dtype="object")
     out = pd.Series(STATE_OTHER, index=df.index, dtype="object")
     out[is_deferred(df)] = STATE_DEFERRED
+    out[is_on_hold(df)] = STATE_ON_HOLD
     out[is_blocked(df)] = STATE_BLOCKED
     out[is_on_track_wave(df)] = STATE_ON_TRACK
     out[is_cancelled(df)] = STATE_CANCELLED
@@ -1019,9 +1065,25 @@ def on_track_wave(fact: pd.DataFrame,
     # sorting the whole population to throw most of it away costs half a second
     # on a 100k-wave portfolio.
     rows = fact[is_on_track_wave(fact)]
-    if rows.empty:
-        return rows
-    return _ordered(rows).groupby("tpid_key", as_index=False, sort=False).last()
+    picked = (_ordered(rows).groupby("tpid_key", as_index=False, sort=False).last()
+              if not rows.empty else rows)
+    # The tracking sheet can put an account on track with no wave the export
+    # would call on track (its nomination still unapproved, say); the account
+    # is still on track, and its latest wave is the row that says where.
+    lasts = latest_wave(fact) if lasts is None else lasts
+    stated = tracker_account_state(lasts)
+    keys = _keys(lasts)
+    on = set(keys[stated.eq(STATE_ON_TRACK).fillna(False).to_numpy()])
+    off = set(keys[(stated.notna() & stated.ne(STATE_ON_TRACK)).fillna(False).to_numpy()])
+    if not picked.empty and off:
+        picked = picked[~picked["tpid_key"].isin(off)]
+    have = set(picked["tpid_key"]) if not picked.empty else set()
+    extra = lasts[keys.isin(on - have).to_numpy()]
+    if extra.empty:
+        return picked
+    if picked.empty:
+        return extra.reset_index(drop=True)
+    return pd.concat([picked, extra], ignore_index=True)
 
 
 def stage_labels(df: pd.DataFrame) -> tuple[pd.Series, list[tuple[str, str]]]:
@@ -1041,13 +1103,21 @@ def stage_labels(df: pd.DataFrame) -> tuple[pd.Series, list[tuple[str, str]]]:
     code = pd.to_numeric(df.get("migration_status_code"), errors="coerce")
     full = (df.get("migration_status_label", pd.Series("", index=df.index))
             .astype("string").replace({"": pd.NA}).fillna("Unknown"))
+    # The two documents number their stages differently, so a stage the
+    # tracking sheet supplied is labelled "EOS 4" rather than "Stage 4": the
+    # same number would otherwise name two different stages on one axis.
+    source = (df["status_source"].astype("string")
+              if "status_source" in df.columns
+              else pd.Series(statuses.SOURCE_FDO, index=df.index, dtype="string"))
+    tracker = source.eq(statuses.SOURCE_TRACKER).fillna(False)
     short = pd.Series(
-        [f"Stage {int(c)}" if pd.notna(c) else f for c, f in zip(code, full)],
+        [(f"{'EOS' if t else 'Stage'} {int(c)}") if pd.notna(c) else f
+         for c, f, t in zip(code, full, tracker)],
         index=df.index, dtype="object")
     pairs = {}
-    for c, sh, fu in zip(code, short, full):
+    for c, sh, fu, t in zip(code, short, full, tracker):
         if pd.notna(c) and sh not in pairs:
-            pairs[sh] = (int(c), str(fu))
+            pairs[sh] = ((int(bool(t)), int(c)), str(fu))
     legend = [(sh, name) for sh, (_c, name) in
               sorted(pairs.items(), key=lambda kv: kv[1][0])]
     return short, legend
@@ -1200,6 +1270,7 @@ def excluded_accounts(fact: pd.DataFrame, lasts: pd.DataFrame | None = None
 #: How a stopped account is labelled when the Current State is not one of the
 #: stated blocking values: by the Migration Status that took it out.
 DEFERRED_LABEL = "Deferred By Customer"
+ON_HOLD_LABEL = "On Hold"
 CANCELLED_LABEL = "Cancelled / Archived"
 UNSTATED_LABEL = "Not stated"
 
@@ -1208,6 +1279,8 @@ def blocked_state_label(rows: pd.DataFrame) -> pd.Series:
     """Why each stopped account is stopped, in one label, first match winning::
 
         "Cancelled / Archived"   ← Migration Status = "6 - Cancelled / Archived"
+                                   (or the tracking sheet's "8. Cancelled")
+        "On Hold"                ← the tracking sheet's "7. On Hold"
         "Deferred By Customer"   ← Migration Status = "5 - Deferred By Customer"
         one of BLOCKED_STATES    ← Current State says so, in its canonical spelling
         "Not approved"           ← Nomination Status is not "Approved"
@@ -1232,6 +1305,7 @@ def blocked_state_label(rows: pd.DataFrame) -> pd.Series:
     out[unapproved.to_numpy()] = "Not approved"
     out = pd.Series(out, index=rows.index).fillna(UNSTATED_LABEL)
     out[is_deferred(rows).to_numpy()] = DEFERRED_LABEL
+    out[is_on_hold(rows).to_numpy()] = ON_HOLD_LABEL
     out[is_cancelled(rows).to_numpy()] = CANCELLED_LABEL
     return out
 
@@ -1307,7 +1381,8 @@ PIPELINE_OFFERING = "AVS Migration Nominations"
 PIPELINE_FROM_AVS = "from avs"
 
 #: Migration Statuses that take a wave out of the forward pipeline.
-PIPELINE_EXCLUDED_STATUSES = ("5 - Deferred By Customer", "6 - Cancelled / Archived")
+PIPELINE_EXCLUDED_STATUSES = ("5 - Deferred By Customer", "6 - Cancelled / Archived",
+                              "7. On Hold", "8. Cancelled")
 PIPELINE_EXCLUDED_CODES = (DEFERRED_CODE, CANCELLED_CODE)
 
 
@@ -1361,7 +1436,12 @@ def eligible_pipeline_waves(fact: pd.DataFrame) -> pd.Series:
         2. Nomination Status      =        "Approved"
         3. Current State          =        "On Track"                    -- and nothing else
         4. Migration Status       NOT IN   ("5 - Deferred By Customer",
-                                            "6 - Cancelled / Archived")
+                                            "6 - Cancelled / Archived",
+                                            "7. On Hold", "8. Cancelled")
+
+    For an account the EOS tracking sheet covers, the wave's Current State and
+    Migration Status are the sheet's (see
+    :func:`app.core.eos_tracker.apply_status`).
 
     Judged **per wave**, on the wave's own columns.  Any one failure drops it,
     so nothing blocked, waiting, deferred, cancelled or unapproved is ever
@@ -1370,9 +1450,7 @@ def eligible_pipeline_waves(fact: pd.DataFrame) -> pd.Series:
     """
     if fact.empty:
         return pd.Series(dtype=bool)
-    code = pd.to_numeric(fact.get("migration_status_code"), errors="coerce")
-    excluded = (code.isin(PIPELINE_EXCLUDED_CODES).fillna(False)
-                | is_deferred(fact) | is_cancelled(fact))
+    excluded = statuses.is_class(fact, *statuses.STOPPED) | is_cancelled(fact)
     return (in_pipeline_scope(fact)
             & is_nomination_approved(fact)
             & _is_state(fact, ON_TRACK_STATE)

@@ -13,6 +13,15 @@ from . import segments
 # --------------------------------------------------------------------------- #
 # Metrics
 # --------------------------------------------------------------------------- #
+PROGRAMME_TRACKER = (
+    "The manual EOS tracking sheet reported on its own: one row per TPID in "
+    "the sheet, including accounts the FDO export does not hold yet. Migration "
+    "Status, Current State, Target SDDC Generation, the SDDC counts and the two "
+    "dates are the sheet's; name, WW Region, Factory PM and ACR are looked up "
+    "in the FDO export by TPID. The reporting period and sidebar filters do not "
+    "apply."
+)
+
 NEW_ENGAGEMENTS = (
     "Unique customers (TPIDs) approved inside the reporting period.\n"
     "• Uses the Nom. Approval Date of the TPID's first wave (lowest Phase/Wave "
@@ -512,19 +521,26 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Unit: customer.",
         )),
         Definition("Migrations Completed", (
-            "For each **TPID**, identify the latest **Phase** / wave record.",
-            "That wave's **Migration Status** must be **7 - Completed**.",
-            "No other wave of the account may still be on track — if an earlier "
-            "wave is running, the account is still being delivered and is "
-            "counted under On-Track Accounts instead.",
-            "Use that wave's **Actual End Date** to decide the reporting period.",
+            "Count every account whose state is Completed — see how an "
+            "account's state is decided, below.",
+            "Without a tracking sheet that means the latest wave's **Migration "
+            "Status** is **7 - Completed** and no other wave is still on track.",
+            "Where the EOS tracking sheet covers the account, its **Migration "
+            "Status** of **6. Completed** or **Current State** of **Completed** "
+            "decides instead.",
+            "Date it by the tracking sheet's **Actual Migration End Date** "
+            "where there is one, otherwise the latest wave's **Actual End "
+            "Date**.",
             "Count each qualifying **TPID** once.",
             "Unit: customer.",
         )),
         Definition("Hosts Migrated (Cores Migrated on AVS to Azure Native)", (
             "Identify every wave whose **Migration Status** is **7 - "
-            "Completed**.",
-            "Use that wave's **Actual End Date** to decide the reporting period.",
+            "Completed**, or **6. Completed** where the EOS tracking sheet "
+            "supplied it.",
+            "Use that wave's **Actual End Date** to decide the reporting period; "
+            "a wave the sheet completed with none takes the sheet's **Actual "
+            "Migration End Date**.",
             "Add up **Total Cores** over those waves.",
             "It counts the work, not the customers: an account with three "
             "completed waves contributes all three.",
@@ -539,10 +555,14 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Its **Nomination Status** is **Approved**.",
             "Its **Migration Status** is one of **1 - Validating Commitment & "
             "Initial Scope**, **2 - Executing Pre-Requisites**, **3 - Finalize "
-            "Scope** or **4 - Executing Migration**.",
+            "Scope** or **4 - Executing Migration** — or one of the tracking "
+            "sheet's stages **1. Kick-Off Awaited** to **5. Sign-off Pending**.",
             "Its **Current State** is **On Track** and nothing else.",
             "Count unique **TPID**s with at least one such wave, whatever their "
             "latest wave says.",
+            "An account the EOS tracking sheet covers is counted by the sheet "
+            "instead: **Current State** of **On Track** with the migration "
+            "still in one of those five stages.",
             "A snapshot of where things stand now: no reporting period narrows "
             "it.",
             "Unit: customer.",
@@ -568,8 +588,10 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "report.",
             "Its **Nomination Status** is **Approved**.",
             "Its **Current State** is **On Track** and nothing else.",
-            "Its **Migration Status** is neither **5 - Deferred By Customer** "
-            "nor **6 - Cancelled / Archived**.",
+            "Its **Migration Status** is none of **5 - Deferred By Customer**, "
+            "**6 - Cancelled / Archived**, **7. On Hold** or **8. Cancelled**.",
+            "For an account the EOS tracking sheet covers, the **Current State** "
+            "and **Migration Status** tested are the sheet's.",
             "Add up **Total ACR** over those waves.",
             "Finished work needs no exclusion of its own: a finished wave reads "
             "**Done** rather than **On Track**, so the third condition leaves "
@@ -595,7 +617,9 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         "charts and the stopped-accounts section add up to the report's own "
         "account count.",
         Definition("The order the state is decided in", (
-            "The first of these to fit is the state the account gets.",
+            "The first of these to fit is the state the account gets, unless "
+            "the EOS tracking sheet covers the account — then the next entry "
+            "decides.",
             "**On-Track** — any wave of the account is on track by the "
             "three-part test above.",
             "**Completed** — the latest wave's **Migration Status** is **7 - "
@@ -610,6 +634,21 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "On-Track is tested before Completed on purpose: an account whose "
             "latest wave has finished while an earlier wave is still running is "
             "still being delivered.",
+        )),
+        Definition("The state of an account the EOS tracking sheet covers", (
+            "Read from the sheet's **Migration Status** and **Current State**; "
+            "the first of these to fit is the state.",
+            "**Cancelled** — **Migration Status** is **8. Cancelled**.",
+            "**On Hold** — **Migration Status** is **7. On Hold**.",
+            "**Completed** — **Migration Status** is **6. Completed**, or "
+            "**Current State** is **Completed**.",
+            "**Blocked** — **Current State** is **Blocked**.",
+            "**On-Track** — **Current State** is **On Track**, with the "
+            "migration in stages **1. Kick-Off Awaited** to **5. Sign-off "
+            "Pending** or no stage stated.",
+            "**Other** — a stage with no state.",
+            "Where the sheet leaves both cells blank, or uses a value outside "
+            "this list, the export decides as above.",
         )),
         Definition("What is not on track", (
             "A wave nobody has approved is not on track, however far along it "
@@ -627,6 +666,8 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Label each one with why it stopped; the first reason that fits is "
             "the one shown.",
             "**Migration Status** of **6 - Cancelled / Archived** — cancelled.",
+            "**Migration Status** of **7. On Hold** in the EOS tracking sheet "
+            "— on hold.",
             "**Migration Status** of **5 - Deferred By Customer** — deferred. "
             "The **Migration Status** wins over the **Current State**, because "
             "somebody decided those.",
@@ -709,7 +750,8 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
     ("The manual EOS tracking sheet", (
         "The EOS programme keeps its own spreadsheet beside the nominations "
         "export, and it is uploaded separately. Where it is loaded, it leads on "
-        "three things; everything else still comes from the export.",
+        "the generation, the migration's status and state, and its two dates; "
+        "everything else still comes from the export.",
         Definition("How it is matched", (
             "Matched on **TPID**, and on nothing else.",
             "**Assigned To (Factory PM)**, **Solution Architect**, **WW "
@@ -722,13 +764,103 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         )),
         Definition("What it decides", (
             "**Target SDDC Generation** decides the account's generation.",
+            "**Migration Status** and **Current State** replace the export's "
+            "for the account, on every wave the export still has open — or on "
+            "the latest wave when all are closed.",
+            "A wave the export already shows as **7 - Completed** or **6 - "
+            "Cancelled / Archived** keeps its own status.",
             "**Migration Start Date** and **Actual Migration End Date** supply "
-            "the two date rows of the monthly programme matrix.",
+            "the two date rows of the monthly programme matrix, and date "
+            "Migrations Completed.",
             "**Total SDDCs in Scope for Migration** and **Number of SDDCs "
-            "Migrated** are read and shown, but feed no headline figure.",
+            "Migrated** feed the EOS Programme Tracker only.",
             "Where the sheet is silent, the export answers exactly as it did "
             "before there was a sheet.",
             "A report built with no sheet loaded is unchanged.",
+        )),
+        Definition("Migration Status and Current State values", (
+            "**Migration Status** is read as one of **1. Kick-Off Awaited**, "
+            "**2. Planning & Prerequisites**, **3. Ready for Migration**, **4. "
+            "Executing Migration** or **5. Sign-off Pending**.",
+            "Or **6. Completed**, **7. On Hold** or **8. Cancelled**.",
+            "The wording decides, ignoring case, spacing and punctuation; a "
+            "bare number is read by its place in that list.",
+            "**Current State** is read as **On Track**, **Completed** or "
+            "**Blocked**; anything starting with Blocked is Blocked.",
+            "Where one account has several rows, it is as far along as its "
+            "least advanced stage still in flight, and Blocked if any row is.",
+            "A value outside these lists is listed on Data & Upload, and the "
+            "export answers for that account.",
+        )),
+        Definition("How the sheet is read", (
+            "The header row is the first row with a **TPID** column, so a title "
+            "above it is fine; in a workbook, the first sheet with one is used.",
+            "A **TPID** is matched as its plain digits, so 12,039,532 and "
+            "12039532.0 match 12039532.",
+            "A date such as 03-02-2026 is read day-first or month-first from "
+            "the rest of its column, or as chosen on Data & Upload.",
+            "A month alone, such as Feb-26, is read as the 1st of that month.",
+            "Data & Upload shows each date as written and as read, and lists "
+            "every value it could not read.",
+        )),
+    )),
+    ("The EOS Programme Tracker", (
+        "A report of the tracking sheet itself, one row per account in it. It "
+        "includes accounts the nominations export does not hold yet, and "
+        "ignores the reporting period and the filters.",
+        Definition("Accounts tracked", (
+            "Count each **TPID** in the tracking sheet once.",
+            "In FDO says whether the export holds a nomination for it.",
+            "Customer name, **WW Region**, **Assigned To (Factory PM)** and "
+            "**Total ACR** come from the export where it holds the account.",
+            "Otherwise the sheet's own **Customer** and **Region** are shown.",
+            "Unit: customer.",
+        )),
+        Definition("Accounts by Migration Status", (
+            "Count accounts per **Migration Status**, in stage order from **1. "
+            "Kick-Off Awaited** to **8. Cancelled**.",
+            "Split by **Target SDDC Generation**; an account with none takes "
+            "its tag's generation, or Not stated.",
+            "Unit: customer.",
+        )),
+        Definition("Accounts by Current State", (
+            "Count accounts per **Current State** — **On Track**, **Completed** "
+            "or **Blocked** — split the same way by generation.",
+            "Unit: customer.",
+        )),
+        Definition("Migration Status against Current State", (
+            "Count accounts in each pairing of **Migration Status** and "
+            "**Current State**.",
+            "A pairing that contradicts itself is listed on Data Inconsistency.",
+            "Unit: customer.",
+        )),
+        Definition("SDDC progress", (
+            "Add up **Total SDDCs in Scope for Migration** and **Number of SDDCs "
+            "Migrated** per generation.",
+            "Outstanding is the first less the second, never below zero.",
+            "Percent complete is migrated divided by in scope.",
+            "Unit: SDDCs.",
+        )),
+        Definition("Starts and completions by month", (
+            "Count accounts in the month of their **Migration Start Date**, and "
+            "separately in the month of their **Actual Migration End Date**.",
+            "Every month between the first and last is shown.",
+            "Unit: customer.",
+        )),
+        Definition("Days in migration", (
+            "Count from **Migration Start Date** to **Actual Migration End "
+            "Date**, or to the as-of date when there is no end date.",
+            "The ageing buckets count accounts still in stages **1. Kick-Off "
+            "Awaited** to **5. Sign-off Pending** with no end date.",
+            "Completed durations count accounts at **6. Completed** with both "
+            "dates.",
+            "Unit: days.",
+        )),
+        Definition("Needs attention", (
+            "Every account whose **Current State** is **Blocked** or whose "
+            "**Migration Status** is **7. On Hold**.",
+            "Longest in migration first.",
+            "Unit: customer.",
         )),
     )),
     ("The EOS monthly programme matrix", (
@@ -764,8 +896,7 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "has one.",
             "Otherwise, for each **TPID**, identify the latest **Phase** / wave "
             "record.",
-            "That wave's **Migration Status** must be **7 - Completed**, and no "
-            "other wave of the account may still be on track.",
+            "The account's state must be Completed, by the rules above.",
             "Use that wave's **Actual End Date**.",
             "Count the unique **TPID** in that date's month, once only.",
             "Unit: customer.",
@@ -825,7 +956,7 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Each wave is given a health status, the first matching rule "
             "winning.",
             "**Completed**, then **Cancelled**, then **Blocked**.",
-            "Then **At Risk** when the work is deferred.",
+            "Then **At Risk** when the work is deferred or on hold.",
             "Then **Delayed** when the **Planned End Date** has passed and "
             "there is no **Actual End Date**.",
             "Then **At Risk** again when the **Next Follow-up Date** has passed "

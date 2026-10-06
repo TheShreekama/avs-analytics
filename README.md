@@ -205,20 +205,43 @@ The EOS programme keeps its own spreadsheet beside the export, and **Data & Uplo
 it as a second, separate upload. It is keyed on **TPID and nothing else**: every other
 detail an EOS report needs — Factory PM, Solution Architect, region, offering, ACR, waves
 — is looked up in the FDO Dataset by that TPID, so the sheet never has to repeat or
-contradict them. Three columns lead wherever they are filled in:
+contradict them. These columns lead wherever they are filled in:
 
 | Column | What it decides |
 |---|---|
 | **Target SDDC Generation** (`Gen1` / `Gen2`) | The account's generation — and so its place in the EOS reports. Falls back to the `AVS Migration - Gen1/Gen2` tag. |
+| **Migration Status** | **Replaces the export's** for the account: `1. Kick-Off Awaited`, `2. Planning & Prerequisites`, `3. Ready for Migration`, `4. Executing Migration`, `5. Sign-off Pending`, `6. Completed`, `7. On Hold`, `8. Cancelled`. |
+| **Current State** | **Replaces the export's** for the account: `On Track`, `Completed`, `Blocked`. |
 | **Migration Start Date** | *Migration start* in the programme matrix. Falls back to the derivation from the earliest wave under way. |
-| **Actual Migration End Date** | *Migration end* in the programme matrix. Falls back to the latest wave completing. |
+| **Actual Migration End Date** | *Migration end* in the programme matrix, and the date of a completed account. Falls back to the latest wave completing. |
 
-`Total SDDCs in Scope for Migration` and `Number of SDDCs Migrated` are read too; columns
-the reports have no use for are left exactly as they are. Every account carries where its
-generation came from, and the page reports what the sheet reached and what it did not: a
-TPID the FDO Dataset has never heard of has no nomination behind it, so it is **named**
-under Data Inconsistency rather than invented. With no sheet loaded, every EOS figure is
-what it was before the sheet existed.
+The status and state are written onto every wave the export still has open (or the
+latest wave when all are closed); a wave the export already shows as completed or
+cancelled keeps its own. They decide the account's state — **On-Track**, **Completed**,
+**Blocked**, **On Hold**, **Cancelled** — in every report, and the export's originals
+stay on the row as `fdo_migration_status` / `fdo_current_state`. The two documents
+number their statuses differently (6 is *Cancelled* in one and *Completed* in the other),
+so no rule tests a number: each row carries a `status_class` (`app/core/statuses.py`).
+
+`Total SDDCs in Scope for Migration` and `Number of SDDCs Migrated` feed the **EOS
+Programme Tracker** page (Status Report → EOS Programme Tracker, and a section after the
+EOS report in both exports): accounts by Migration Status and Current State, status ×
+state, SDDC progress, starts and completions by month, days in migration, WW Region ×
+status and the accounts that need attention. It reads the sheet itself, so an account
+the FDO Dataset does not hold yet is still reported there.
+
+The sheet is read forgivingly: a title row above the headers is fine (the header row is
+the first with a TPID column), a workbook's sheets are tried until one has a TPID column,
+TPIDs match as plain digits (`12,039,532`, `12039532.0` and `12039532` are one), and a
+month written alone (`Feb-26`) is the 1st of that month. Data & Upload shows which column
+fed each field, every date as written beside the date it was read as, any value it could
+not read, and lets you say whether ambiguous dates (`03-02-2026`) are day- or month-first.
+
+Every account carries where its generation came from, and the page reports what the sheet
+reached and what it did not: a TPID the FDO Dataset has never heard of has no nomination
+behind it, so it is **named** under Data Inconsistency rather than invented — and when
+*none* of the sheet's TPIDs match, an empty EOS report says so. With no sheet loaded,
+every EOS figure is what it was before the sheet existed.
 
 ### Several files, one dataset
 

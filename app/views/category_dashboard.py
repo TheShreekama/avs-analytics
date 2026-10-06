@@ -182,6 +182,10 @@ def _why_empty(ctx, category: str) -> None:
     """Show what the file actually contains when a category selects nothing."""
     st.markdown("**Why is this empty?**")
     fact = ctx.fact
+    if category in _EOS_CATEGORIES:
+        note = exporter.tracker_scope_note(ctx)
+        if note:
+            banner(note, "warn" if ctx.has_tracker else "info")
     untagged = segments.population(fact, segments.CAT_EOS_UNCLASSIFIED)
     if category in _EOS_CATEGORIES and not untagged.empty:
         # The likeliest reason an EOS page is empty: accounts in scope by

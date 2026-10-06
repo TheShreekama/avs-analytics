@@ -16,7 +16,7 @@ import re
 import numpy as np
 import pandas as pd
 
-from . import eos_tracker, metrics, schema, segments
+from . import eos_tracker, metrics, schema, segments, statuses
 from .nulls import as_bool_mask, is_blank
 from ..config import DIR_FROM_AVS, DIR_OTHER, DIR_TO_AVS
 
@@ -28,6 +28,12 @@ _DATE_FORMATS_COMMON = (
     "%Y-%m-%d", "%Y/%m/%d", "%Y%m%d",
     "%d-%b-%Y", "%d %b %Y", "%d-%b-%y", "%b %d %Y", "%b %d, %Y", "%d %B %Y", "%B %d, %Y",
 )
+#: A month with no day — "Feb-26", "Feb 2026" — is how a hand-kept sheet often
+#: dates a milestone (Excel's ``mmm-yy`` format saved as CSV writes exactly
+#: that).  It is read as the 1st of that month: every report that reads these
+#: dates buckets them by month, so nothing is invented that a report shows.
+_DATE_FORMATS_MONTH_YEAR = ("%b-%y", "%b-%Y", "%B-%y", "%B-%Y", "%b %y", "%b %Y",
+                            "%B %Y", "%b'%y", "%b/%Y", "%b/%y")
 _DATE_FORMATS_MONTH_FIRST = ("%m-%d-%Y", "%m/%d/%Y", "%m.%d.%Y", "%m-%d-%y", "%m/%d/%y")
 _DATE_FORMATS_DAY_FIRST = ("%d-%m-%Y", "%d/%m/%Y", "%d.%m.%Y", "%d-%m-%y", "%d/%m/%y")
 
@@ -87,12 +93,29 @@ def _prefers_day_first(s: pd.Series) -> bool:
     return day_first > month_first
 
 
-def parse_date_series(s: pd.Series) -> pd.Series:
+def _bounded(parsed: pd.Series) -> pd.Series:
+    """Parsed dates outside 1900-2200 as NaT, in the nanosecond unit ``out`` holds.
+
+    "0001-02-03" is a valid ISO stamp and a typo; left alone it cannot be stored
+    in a nanosecond column at all, and pandas raises an AssertionError rather
+    than coercing — which used to take the whole upload down with it.
+    """
+    parsed = pd.to_datetime(parsed, errors="coerce")
+    years = parsed.dt.year
+    return (parsed.where(years.between(1900, 2200))
+            .astype("datetime64[ns]"))
+
+
+def parse_date_series(s: pd.Series, dayfirst: bool | None = None) -> pd.Series:
     """Parse a column of dates in whatever shape the export happens to use.
 
     Handles: real datetime values, Excel serial numbers, ISO stamps (with or
-    without a timezone), month names, and d/m/y triples in either order — the
-    order being inferred per column rather than per value.
+    without a timezone), month names, month-and-year ("Feb-26" — the 1st of the
+    month), and d/m/y triples in either order — the order being inferred per
+    column rather than per value, unless ``dayfirst`` says which it is.
+
+    A value that names no year ("1/2") is left unparsed rather than given this
+    year, and so is anything that would land outside 1900-2200.
     """
     if pd.api.types.is_datetime64_any_dtype(s):
         return pd.to_datetime(s, errors="coerce").dt.tz_localize(None) \
@@ -114,24 +137,30 @@ def parse_date_series(s: pd.Series) -> pd.Series:
 
     # 2) Known formats, with the ambiguous d/m pair ordered to suit the column.
     bare = s.where(~remaining, s.str.replace(_TIME_SUFFIX_RE, "", regex=True).str.strip())
+    day_first = (_prefers_day_first(bare[remaining]) if dayfirst is None
+                 else bool(dayfirst))
     ambiguous = (_DATE_FORMATS_DAY_FIRST + _DATE_FORMATS_MONTH_FIRST
-                 if _prefers_day_first(bare[remaining])
-                 else _DATE_FORMATS_MONTH_FIRST + _DATE_FORMATS_DAY_FIRST)
-    for fmt in _DATE_FORMATS_COMMON + ambiguous:
+                 if day_first else _DATE_FORMATS_MONTH_FIRST + _DATE_FORMATS_DAY_FIRST)
+    for fmt in _DATE_FORMATS_COMMON + ambiguous + _DATE_FORMATS_MONTH_YEAR:
         if not remaining.any():
             return out.dt.normalize()
-        out.loc[remaining] = pd.to_datetime(bare[remaining], format=fmt, errors="coerce")
+        out.loc[remaining] = _bounded(
+            pd.to_datetime(bare[remaining], format=fmt, errors="coerce"))
         remaining = s.notna() & out.isna()
 
     # 3) Generic pass for anything left.  ``utc=True`` keeps mixed-timezone input
     #    from raising (it does so even under errors="coerce"); the offset is then
     #    dropped, since every date in this dataset is a calendar day.
+    #    Only values that carry a four-digit year go this far: the generic parser
+    #    fills a missing year with the current one ("1/2" -> 2 Jan this year),
+    #    which is a date nobody wrote.
+    remaining &= s.str.contains(r"\d{4}", na=False)
     if remaining.any():
         try:
             generic = pd.to_datetime(s[remaining], errors="coerce", utc=True,
-                                     format="mixed", dayfirst=_prefers_day_first(bare))
-            out.loc[remaining] = generic.dt.tz_localize(None)
-        except (ValueError, TypeError):
+                                     format="mixed", dayfirst=day_first)
+            out.loc[remaining] = _bounded(generic.dt.tz_localize(None))
+        except Exception:  # noqa: BLE001 - an odd cell must never sink the upload
             pass
     return out.dt.normalize()
 
@@ -280,7 +309,7 @@ def derive_eos_status(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.Series:
     (At Risk) → schedule-overdue (Delayed) → waiting/follow-up overdue (At Risk)
     → On Track.  Vectorised with ``np.select`` so it scales to 500k+ rows.
     """
-    code = fact["migration_status_code"]
+    status = statuses.status_class(fact)
     label = fact["migration_status_label"].astype("string").str.lower().fillna("")
     state = fact["current_state"].astype("string").str.strip().str.lower().fillna("")
     milestone = fact["milestone_status"].astype("string").str.strip().str.lower().fillna("")
@@ -288,13 +317,15 @@ def derive_eos_status(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.Series:
     pend = fact["planned_end_date"]
     followup = fact["next_followup_date"]
 
-    completed = (code.eq(7) | label.str.contains("complete", na=False)
+    completed = (status.eq(statuses.COMPLETED) | label.str.contains("complete", na=False)
                  | state.str.contains("done", na=False) | milestone.eq("completed")
                  | aend.notna())
-    cancelled = (code.eq(6) | label.str.contains("cancel|archiv", regex=True, na=False)
+    cancelled = (status.eq(statuses.CANCELLED)
+                 | label.str.contains("cancel|archiv", regex=True, na=False)
                  | milestone.eq("cancelled"))
     blocked = state.str.contains("blocked", na=False)
-    deferred = (code.eq(5) | label.str.contains("defer", na=False)
+    deferred = (status.isin((statuses.DEFERRED, statuses.ON_HOLD))
+                | label.str.contains("defer", na=False)
                 | state.str.contains("defer", na=False))
     delayed = pend.notna() & aend.isna() & (pend < as_of)
     waiting = (followup.notna() & (followup < as_of)) | state.str.startswith("waiting", na=False)
@@ -468,6 +499,14 @@ def build_fact_frame(
                 "nomination_status", "current_state", "milestone_status", "phase"]:
         fact[key] = fact[key].astype("string").replace({"": pd.NA}).fillna("Unknown")
 
+    # What each status *means*, then the tracking sheet's Migration Status and
+    # Current State written over the export's wherever the sheet states them.
+    # Every rule downstream reads ``status_class``, never the number: the two
+    # documents number their statuses differently (see ``statuses``).
+    fact["status_class"] = statuses.fdo_status_class(
+        fact["migration_status_code"], fact["migration_status_label"])
+    fact = eos_tracker.apply_status(fact)
+
     as_of = pd.Timestamp(as_of) if as_of is not None else _effective_today(fact)
     report["as_of"] = as_of
 
@@ -484,7 +523,7 @@ def build_fact_frame(
         | fact["nomination_status"].str.contains("declin|reject", case=False, na=False),
         fact.index)
     fact["is_closed"] = (
-        (fact["migration_status_code"] == 7)
+        fact["status_class"].eq(statuses.COMPLETED)
         | fact["current_state"].str.contains("done|complete", case=False, na=False)
         | fact["milestone_status"].str.contains("complete", case=False, na=False)
         | fact["actual_end_date"].notna()

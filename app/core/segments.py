@@ -175,6 +175,35 @@ def generation_by_tpid(fact: pd.DataFrame) -> pd.Series:
     return df.groupby("_key")["_tags"].apply(lambda s: classify_generation(s.tolist()))
 
 
+_TPID_NUMBER_RE = r"[\d,\s]+(\.0+)?"
+_TPID_SCIENTIFIC_RE = r"\d+(\.\d+)?[eE]\+?\d+"
+
+
+def normalise_tpid(values: pd.Series) -> pd.Series:
+    """TPIDs reduced to the digits that identify them, so two files agree.
+
+    The same TPID arrives as ``12039532`` from the export and as ``12,039,532``,
+    ``12039532.0``, ``'12039532`` or ``1.2039532E+07`` from a sheet someone
+    has opened in Excel — and a join on the raw text silently matches none of
+    them.  A value that is a number is written as its plain integer; anything
+    else (a TPID with letters in it) is only trimmed.  Blank, ``nan`` and
+    ``0`` are no TPID at all.
+    """
+    t = (values.astype("string").str.replace("\u00a0", " ", regex=False)
+         .str.strip().str.lstrip("'").str.strip())
+    numeric = t.str.fullmatch(_TPID_NUMBER_RE, na=False)
+    plain = (t.str.replace(r"[,\s]", "", regex=True)
+             .str.replace(r"\.0+$", "", regex=True).str.lstrip("0"))
+    t = t.where(~numeric, plain)
+    scientific = t.str.fullmatch(_TPID_SCIENTIFIC_RE, na=False)
+    if bool(scientific.any()):
+        as_float = pd.to_numeric(t.where(scientific), errors="coerce")
+        whole = scientific & as_float.notna() & (as_float % 1 == 0)
+        t = t.where(~whole, as_float.round().astype("Int64").astype("string"))
+    return t.replace({"": pd.NA, "nan": pd.NA, "NaN": pd.NA, "0": pd.NA,
+                      "None": pd.NA})
+
+
 def tpid_key(fact: pd.DataFrame) -> pd.Series:
     """The authoritative grouping key: TPID, falling back to the account name.
 
@@ -182,8 +211,7 @@ def tpid_key(fact: pd.DataFrame) -> pd.Series:
     used only when a row carries no TPID at all, so those rows still roll up to
     something rather than collapsing together.
     """
-    tpid = fact["tpid"].astype("string").str.strip()
-    tpid = tpid.replace({"": pd.NA, "nan": pd.NA, "0": pd.NA})
+    tpid = normalise_tpid(fact["tpid"])
     name = fact["customer_name"].astype("string").str.strip().str.upper()
     return tpid.fillna("NAME:" + name.fillna("UNKNOWN"))
 

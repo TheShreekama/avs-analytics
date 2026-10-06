@@ -12,6 +12,11 @@ three things the export either does not carry or carries less reliably:
   earliest-started-wave derivation :func:`app.core.kpi.migration_start_dates`
   has to fall back on.
 * **Actual Migration End Date** — likewise, when the migration actually ended.
+* **Migration Status** and **Current State** — where the programme says each
+  account is, in its own vocabulary (``1. Kick-Off Awaited`` …
+  ``8. Cancelled``; ``On Track`` / ``Completed`` / ``Blocked``).  Wherever the
+  sheet states one it **replaces** the export's for that account
+  (:func:`apply_status`), so every report reads the programme's answer.
 
 The sheet is keyed on **TPID and nothing else**: every other detail an EOS
 report needs — Factory PM, Solution Architect, region, offering, ACR, waves —
@@ -20,10 +25,12 @@ is looked up in the FDO dataset by that TPID, so the tracker never has to repeat
 unmatched rather than invented: without a nomination behind it there is no
 offering, no ACR and no wave to report on.
 
-Nothing here overwrites a number.  The tracker *leads* and the export *follows*:
-each overlay column is carried beside the derived one, and the rules in
-:mod:`app.core.kpi` and :mod:`app.core.cleaning` take the tracker's answer when
-it has one and their own when it does not.
+The tracker *leads* and the export *follows*: each overlay column is carried
+beside the export's own, and the rules in :mod:`app.core.kpi` and
+:mod:`app.core.cleaning` take the tracker's answer when it has one and their own
+when it does not.  The two status columns are the one place a value is
+replaced in the row itself; the export's originals are kept beside them as
+``fdo_migration_status`` / ``fdo_current_state``.
 """
 from __future__ import annotations
 
@@ -32,7 +39,10 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from . import segments
+import csv
+import io
+
+from . import segments, statuses
 from .nulls import as_bool_mask, is_blank
 
 
@@ -105,7 +115,16 @@ OVERLAY_COLUMNS: dict[str, str] = {
     "current_state": "eos_tracker_state",
     "region": "eos_tracker_region",
     "customer_name": "eos_tracker_customer",
+    "status_number": "eos_status_number",
+    "status_class": "eos_status_class",
+    "status_raw": "eos_tracker_status_raw",
+    "state_raw": "eos_tracker_state_raw",
 }
+
+#: Overlay columns holding text, kept as the nullable ``string`` dtype.
+_TEXT_OVERLAY = ("eos_target_generation", "eos_tracker_status", "eos_tracker_state",
+                 "eos_tracker_region", "eos_tracker_customer", "eos_status_class",
+                 "eos_tracker_status_raw", "eos_tracker_state_raw")
 
 #: Where an account's generation was decided, carried per row so a reader can
 #: see which accounts the tracker is answering for.
@@ -182,6 +201,16 @@ def normalise_generation(value) -> str | None:
     if is_blank(value):
         return None
     compact = re.sub(r"[^a-z0-9]", "", str(value).lower())
+    compact = compact.replace("generation", "gen")
+    if compact in ("1", "g1"):
+        return segments.GEN_1
+    if compact in ("2", "g2"):
+        return segments.GEN_2
+    # "Gen1 to Gen2" names the move, and the generation an account is
+    # *landing on* is the one after "to".
+    move = re.search(r"gen[12](?:to|>)+gen([12])", compact)
+    if move:
+        return segments.GEN_1 if move.group(1) == "1" else segments.GEN_2
     for generation, marker in _GEN_MARKERS:
         if marker in compact:
             return generation
@@ -189,10 +218,240 @@ def normalise_generation(value) -> str | None:
 
 
 # --------------------------------------------------------------------------- #
+# Migration Status and Current State, in the programme's vocabulary
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class TrackerStatus:
+    """One of the eight Migration Statuses the programme's sheet uses."""
+    number: int
+    name: str
+    status_class: str
+    aliases: tuple[str, ...] = ()
+
+    @property
+    def text(self) -> str:
+        """How the reports print it: ``"4. Executing Migration"``."""
+        return f"{self.number}. {self.name}"
+
+
+#: The sheet's Migration Status values, in the order a migration moves through
+#: them.  The class is what every rule reads (see :mod:`app.core.statuses`);
+#: aliases are matched on the cell reduced to letters, so "Kick-off awaited",
+#: "1 - Kick Off Awaited" and "KICKOFF AWAITED" are one status.
+TRACKER_STATUSES: tuple[TrackerStatus, ...] = (
+    TrackerStatus(1, "Kick-Off Awaited", statuses.IN_FLIGHT,
+                  ("kickoffawaited", "awaitingkickoff", "kickoffpending")),
+    TrackerStatus(2, "Planning & Prerequisites", statuses.IN_FLIGHT,
+                  ("planningprerequisites", "planningprerequisite",
+                   "planningandprerequisites", "planningandprerequisite")),
+    TrackerStatus(3, "Ready for Migration", statuses.IN_FLIGHT,
+                  ("readyformigration", "readytomigrate")),
+    TrackerStatus(4, "Executing Migration", statuses.IN_FLIGHT,
+                  ("executingmigration", "migrationinprogress",
+                   "migrationexecuting")),
+    TrackerStatus(5, "Sign-off Pending", statuses.IN_FLIGHT,
+                  ("signoffpending", "pendingsignoff", "awaitingsignoff")),
+    TrackerStatus(6, "Completed", statuses.COMPLETED, ("completed", "complete")),
+    TrackerStatus(7, "On Hold", statuses.ON_HOLD, ("onhold",)),
+    TrackerStatus(8, "Cancelled", statuses.CANCELLED, ("cancelled", "canceled")),
+)
+_STATUS_BY_NUMBER = {st.number: st for st in TRACKER_STATUSES}
+_STATUS_BY_ALIAS = {alias: st for st in TRACKER_STATUSES
+                    for alias in (re.sub(r"[^a-z]", "", st.name.lower()), *st.aliases)}
+
+#: The sheet's Current State values.
+STATE_ON_TRACK = "On Track"
+STATE_COMPLETED = "Completed"
+STATE_BLOCKED = "Blocked"
+TRACKER_STATES: tuple[str, ...] = (STATE_ON_TRACK, STATE_COMPLETED, STATE_BLOCKED)
+_STATE_BY_ALIAS = {"ontrack": STATE_ON_TRACK, "completed": STATE_COMPLETED,
+                   "complete": STATE_COMPLETED, "done": STATE_COMPLETED,
+                   "blocked": STATE_BLOCKED}
+
+
+def _status_key(value) -> tuple[int | None, str]:
+    """``("4 - Executing Migration")`` -> ``(4, "executingmigration")``."""
+    text = str(value).strip().lower()
+    number = re.match(r"^\s*(\d+)\s*(?:[.)\-:]|\s|$)", text)
+    rest = text[number.end():] if number else text
+    rest = re.sub(r"\band\b", "", rest)
+    return (int(number.group(1)) if number else None,
+            re.sub(r"[^a-z]", "", rest))
+
+
+def parse_status(value) -> TrackerStatus | None:
+    """The sheet's Migration Status for one cell, or None when it names none.
+
+    The wording decides; a bare number ("4") is read by its position in the
+    list.  A cell whose wording names no status is *not* read by its number —
+    "5 - Deferred By Customer" is the export's vocabulary, and reading it as the
+    sheet's "5. Sign-off Pending" would be wrong — so it comes back None and is
+    listed under the sheet's data checks instead.
+    """
+    if is_blank(value):
+        return None
+    number, key = _status_key(value)
+    if key:
+        return _STATUS_BY_ALIAS.get(key)
+    return _STATUS_BY_NUMBER.get(number) if number is not None else None
+
+
+def parse_state(value) -> str | None:
+    """The sheet's Current State for one cell — On Track, Completed or Blocked.
+
+    "Blocked - Customer" is Blocked: the sheet's vocabulary has one blocked
+    state, and the qualifier after it is a note, not a different state.
+    """
+    if is_blank(value):
+        return None
+    _number, key = _status_key(value)
+    if key.startswith("blocked"):
+        return STATE_BLOCKED
+    return _STATE_BY_ALIAS.get(key)
+
+
+#: When one account's rows disagree, the status the account as a whole is in:
+#: it is only as far along as the least advanced piece still moving, and is
+#: on hold, completed or cancelled only when nothing is still moving.
+_CLASS_PRECEDENCE = (statuses.IN_FLIGHT, statuses.ON_HOLD, statuses.COMPLETED,
+                     statuses.CANCELLED)
+
+
+def _account_status(values) -> object:
+    found = [st for st in (parse_status(v) for v in values) if st is not None]
+    for cls in _CLASS_PRECEDENCE:
+        hits = [st for st in found if st.status_class == cls]
+        if hits:
+            return min(hits, key=lambda st: st.number)
+    return None
+
+
+def _account_state(values) -> object:
+    found = {parse_state(v) for v in values} - {None}
+    for state in (STATE_BLOCKED, STATE_ON_TRACK, STATE_COMPLETED):
+        if state in found:
+            return state
+    return None
+
+
+def _distinct_text(values) -> object:
+    seen = []
+    for v in values:
+        if not is_blank(v) and str(v).strip() not in seen:
+            seen.append(str(v).strip())
+    return " | ".join(seen) if seen else pd.NA
+
+
+# --------------------------------------------------------------------------- #
+# Reading the file
+# --------------------------------------------------------------------------- #
+#: Header cells that are the TPID column — how a header row is recognised when
+#: the sheet has a title, a logo row or a note above it.
+_TPID_HEADERS = {"tpid", "t pid", "top parent id", "tpid number", "tp id",
+                 "ms tpid", "customer tpid", "account tpid"}
+HEADER_SCAN_ROWS = 30
+
+
+def _is_tpid_header(cell) -> bool:
+    if is_blank(cell):
+        return False
+    norm = _norm(cell)
+    return norm in _TPID_HEADERS or norm.startswith("tpid ")
+
+
+def header_row(rows: pd.DataFrame) -> int | None:
+    """The position of the header row in a sheet read without one, or None."""
+    for i in range(min(len(rows), HEADER_SCAN_ROWS)):
+        if any(_is_tpid_header(v) for v in rows.iloc[i].tolist()):
+            return i
+    return None
+
+
+def _with_header(rows: pd.DataFrame, at: int) -> pd.DataFrame:
+    """Rows below ``at``, headed by row ``at``; blank and duplicate names fixed."""
+    names, seen = [], set()
+    for j, cell in enumerate(rows.iloc[at].tolist()):
+        name = "" if is_blank(cell) else str(cell).strip()
+        name = name or f"Column {j + 1}"
+        base, n = name, 2
+        while name in seen:
+            name, n = f"{base} ({n})", n + 1
+        seen.add(name)
+        names.append(name)
+    body = rows.iloc[at + 1:].copy()
+    body.columns = names
+    body = body.astype("string").fillna("")
+    keep = body.apply(lambda r: any(str(v).strip() for v in r), axis=1)
+    return body[keep].reset_index(drop=True)
+
+
+def _csv_rows(data: bytes) -> pd.DataFrame:
+    """A CSV as rows of text, ragged lines padded — a title line has one cell."""
+    for encoding in ("utf-8-sig", "cp1252", "latin-1"):
+        try:
+            text = data.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    rows = list(csv.reader(io.StringIO(text)))
+    width = max((len(r) for r in rows), default=0)
+    return pd.DataFrame([r + [""] * (width - len(r)) for r in rows], dtype="string")
+
+
+def read_tracker_file(name: str, data: bytes) -> tuple[pd.DataFrame, dict]:
+    """One tracking-sheet file as a headed frame, and where its header was found.
+
+    The programme's sheet is kept by hand, so it is not assumed to be tidy: the
+    header row is the first row (of the first 30) holding a TPID column, and in
+    a workbook every sheet is tried in order until one has such a row.  A file
+    with none is read as it stands, so :func:`build_tracker` can say plainly
+    that there is no TPID column.
+    """
+    lower = name.lower()
+    if lower.endswith(".csv"):
+        sheets = {"": _csv_rows(data)}
+    elif lower.endswith((".xlsx", ".xls")):
+        engine = "openpyxl" if lower.endswith(".xlsx") else "xlrd"
+        sheets = pd.read_excel(io.BytesIO(data), sheet_name=None, header=None,
+                               dtype=str, engine=engine)
+    else:
+        raise ValueError(f"Unsupported file type: {name}. Use CSV, XLSX or XLS.")
+    for sheet, rows in sheets.items():
+        rows = rows.astype("string").fillna("")
+        at = header_row(rows)
+        if at is not None:
+            return _with_header(rows, at), {"file": name, "sheet": sheet,
+                                            "header_row": at + 1,
+                                            "sheets": list(sheets)}
+    first_sheet, rows = next(iter(sheets.items()))
+    rows = rows.astype("string").fillna("")
+    framed = _with_header(rows, 0) if len(rows) else pd.DataFrame()
+    return framed, {"file": name, "sheet": first_sheet, "header_row": 1 if len(rows) else None,
+                    "sheets": list(sheets), "no_tpid_header": True}
+
+
+def read_tracker_files(files: list[tuple[str, bytes]]) -> tuple[pd.DataFrame, list[dict]]:
+    """Every tracking-sheet file, headed and stacked, with where each was read."""
+    from . import loader
+
+    parts, notes = [], []
+    for name, data in files:
+        with loader.ingest_stage("read", name):
+            frame, note = read_tracker_file(name, data)
+        parts.append((name, frame))
+        notes.append(note)
+    label = ", ".join(name for name, _ in files)
+    with loader.ingest_stage("combine", label):
+        raw, _manifest = loader.combine_raw(parts)
+    return raw, notes
+
+
+# --------------------------------------------------------------------------- #
 # Reading the sheet
 # --------------------------------------------------------------------------- #
 def build_tracker(raw: pd.DataFrame,
-                  mapping: dict[str, str | None] | None = None
+                  mapping: dict[str, str | None] | None = None,
+                  dayfirst: bool | None = None,
                   ) -> tuple[pd.DataFrame, dict]:
     """The tracking sheet as one tidy row per TPID, plus a report on the read.
 
@@ -206,8 +465,16 @@ def build_tracker(raw: pd.DataFrame,
       when its first piece did.
     * **Actual Migration End Date** — the **latest** stated: it ended when its
       last piece did.
+    * **Migration Status** — the least advanced stage still in flight; failing
+      that On Hold, then Completed, then Cancelled: an account is finished only
+      when no piece of it is still moving.
+    * **Current State** — Blocked if any row is, else On Track, else Completed.
     * **SDDC counts** — summed across the account's rows.
     * Everything else — the first non-blank value.
+
+    ``dayfirst`` fixes how an ambiguous date ("03-02-2026") is read; left None
+    the order is inferred from the column (see
+    :func:`app.core.cleaning.parse_date_series`).
 
     Nothing is second-guessed: an account the sheet gives an end date is an
     account the programme says has ended.  Where that sits oddly against its own
@@ -218,9 +485,12 @@ def build_tracker(raw: pd.DataFrame,
     Returns ``(tracker, report)``; ``tracker`` is indexed by nothing and carries
     ``tpid_key`` so it joins straight onto the fact frame.
     """
-    report: dict = {"rows": int(len(raw)), "accounts": 0, "unmapped": [],
+    report: dict = {"rows": int(len(raw)) if raw is not None else 0,
+                    "accounts": 0, "unmapped": [],
                     "extra_columns": [], "generation_conflicts": [],
-                    "no_generation": 0, "with_start": 0, "with_end": 0}
+                    "status_conflicts": [], "no_generation": 0, "with_start": 0,
+                    "with_end": 0, "date_checks": {}, "unrecognised_status": [],
+                    "unrecognised_state": [], "dayfirst": dayfirst}
     if raw is None or raw.empty:
         return _empty_tracker(), report
 
@@ -232,7 +502,8 @@ def build_tracker(raw: pd.DataFrame,
     report["mapping"] = dict(mapping)
     report["unmapped"] = [f.key for f in TRACKER_FIELDS if not mapping.get(f.key)]
     claimed = {v for v in mapping.values() if v}
-    report["extra_columns"] = [str(c) for c in raw.columns if c not in claimed]
+    report["extra_columns"] = [str(c) for c in raw.columns if c not in claimed
+                               and str(c) != "source_file"]
     if not mapping.get("tpid"):
         raise ValueError(
             "The EOS tracking sheet has no TPID column. TPID is the only key the "
@@ -245,7 +516,10 @@ def build_tracker(raw: pd.DataFrame,
         values = (raw[src].astype("string") if src and src in raw.columns
                   else pd.Series(pd.NA, index=raw.index, dtype="string"))
         if f.dtype == "date":
-            tidy[f.key] = parse_date_series(values)
+            parsed = parse_date_series(values, dayfirst=dayfirst)
+            tidy[f.key] = parsed
+            tidy[f"{f.key}_raw"] = values.str.strip()
+            report["date_checks"][f.key] = _date_check(f, src, values, parsed)
         elif f.dtype == "number":
             tidy[f.key] = parse_number_series(values)
         elif f.dtype == "generation":
@@ -253,37 +527,74 @@ def build_tracker(raw: pd.DataFrame,
         else:
             tidy[f.key] = values.str.strip().replace({"": pd.NA})
 
-    tidy = tidy[tidy["tpid"].notna()]
+    tidy["tpid_key"] = segments.normalise_tpid(tidy["tpid"])
+    tidy = tidy[tidy["tpid_key"].notna()]
     if tidy.empty:
         return _empty_tracker(), report
-    # The tracker is keyed on TPID alone; ``tpid_key`` gives it the same key the
-    # fact frame groups on, so the join needs no special case for a blank TPID
-    # (there are none — the rows above were dropped).
-    tidy["tpid_key"] = tidy["tpid"].astype("string").str.strip()
+
+    report["unrecognised_status"] = sorted({
+        str(v).strip() for v in tidy["migration_status"].dropna()
+        if parse_status(v) is None})
+    report["unrecognised_state"] = sorted({
+        str(v).strip() for v in tidy["current_state"].dropna()
+        if parse_state(v) is None})
 
     grouped = tidy.groupby("tpid_key", sort=False)
     out = pd.DataFrame(index=grouped.size().index)
     out["tpid"] = grouped["tpid"].first()
     out["tracker_rows"] = grouped.size()
-    for key in ("customer_name", "region", "migration_status", "current_state"):
+    for key in ("customer_name", "region"):
         out[key] = grouped[key].first()
     out["target_generation"] = grouped["target_generation"].apply(_one_generation)
+    status = grouped["migration_status"].apply(lambda v: _account_status(list(v)))
+    out["migration_status"] = status.map(
+        lambda st: st.text if st is not None else pd.NA)
+    out["status_number"] = status.map(
+        lambda st: st.number if st is not None else pd.NA).astype("Float64")
+    out["status_class"] = status.map(
+        lambda st: st.status_class if st is not None else pd.NA)
+    out["current_state"] = grouped["current_state"].apply(
+        lambda v: _account_state(list(v)))
+    out["status_raw"] = grouped["migration_status"].apply(_distinct_text)
+    out["state_raw"] = grouped["current_state"].apply(_distinct_text)
     out["migration_start_date"] = grouped["migration_start_date"].min()
     out["migration_end_date"] = grouped["migration_end_date"].max()
+    out["migration_start_date_raw"] = grouped["migration_start_date_raw"].apply(_distinct_text)
+    out["migration_end_date_raw"] = grouped["migration_end_date_raw"].apply(_distinct_text)
     for key in ("sddcs_in_scope", "sddcs_migrated"):
         out[key] = grouped[key].sum(min_count=1)
     out = out.reset_index()
 
     conflicts = [str(k) for k, values in grouped["target_generation"]
                  if len({v for v in values if v}) > 1]
+    status_conflicts = [str(k) for k, values in grouped["migration_status"]
+                        if len({parse_status(v) for v in values} - {None}) > 1]
     report.update({
         "accounts": int(len(out)),
         "generation_conflicts": conflicts,
+        "status_conflicts": status_conflicts,
         "no_generation": int(out["target_generation"].isna().sum()),
         "with_start": int(out["migration_start_date"].notna().sum()),
         "with_end": int(out["migration_end_date"].notna().sum()),
+        "with_status": int(out["migration_status"].notna().sum()),
+        "with_state": int(out["current_state"].notna().sum()),
     })
     return out, report
+
+
+def _date_check(f: TrackerField, src, values: pd.Series, parsed: pd.Series) -> dict:
+    """How a date column read: cells filled, cells understood, and the rest."""
+    text = values.astype("string").str.strip().replace({"": pd.NA})
+    failed = text.notna() & parsed.isna()
+    sample = pd.DataFrame({"raw": text[text.notna()], "parsed": parsed[text.notna()]})
+    return {
+        "label": f.label,
+        "column": src,
+        "filled": int(text.notna().sum()),
+        "parsed": int((text.notna() & parsed.notna()).sum()),
+        "unparsed": sorted({str(v) for v in text[failed]})[:25],
+        "sample": sample.drop_duplicates("raw").head(8).reset_index(drop=True),
+    }
 
 
 def _one_generation(values) -> object:
@@ -297,7 +608,10 @@ def _one_generation(values) -> object:
 
 def _empty_tracker() -> pd.DataFrame:
     return pd.DataFrame(columns=["tpid_key", "tpid", "tracker_rows",
-                                 *(f.key for f in TRACKER_FIELDS if f.key != "tpid")])
+                                 *(f.key for f in TRACKER_FIELDS if f.key != "tpid"),
+                                 "status_number", "status_class", "status_raw",
+                                 "state_raw", "migration_start_date_raw",
+                                 "migration_end_date_raw"])
 
 
 # --------------------------------------------------------------------------- #
@@ -334,13 +648,11 @@ def apply_to_fact(fact: pd.DataFrame, tracker: pd.DataFrame | None
                        else _blank_like(column, out.index))
     for column in ("eos_start_date", "eos_end_date"):
         out[column] = pd.to_datetime(out[column], errors="coerce")
-    for column in ("eos_sddcs_in_scope", "eos_sddcs_migrated"):
-        out[column] = pd.to_numeric(out[column], errors="coerce")
+    for column in _NUMBER_OVERLAY:
+        out[column] = pd.to_numeric(out[column], errors="coerce").astype("float64")
     # Text columns as the nullable ``string`` dtype the rest of the frame uses:
     # an object column of Nones is what makes DuckDB guess, and guess wrong.
-    for column in ("eos_target_generation", "eos_tracker_status",
-                   "eos_tracker_state", "eos_tracker_region",
-                   "eos_tracker_customer"):
+    for column in _TEXT_OVERLAY:
         out[column] = out[column].astype("string")
     out[TRACKED_FLAG] = keys.isin(set(indexed.index)).to_numpy()
 
@@ -358,12 +670,83 @@ def apply_to_fact(fact: pd.DataFrame, tracker: pd.DataFrame | None
     return out, report
 
 
+_NUMBER_OVERLAY = ("eos_sddcs_in_scope", "eos_sddcs_migrated", "eos_status_number")
+
+
 def _blank_like(column: str, index) -> pd.Series:
     if column in ("eos_start_date", "eos_end_date"):
         return pd.Series(pd.NaT, index=index, dtype="datetime64[ns]")
-    if column in ("eos_sddcs_in_scope", "eos_sddcs_migrated"):
+    if column in _NUMBER_OVERLAY:
         return pd.Series(pd.NA, index=index, dtype="Float64").astype("float64")
     return pd.Series(pd.NA, index=index, dtype="string")
+
+
+def apply_status(fact: pd.DataFrame) -> pd.DataFrame:
+    """The sheet's Migration Status and Current State, written onto the waves.
+
+    For every account the sheet states a recognised status or state for, it
+    **replaces** the export's on each wave still open in the export — any wave
+    whose own Migration Status is not completed or cancelled — and, when every
+    wave is closed, on the latest one, so the account's current position is
+    always the sheet's.  A wave the export has closed keeps its status: a wave
+    delivered last year stays delivered, and its cores stay migrated.
+
+    Written onto the row: ``migration_status`` (``"4. Executing Migration"``),
+    ``migration_status_code`` (the sheet's own number), ``migration_status_label``
+    (``"Executing Migration"``), ``status_class`` and ``current_state``;
+    ``status_source`` becomes ``"EOS tracker"``.  The export's originals are kept
+    as ``fdo_migration_status`` and ``fdo_current_state``.  A wave the sheet
+    completes with no Actual End Date of its own takes the sheet's Actual
+    Migration End Date, so the migration it completes can be dated.
+
+    Expects the frame :func:`app.core.cleaning.build_fact_frame` has built up to
+    the point of splitting the status (``migration_status_code``,
+    ``migration_status_label``, ``status_class``).
+    """
+    out = fact
+    out["fdo_migration_status"] = out["migration_status"].astype("string")
+    out["fdo_current_state"] = out["current_state"].astype("string")
+    out["status_source"] = statuses.SOURCE_FDO
+    if out.empty or "eos_status_class" not in out.columns:
+        return out
+
+    has_status = out["eos_tracker_status"].notna().to_numpy()
+    has_state = out["eos_tracker_state"].notna().to_numpy()
+    stated = has_status | has_state
+    if not stated.any():
+        return out
+
+    keys = out["tpid_key"]
+    is_open = ~out["status_class"].isin(statuses.CLOSED)
+    any_open = is_open.groupby(keys).transform("any").astype(bool)
+    order = out.assign(
+        _wave=out["wave_num"].fillna(9_999) if "wave_num" in out.columns else 0,
+        _created=(out["created_date"].fillna(pd.Timestamp.max)
+                  if "created_date" in out.columns else pd.Timestamp.max))
+    latest_index = (order.sort_values(["tpid_key", "_wave", "_created"])
+                    .groupby("tpid_key", sort=False).tail(1).index)
+    is_latest = out.index.isin(latest_index)
+    target = (is_open | (~any_open & is_latest)).to_numpy() & stated
+
+    s = target & has_status
+    if s.any():
+        number = out.loc[s, "eos_status_number"]
+        out.loc[s, "migration_status"] = out.loc[s, "eos_tracker_status"].astype("string")
+        out.loc[s, "migration_status_code"] = number.to_numpy()
+        out.loc[s, "migration_status_label"] = [
+            _STATUS_BY_NUMBER[int(n)].name for n in number]
+        out.loc[s, "status_class"] = out.loc[s, "eos_status_class"].astype(str).to_numpy()
+    t = target & has_state
+    if t.any():
+        out.loc[t, "current_state"] = out.loc[t, "eos_tracker_state"].astype("string")
+    out.loc[target, "status_source"] = statuses.SOURCE_TRACKER
+
+    finished = target & (out["status_class"] == statuses.COMPLETED).to_numpy()
+    if "actual_end_date" in out.columns and "eos_end_date" in out.columns:
+        fill = finished & out["actual_end_date"].isna().to_numpy()
+        if fill.any():
+            out.loc[fill, "actual_end_date"] = out.loc[fill, "eos_end_date"]
+    return out
 
 
 def resolve_generation(fact: pd.DataFrame, tagged: pd.Series) -> tuple[pd.Series, pd.Series]:
@@ -391,6 +774,33 @@ def resolve_generation(fact: pd.DataFrame, tagged: pd.Series) -> tuple[pd.Series
     source[~known & (tagged == segments.GEN_UNCLASSIFIED)] = SOURCE_NONE
     source[known] = SOURCE_TRACKER
     return generation, source
+
+
+def status_state_disagreements(tracker: pd.DataFrame) -> pd.DataFrame:
+    """Accounts whose Migration Status and Current State cannot both be right.
+
+    * Migration Status *Completed* with a Current State other than Completed;
+    * Current State *Completed* with a Migration Status other than Completed;
+    * Migration Status *On Hold* or *Cancelled* with a Current State of On Track.
+
+    The account is still reported by the rule in
+    :func:`app.core.kpi.tracker_account_state` — this only says where to look.
+    """
+    if tracker is None or tracker.empty or "status_class" not in tracker.columns:
+        return pd.DataFrame()
+    cls = tracker["status_class"].astype("string")
+    state = tracker["current_state"].astype("string")
+    reasons = pd.Series(pd.NA, index=tracker.index, dtype="object")
+    done_not = cls.eq(statuses.COMPLETED) & state.notna() & state.ne(STATE_COMPLETED)
+    state_done = state.eq(STATE_COMPLETED) & cls.notna() & cls.ne(statuses.COMPLETED)
+    stopped = cls.isin((statuses.ON_HOLD, statuses.CANCELLED)) & state.eq(STATE_ON_TRACK)
+    reasons[done_not.fillna(False).to_numpy()] = "Status Completed, state is not"
+    reasons[state_done.fillna(False).to_numpy()] = "State Completed, status is not"
+    reasons[stopped.fillna(False).to_numpy()] = "Stopped, yet On Track"
+    rows = tracker[reasons.notna()].assign(issue=reasons[reasons.notna()])
+    keep = [c for c in ("tpid", "customer_name", "migration_status",
+                        "current_state", "issue") if c in rows.columns]
+    return rows[keep].reset_index(drop=True)
 
 
 def summary(fact: pd.DataFrame) -> pd.DataFrame:
@@ -426,12 +836,17 @@ def inconsistencies(fact: pd.DataFrame, tracker: pd.DataFrame | None,
         An Actual Migration End Date alongside fewer SDDCs migrated than in
         scope. Reported as the sheet states it; listed here because the two
         cells cannot both be right.
+    ``status_state_disagree``
+        Migration Status and Current State that contradict each other — see
+        :func:`status_state_disagreements`.
     """
     blank = pd.DataFrame()
     out = {"unmatched_tpids": blank, "untracked_eos_accounts": blank,
-           "generation_disagrees": blank, "ended_with_sddcs_outstanding": blank}
+           "generation_disagrees": blank, "ended_with_sddcs_outstanding": blank,
+           "status_state_disagree": blank}
     if tracker is None or tracker.empty:
         return out
+    out["status_state_disagree"] = status_state_disagreements(tracker)
 
     unmatched = set((overlay or {}).get("unmatched_tpids") or [])
     if unmatched:
