@@ -210,7 +210,7 @@ contradict them. These columns lead wherever they are filled in:
 | Column | What it decides |
 |---|---|
 | **Target SDDC Generation** (`Gen1` / `Gen2`) | The account's generation — and so its place in the EOS reports. Falls back to the `AVS Migration - Gen1/Gen2` tag. |
-| **Migration Status** | **Replaces the export's** for the account: `1. Kick-Off Awaited`, `2. Planning & Prerequisites`, `3. Ready for Migration`, `4. Executing Migration`, `5. Sign-off Pending`, `6. Completed`, `7. On Hold`, `8. Cancelled`. |
+| **Migration Status** | **Replaces the export's** for the account: `Kick-Off Awaited`, `Planning & Prerequisites`, `Ready for Migration`, `Executing Migration`, `Sign-off Pending`, `Completed`, `On Hold`, `Cancelled`. |
 | **Current State** | **Replaces the export's** for the account: `On Track`, `Completed`, `Blocked`. |
 | **Migration Start Date** | *Migration start* in the programme matrix. Falls back to the derivation from the earliest wave under way. |
 | **Actual Migration End Date** | *Migration end* in the programme matrix, and the date of a completed account. Falls back to the latest wave completing. |

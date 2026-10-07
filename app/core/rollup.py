@@ -75,7 +75,8 @@ def build_customer_rollup(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFra
     out["migration_status_label"] = last["migration_status_label"]
     out["migration_status_code"] = last["migration_status_code"]
     for column in ("migration_status", "status_class", "status_source",
-                   "fdo_migration_status", "fdo_current_state"):
+                   "fdo_migration_status", "fdo_current_state",
+                   "fdo_actual_end_date"):
         if column in df.columns:
             out[column] = last[column]
     out["ww_region"] = last["ww_region"]

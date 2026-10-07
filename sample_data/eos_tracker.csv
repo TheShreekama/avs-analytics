@@ -1,7 +1,7 @@
 TPID,Customer,Region,Migration Status,Current State,Target SDDC Generation,Total SDDCs in Scope for Migration,Number of SDDCs Migrated,Migration Start Date,Actual Migration End Date,Programme Notes
-672112,CHUBB,Americas - Enterprise,4. Executing Migration,On Track,Gen1,3,1,03-02-2026,,Node refresh scheduled in two tranches
-12039532,PROMETRIC INC,Americas - Enterprise,2. Planning & Prerequisites,Blocked,Gen2,2,0,04-06-2026,,Awaiting capacity confirmation
-2843186,IFS North American,Americas SME&C,6. Completed,Completed,Gen2,1,1,10-01-2025,02-12-2026,Completed ahead of plan
-604010,Nestec SA,EMEA,5. Sign-off Pending,On Track,Gen1,4,4,01-12-2026,,Customer sign-off scheduled
-645306,FORTUNE BRANDS,Americas - Enterprise,7. On Hold,Blocked,Gen1,2,0,,,Paused pending budget approval
-88888888,CONTOSO REFRESH LTD,Americas - Enterprise,1. Kick-Off Awaited,On Track,Gen2,2,0,05-04-2026,,Nomination not yet raised in FDO
+672112,CHUBB,Americas - Enterprise,Executing Migration,On Track,Gen1,3,1,03-02-2026,,Node refresh scheduled in two tranches
+12039532,PROMETRIC INC,Americas - Enterprise,Planning & Prerequisites,Blocked,Gen2,2,0,04-06-2026,,Awaiting capacity confirmation
+2843186,IFS North American,Americas SME&C,Completed,Completed,Gen2,1,1,10-01-2025,02-12-2026,Completed ahead of plan
+604010,Nestec SA,EMEA,Sign-off Pending,On Track,Gen1,4,4,01-12-2026,,Customer sign-off scheduled
+645306,FORTUNE BRANDS,Americas - Enterprise,On Hold,Blocked,Gen1,2,0,,,Paused pending budget approval
+88888888,CONTOSO REFRESH LTD,Americas - Enterprise,Kick-Off Awaited,On Track,Gen2,2,0,05-04-2026,,Nomination not yet raised in FDO

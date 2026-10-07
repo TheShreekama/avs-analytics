@@ -981,19 +981,34 @@ def test_more_ways_of_writing_a_generation_are_read(value, expected):
 # --------------------------------------------------------------------------- #
 # The tracking sheet's Migration Status and Current State
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("value,number", [
-    ("1. Kick-Off Awaited", 1), ("kick off awaited", 1),
-    ("2 - Planning and Pre-requisites", 2), ("Planning & Prerequisites", 2),
-    ("3", 3), ("4. Executing Migration", 4), ("Sign-Off Pending", 5),
-    ("6. Completed", 6), ("7. on hold", 7), ("8. Canceled", 8),
-    # The export's vocabulary is not the sheet's: "5 - Deferred by Customer"
-    # must not be read as the sheet's stage 5, "Sign-off Pending".
+@pytest.mark.parametrize("value,expected", [
+    ("Kick-Off Awaited", "Kick-Off Awaited"), ("kick off awaited", "Kick-Off Awaited"),
+    ("Planning and Pre-requisites", "Planning & Prerequisites"),
+    ("Planning & Prerequisites", "Planning & Prerequisites"),
+    ("Ready For Migration", "Ready for Migration"),
+    ("Executing Migration", "Executing Migration"), ("Sign-Off Pending", "Sign-off Pending"),
+    ("Completed", "Completed"), ("on hold", "On Hold"), ("Canceled", "Cancelled"),
+    # A number is never read — not alone, and not as a position in the list.
+    ("3", None), ("7", None),
+    # The export's vocabulary is not the sheet's.
     ("5 - Deferred by Customer", None), ("2 - Executing Pre-Requisites", None),
     ("", None), ("TBD", None),
 ])
-def test_the_sheets_migration_status_is_read_by_its_wording(value, number):
+def test_the_sheets_migration_status_is_read_by_its_wording(value, expected):
     found = eos_tracker.parse_status(value)
-    assert (found.number if found else None) == number
+    assert (found.text if found else None) == expected
+
+
+def test_the_sheets_statuses_are_written_without_numbers(raw_frame):
+    """The sheet's values carry no numbers, so neither does anything shown."""
+    assert all(not st.text[0].isdigit() for st in eos_tracker.TRACKER_STATUSES)
+    built, _tracker, _report = _status_sheet(raw_frame, [
+        ("200", "On Hold", "Blocked", "Gen1", ""),
+    ])
+    wave = built[(built["tpid"] == "200") & (built["phase"] == "Wave 8")].iloc[0]
+    assert wave["migration_status"] == "On Hold"
+    assert wave["migration_status_label"] == "On Hold"
+    assert pd.isna(wave["migration_status_code"])
 
 
 @pytest.mark.parametrize("value,expected", [
@@ -1019,10 +1034,10 @@ def _state_by_tpid(built):
 
 def test_the_sheets_status_and_state_decide_the_account(raw_frame):
     built, _tracker, _report = _status_sheet(raw_frame, [
-        ("200", "7. On Hold", "Blocked", "Gen1", ""),          # export: On-Track
-        ("100", "4. Executing Migration", "On Track", "Gen1", ""),  # export: Completed
-        ("300", "8. Cancelled", "", "Gen2", ""),               # export: Completed
-        ("400", "2. Planning & Prerequisites", "Blocked", "Gen1", ""),
+        ("200", "On Hold", "Blocked", "Gen1", ""),          # export: On-Track
+        ("100", "Executing Migration", "On Track", "Gen1", ""),  # export: Completed
+        ("300", "Cancelled", "", "Gen2", ""),               # export: Completed
+        ("400", "Planning & Prerequisites", "Blocked", "Gen1", ""),
     ])
     states = _state_by_tpid(built)
     assert states["200"] == kpi.STATE_ON_HOLD
@@ -1036,12 +1051,12 @@ def test_the_sheets_status_and_state_decide_the_account(raw_frame):
 def test_only_the_waves_still_open_take_the_sheets_status(raw_frame):
     """A wave the export closed stays closed; the open one takes the sheet's."""
     built, _tracker, _report = _status_sheet(raw_frame, [
-        ("200", "7. On Hold", "Blocked", "Gen1", ""),
+        ("200", "On Hold", "Blocked", "Gen1", ""),
     ])
     waves = built[built["tpid"] == "200"].set_index("phase")
     assert waves.loc["Wave 7", "migration_status"] == "7 - Completed"
     assert waves.loc["Wave 7", "status_source"] == "FDO export"
-    assert waves.loc["Wave 8", "migration_status"] == "7. On Hold"
+    assert waves.loc["Wave 8", "migration_status"] == "On Hold"
     assert waves.loc["Wave 8", "current_state"] == "Blocked"
     assert waves.loc["Wave 8", "status_source"] == "EOS tracker"
     # The export's own words are kept beside the sheet's.
@@ -1054,17 +1069,17 @@ def test_only_the_waves_still_open_take_the_sheets_status(raw_frame):
 
 def test_with_every_wave_closed_the_latest_takes_the_sheets_status(raw_frame):
     built, _tracker, _report = _status_sheet(raw_frame, [
-        ("100", "4. Executing Migration", "On Track", "Gen1", ""),
+        ("100", "Executing Migration", "On Track", "Gen1", ""),
     ])
     waves = built[built["tpid"] == "100"].set_index("phase")
     assert waves.loc["Wave 1", "migration_status"] == "7 - Completed"
-    assert waves.loc["Wave 2", "migration_status"] == "4. Executing Migration"
+    assert waves.loc["Wave 2", "migration_status"] == "Executing Migration"
     assert kpi.on_track_accounts(built[built["tpid"] == "100"]).count == 1
 
 
 def test_a_completion_the_sheet_states_is_dated_by_the_sheet(raw_frame):
     built, _tracker, _report = _status_sheet(raw_frame, [
-        ("300", "6. Completed", "Completed", "Gen2", "09-05-2026"),
+        ("300", "Completed", "Completed", "Gen2", "09-05-2026"),
     ])
     pop = built[built["tpid"] == "300"]
     done = kpi.migrations_completed(pop, pd.Timestamp("2026-09-01"),
@@ -1091,34 +1106,34 @@ def test_a_status_the_sheet_does_not_recognise_leaves_the_export_answering(raw_f
 
 def test_an_account_is_as_far_along_as_its_least_advanced_row():
     tracker, read = eos_tracker.build_tracker(_sheet([
-        ("100", "A", "Americas", "6. Completed", "Completed", "Gen1", "1", "1", "", "", ""),
-        ("100", "A", "Americas", "3. Ready for Migration", "Blocked", "Gen1", "1", "0", "", "", ""),
-        ("100", "A", "Americas", "4. Executing Migration", "On Track", "Gen1", "1", "0", "", "", ""),
+        ("100", "A", "Americas", "Completed", "Completed", "Gen1", "1", "1", "", "", ""),
+        ("100", "A", "Americas", "Ready for Migration", "Blocked", "Gen1", "1", "0", "", "", ""),
+        ("100", "A", "Americas", "Executing Migration", "On Track", "Gen1", "1", "0", "", "", ""),
     ]))
     row = tracker.iloc[0]
-    assert row["migration_status"] == "3. Ready for Migration"
+    assert row["migration_status"] == "Ready for Migration"
     assert row["current_state"] == "Blocked"
     assert read["status_conflicts"] == ["100"]
 
 
-def test_the_sheets_stages_are_labelled_apart_from_the_exports(raw_frame):
-    """Stage 4 in the export and stage 4 in the sheet are different stages."""
+def test_the_sheets_stages_are_labelled_by_their_wording(raw_frame):
+    """A sheet stage has no number, so it is shown by name; the export's keep theirs."""
     built, _tracker, _report = _status_sheet(raw_frame, [
-        ("500", "2. Planning & Prerequisites", "On Track", "Gen1", ""),
+        ("500", "Planning & Prerequisites", "On Track", "Gen1", ""),
     ])
     lasts = kpi.latest_wave(built)
     labels, legend = kpi.stage_labels(lasts)
     by_tpid = dict(zip(lasts["tpid"].astype(str), labels))
-    assert by_tpid["500"] == "EOS 2"
+    assert by_tpid["500"] == "Planning & Prerequisites"
     assert by_tpid["200"] == "Stage 4"
-    assert ("EOS 2", "Planning & Prerequisites") in legend
+    assert all(not name[0].isdigit() for _short, name in legend)
     summary, _rows = kpi.on_track_by_stage(built, lasts)
     assert "Planning & Prerequisites" in set(summary["category"])
 
 
 def test_the_pipeline_leaves_out_what_the_sheet_put_on_hold(raw_frame):
     built, _tracker, _report = _status_sheet(raw_frame, [
-        ("200", "7. On Hold", "On Track", "Gen1", ""),
+        ("200", "On Hold", "On Track", "Gen1", ""),
     ])
     eligible = built[kpi.eligible_pipeline_waves(built)]
     assert "200" not in set(eligible["tpid"].astype(str))
@@ -1126,10 +1141,10 @@ def test_the_pipeline_leaves_out_what_the_sheet_put_on_hold(raw_frame):
 
 def test_the_sheets_contradictions_are_listed():
     tracker, _read = eos_tracker.build_tracker(_sheet([
-        ("1", "A", "Americas", "6. Completed", "On Track", "Gen1", "1", "1", "", "", ""),
-        ("2", "B", "Americas", "4. Executing Migration", "Completed", "Gen1", "1", "1", "", "", ""),
-        ("3", "C", "Americas", "7. On Hold", "On Track", "Gen1", "1", "0", "", "", ""),
-        ("4", "D", "Americas", "4. Executing Migration", "On Track", "Gen1", "1", "0", "", "", ""),
+        ("1", "A", "Americas", "Completed", "On Track", "Gen1", "1", "1", "", "", ""),
+        ("2", "B", "Americas", "Executing Migration", "Completed", "Gen1", "1", "1", "", "", ""),
+        ("3", "C", "Americas", "On Hold", "On Track", "Gen1", "1", "0", "", "", ""),
+        ("4", "D", "Americas", "Executing Migration", "On Track", "Gen1", "1", "0", "", "", ""),
     ]))
     issues = eos_tracker.status_state_disagreements(tracker)
     assert sorted(issues["tpid"].astype(str)) == ["1", "2", "3"]
@@ -1188,12 +1203,12 @@ def test_a_tpid_written_with_separators_still_joins(raw_frame):
 def test_a_title_above_the_headers_is_skipped():
     csv = ("EOS Programme Tracker - FY26\n\n"
            "TPID,Customer,Migration Status,Current State,Target SDDC Generation\n"
-           "100,Alpha,4. Executing Migration,On Track,Gen1\n").encode()
+           "100,Alpha,Executing Migration,On Track,Gen1\n").encode()
     raw, notes = eos_tracker.read_tracker_files([("t.csv", csv)])
     assert notes[0]["header_row"] == 3
     tracker, _read = eos_tracker.build_tracker(raw)
     assert list(tracker["tpid"]) == ["100"]
-    assert tracker.iloc[0]["migration_status"] == "4. Executing Migration"
+    assert tracker.iloc[0]["migration_status"] == "Executing Migration"
 
 
 def test_the_workbook_sheet_with_a_tpid_column_is_the_one_read():
@@ -1217,9 +1232,9 @@ def test_the_workbook_sheet_with_a_tpid_column_is_the_one_read():
 def test_the_programme_tracker_reports_the_sheet_including_unmatched_accounts(raw_frame):
     from app.core import eos_programme
     built, tracker, _report = _status_sheet(raw_frame, [
-        ("200", "4. Executing Migration", "On Track", "Gen1", ""),
-        ("300", "6. Completed", "Completed", "Gen2", "09-05-2026"),
-        ("999999", "1. Kick-Off Awaited", "Blocked", "Gen2", ""),
+        ("200", "Executing Migration", "On Track", "Gen1", ""),
+        ("300", "Completed", "Completed", "Gen2", "09-05-2026"),
+        ("999999", "Kick-Off Awaited", "Blocked", "Gen2", ""),
     ])
     report = eos_programme.build(tracker, built, pd.Timestamp("2026-09-30"))
     acc = report.accounts.set_index("tpid")
@@ -1228,8 +1243,8 @@ def test_the_programme_tracker_reports_the_sheet_including_unmatched_accounts(ra
     assert acc.loc["200", "customer"] == "Bravo"          # the export's name
     assert report.tiles["on_track"] == 1 and report.tiles["blocked"] == 1
     assert report.tiles["completed"] == 1
-    assert report.by_status.loc["4. Executing Migration", "Total"] == 1
-    assert report.status_state.loc["1. Kick-Off Awaited", "Blocked"] == 1
+    assert report.by_status.loc["Executing Migration", "Total"] == 1
+    assert report.status_state.loc["Kick-Off Awaited", "Blocked"] == 1
     assert list(report.attention["tpid"]) == ["999999"]
 
 
@@ -3172,7 +3187,7 @@ def test_both_reports_carry_the_programme_tracker():
         assert section in pdf, f"missing from the PDF: {section}"
         assert esc(section) in html, f"missing from the HTML report: {section}"
     # The sheet's own vocabulary reaches the page.
-    assert "7. On Hold" in pdf and "7. On Hold" in html
+    assert "On Hold" in pdf and "On Hold" in html
     # Not without the EOS report, and not when it is switched off.
     assert "Every tracked account" not in _pdf_text(ctx, reports=["avs"],
                                                     drilldown=False)
@@ -3186,7 +3201,7 @@ def test_an_empty_eos_report_says_when_the_sheet_matched_nothing():
     from app.core import html_report
     data = state_mod.SAMPLE_DATA.read_bytes()
     sheet = ("TPID,Target SDDC Generation,Migration Status,Current State\n"
-             "111,Gen1,4. Executing Migration,On Track\n").encode()
+             "111,Gen1,Executing Migration,On Track\n").encode()
     ctx = state_mod.build_dataset([(state_mod.SAMPLE_DATA.name, data)],
                                   tracker_files=[("t.csv", sheet)],
                                   tracker_dayfirst=None)
@@ -3283,3 +3298,35 @@ def test_the_verdict_says_when_no_report_can_place_a_row():
     window = (pd.Timestamp("2020-01-01").date(), pd.Timestamp("2020-12-31").date())
     assert "NOTHING FALLS IN THE REPORTING PERIOD" in " ".join(
         diagnostics.verdicts(_sample_with_sheet(), period=window))
+
+
+def test_engagement_end_is_the_exports_date_even_when_the_sheet_dates_migration_end(raw_frame):
+    """Migration end takes the sheet's date; engagement end never does."""
+    built, _tracker, _report = _status_sheet(raw_frame, [
+        ("300", "Completed", "Completed", "Gen2", "09-05-2026"),
+    ])
+    pop = built[built["tpid"] == "300"]
+    months = kpi.month_span("2026-07-01", "2026-09-30")
+    grid = kpi.monthly_matrix(pop, months).set_index("Measure")
+    assert grid.loc["Total number of migration end", "Sep-26"] == "1"      # the sheet
+    assert grid.loc["Total number of engagement end", "Aug-26"] == "1"     # the export
+    assert grid.loc["Total number of engagement end", "Sep-26"] == "0"
+
+
+def test_nodes_deployment_planned_never_counts_from_avs():
+    """From AVS belongs to AVS → Azure Native — on the path or on the offering."""
+    frame = pd.DataFrame({
+        "tpid_key": ["1", "2", "3"], "task_id": ["a", "b", "c"],
+        "factory_offering": ["AVS Migration Nominations",
+                             "AVS Migration Nominations (From AVS)",
+                             "AVS Migration Nominations"],
+        "migration_path": ["Onprem to AVS", "Onprem to AVS",
+                           "SQL Server MI Migration (From AVS)"],
+        "nomination_status": ["Approved"] * 3, "current_state": ["On Track"] * 3,
+        "migration_status": ["4 - Executing Migration"] * 3,
+        "migration_status_code": [4, 4, 4], "migration_status_label": ["Executing Migration"] * 3,
+        "total_cores": [10, 20, 40], "total_acr": [1, 2, 4],
+    })
+    assert kpi.nodes_planned(frame).value == 10
+    assert kpi.acr_pipeline(frame, kpi.MOTION_AVS).value == 1
+    assert kpi.acr_pipeline(frame, kpi.MOTION_NATIVE).value == 4

@@ -5,8 +5,8 @@ Two documents state a migration's status, each with its own numbering:
 * the **FDO export** — ``1 - Validating Commitment & Initial Scope`` …
   ``4 - Executing Migration``, ``5 - Deferred By Customer``,
   ``6 - Cancelled / Archived``, ``7 - Completed``;
-* the **EOS tracking sheet** — ``1. Kick-Off Awaited`` … ``5. Sign-off
-  Pending``, ``6. Completed``, ``7. On Hold``, ``8. Cancelled``.
+* the **EOS tracking sheet** — ``Kick-Off Awaited`` … ``5. Sign-off
+  Pending``, ``Completed``, ``On Hold``, ``Cancelled``.
 
 The numbers collide (6 is *Cancelled* in one and *Completed* in the other), so
 no rule may test a number.  Every row instead carries ``status_class`` — one of
