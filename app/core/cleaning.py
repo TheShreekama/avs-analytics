@@ -345,6 +345,13 @@ def derive_eos_status(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.Series:
 # --------------------------------------------------------------------------- #
 # Main entry point
 # --------------------------------------------------------------------------- #
+#: The columns that make a row a nomination at all — see step 0 of
+#: :func:`build_fact_frame`.
+_IDENTITY_KEYS = ("tpid", "customer_name", "task_id", "account_id", "phase",
+                  "factory_offering", "migration_path", "nomination_status",
+                  "migration_status")
+
+
 def build_fact_frame(
     raw: pd.DataFrame,
     mapping: dict[str, str | None],
@@ -364,9 +371,28 @@ def build_fact_frame(
     Returns ``(fact_df, report)`` where report summarises parse stats and any
     data-quality issues encountered.
     """
+    report: dict = {"n_rows": len(raw), "unmapped": [], "parse": {}, "dq": {},
+                    "dq_samples": {}, "empty_rows": 0, "empty_rows_by_file": {}}
+    # 0) Rows with nothing in them.  Spreadsheet exports routinely carry
+    #    hundreds of rows that are formatted but empty; read as nominations they
+    #    become one bogus account with no TPID, no name and no status.  A row is
+    #    empty when every identifying column the mapping found is blank.
+    positions = np.arange(len(raw))
+    ident = [mapping.get(k) for k in _IDENTITY_KEYS
+             if mapping.get(k) and mapping.get(k) in raw.columns]
+    if ident and len(raw):
+        cells = raw[ident].astype("string").apply(lambda c: c.str.strip())
+        empty = cells.replace({"": pd.NA}).isna().all(axis=1).to_numpy()
+        if empty.any():
+            report["empty_rows"] = int(empty.sum())
+            if schema.SOURCE_FILE_COLUMN in raw.columns:
+                report["empty_rows_by_file"] = (
+                    raw.loc[empty, schema.SOURCE_FILE_COLUMN].astype(str)
+                    .value_counts().to_dict())
+            raw = raw.loc[~empty].reset_index(drop=True)
+            positions = positions[~empty]
     n = len(raw)
     fact = pd.DataFrame(index=raw.index)
-    report: dict = {"n_rows": n, "unmapped": [], "parse": {}, "dq": {}, "dq_samples": {}}
 
     # 1) Pull mapped source columns into canonical names (raw strings first).
     for f in schema.CANONICAL_FIELDS:
@@ -385,7 +411,7 @@ def build_fact_frame(
         fact["source_file"] = raw[schema.SOURCE_FILE_COLUMN].astype("string")
     # Where each row came from in the uploaded (combined) file, so a trace can
     # show the cells exactly as they were written beside what was read from them.
-    fact["raw_row"] = pd.RangeIndex(len(raw)).to_numpy()
+    fact["raw_row"] = positions
 
     # Track per-row data-quality notes.
     dq_flags: list[list[str]] = [[] for _ in range(n)]

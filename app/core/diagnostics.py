@@ -158,6 +158,142 @@ def eos_funnel(ctx, window: tuple | None = None) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------- #
+# The verdict — said in words before any table
+# --------------------------------------------------------------------------- #
+def _this_fy(ctx) -> tuple:
+    return metrics.date_preset_range(ctx.as_of, "This FY", FY_START_MONTH)[:2]
+
+
+def verdicts(ctx, last_failure: dict | None = None) -> list[str]:
+    """Why the EOS report shows what it shows, in plain sentences, worst first."""
+    out: list[str] = []
+    fact = ctx.fact
+    if ctx.is_sample:
+        out.append("The BUNDLED SAMPLE is loaded, not your file. Upload again on "
+                   "Data & Upload (uploads last only for the browser session).")
+    empty = int(ctx.report.get("empty_rows", 0))
+    if empty:
+        where = ", ".join(f"{f} ({n:,})" for f, n in
+                          (ctx.report.get("empty_rows_by_file") or {}).items())
+        out.append(f"{empty:,} of {int(ctx.report.get('n_rows', 0)):,} rows in the "
+                   f"FDO file(s) were empty — no TPID, name, wave, offering or status "
+                   f"— and are skipped" + (f": {where}." if where else "."))
+    for row in files_report(ctx).to_dict("records"):
+        if row["Rows kept"] == 0:
+            out.append(f"File '{row['File']}' contributed no usable rows — its "
+                       "headers are not the ones the other file uses, or it has a "
+                       "title above the header row.")
+    dupes = int(ctx.report.get("duplicate_task_ids", 0) or 0)
+    if dupes:
+        out.append(f"{dupes:,} Task IDs appear more than once — if both files are "
+                   "exports of the same view, upload only the newer one.")
+    if last_failure:
+        out.append(f"The last upload FAILED ({last_failure['when']}): "
+                   f"{last_failure['file']} at '{last_failure['stage']}' — "
+                   f"{last_failure['message']}")
+    if fact.empty:
+        out.append("No usable FDO rows are loaded.")
+        return out
+    tagged = int(segments.generation_by_tpid(fact)
+                 .isin((segments.GEN_1, segments.GEN_2)).sum())
+    path = int(fact.groupby("tpid_key")["is_av36_eos"].any().sum())
+    if not tagged and not path:
+        out.append("Your FDO file marks NO account as EOS: no wave's Tags contain "
+                   "'AVS Migration - Gen1' or '- Gen2', and no Primary Migration "
+                   "Path, Factory Offering or Linked Offering reads 'AV36/AV36P/AV52 "
+                   "- EOS'. With this file, EOS accounts can only come from the EOS "
+                   "tracking sheet.")
+    if not ctx.has_tracker:
+        out.append("No EOS tracking sheet is loaded in this session"
+                   + (" — so every EOS report is empty." if not tagged else ".")
+                   + " Upload it on Data & Upload, section 2 (both uploads are "
+                   "needed every time the app starts).")
+    else:
+        read = ctx.tracker_report or {}
+        overlay = ctx.report.get("tracker") or {}
+        accounts, matched = int(read.get("accounts", 0)), int(overlay.get("matched_accounts", 0))
+        if not accounts:
+            out.append("The tracking sheet is loaded but no row has a TPID.")
+        elif not matched:
+            out.append(f"None of the sheet's {accounts:,} TPIDs is in the FDO "
+                       "dataset — compare the two TPID columns below.")
+        elif matched < accounts:
+            out.append(f"{matched:,} of the sheet's {accounts:,} TPIDs are in the FDO "
+                       f"dataset; the other {accounts - matched:,} are reported only on "
+                       "the EOS Programme Tracker page.")
+        if accounts and read.get("no_generation", 0) == accounts:
+            out.append("The sheet's Target SDDC Generation could not be read for any "
+                       "account (column: "
+                       f"{(read.get('mapping') or {}).get('target_generation') or 'NOT FOUND'}).")
+    eos = segments.population(fact, segments.CAT_EOS_ALL)
+    n_eos = int(eos["tpid_key"].nunique()) if not eos.empty else 0
+    if n_eos:
+        start, end = _this_fy(ctx)
+        created = pd.to_datetime(eos["created_date"], errors="coerce")
+        inside = int(eos.loc[created.between(start, end), "tpid_key"].nunique())
+        out.append(f"EOS has {n_eos:,} accounts over all time; {inside:,} have a Nom. "
+                   f"Created Date in This FY ({start:%d %b %Y} – {end:%d %b %Y}). "
+                   "A This-FY report shows only those — choose All time for the rest.")
+    else:
+        out.append("RESULT: 0 EOS accounts, so every EOS report says 'No nominations "
+                   "fall into this report'.")
+    return out
+
+
+def files_report(ctx) -> pd.DataFrame:
+    """Each uploaded FDO file: rows read, rows skipped as empty, rows kept."""
+    raw = ctx.raw
+    col = schema.SOURCE_FILE_COLUMN
+    if raw is None or raw.empty or col not in raw.columns:
+        return pd.DataFrame(columns=["File", "Rows read", "Empty rows skipped",
+                                     "Rows kept", "Accounts"])
+    read = raw[col].astype(str).value_counts()
+    empty = ctx.report.get("empty_rows_by_file") or {}
+    fact = ctx.fact
+    kept = (fact["source_file"].astype(str).value_counts()
+            if "source_file" in fact.columns else pd.Series(dtype=int))
+    accounts = (fact.groupby(fact["source_file"].astype(str))["tpid_key"].nunique()
+                if "source_file" in fact.columns and not fact.empty
+                else pd.Series(dtype=int))
+    return pd.DataFrame([{
+        "File": f, "Rows read": int(n), "Empty rows skipped": int(empty.get(f, 0)),
+        "Rows kept": int(kept.get(f, 0)), "Accounts": int(accounts.get(f, 0)),
+    } for f, n in read.items()])
+
+
+def categories(ctx) -> pd.DataFrame:
+    """Every report's population: accounts over all time, and in This FY."""
+    fact = ctx.fact
+    start, end = _this_fy(ctx)
+    rows = []
+    for cat, label in segments.CATEGORY_LABELS.items():
+        pop = segments.population(fact, cat) if not fact.empty else fact
+        if pop.empty:
+            rows.append({"Report": label, "Accounts (all time)": 0,
+                         "Created This FY": 0, "New Engagements This FY": 0})
+            continue
+        created = pd.to_datetime(pop["created_date"], errors="coerce")
+        rows.append({
+            "Report": label,
+            "Accounts (all time)": int(pop["tpid_key"].nunique()),
+            "Created This FY": int(pop.loc[created.between(start, end),
+                                           "tpid_key"].nunique()),
+            "New Engagements This FY": kpi.new_engagements(pop, start, end).count,
+        })
+    return pd.DataFrame(rows)
+
+
+def value_report(ctx, key: str, n: int = 10) -> pd.DataFrame:
+    """The most common values of one FDO column, as read."""
+    fact = ctx.fact
+    if fact.empty or key not in fact.columns:
+        return pd.DataFrame()
+    counts = (fact[key].astype("string").fillna("(blank)").value_counts().head(n))
+    return pd.DataFrame({_label(key): [str(v)[:70] for v in counts.index],
+                         "Rows": counts.to_numpy()})
+
+
+# --------------------------------------------------------------------------- #
 # Columns as read
 # --------------------------------------------------------------------------- #
 def column_report(ctx) -> pd.DataFrame:
@@ -364,10 +500,27 @@ def example_tpids(ctx, n: int = 8) -> list[str]:
 # --------------------------------------------------------------------------- #
 def summary_text(ctx, funnel: pd.DataFrame | None = None,
                  columns: pd.DataFrame | None = None,
-                 traced: dict | None = None) -> str:
+                 traced: dict | None = None,
+                 last_failure: dict | None = None) -> str:
     """The whole diagnosis as plain text, short enough for one screen."""
-    lines = ["== LOADED =="]
+    lines = ["== VERDICT =="]
+    lines += [f"* {v}" for v in verdicts(ctx, last_failure)]
+    lines.append("== LOADED ==")
     lines += [f"{k}: {val}" for k, val in loaded(ctx)]
+    files = files_report(ctx)
+    if not files.empty:
+        lines.append("== FDO FILES (read / empty skipped / kept / accounts) ==")
+        lines += [f"{r['File']}: {r['Rows read']:,} / {r['Empty rows skipped']:,} / "
+                  f"{r['Rows kept']:,} / {r['Accounts']:,}"
+                  for r in files.to_dict("records")]
+    lines.append("== REPORTS (accounts all time / created This FY / new engagements This FY) ==")
+    lines += [f"{r['Report']}: {r['Accounts (all time)']:,} / {r['Created This FY']:,} / "
+              f"{r['New Engagements This FY']:,}" for r in categories(ctx).to_dict("records")]
+    for key in ("migration_path", "factory_offering"):
+        values = value_report(ctx, key, 8)
+        if not values.empty:
+            lines.append(f"== TOP {_label(key).upper()} VALUES ==")
+            lines += [f"{n:>6,}  {v}" for v, n in values.itertuples(index=False)]
     funnel = eos_funnel(ctx) if funnel is None else funnel
     lines.append("== EOS FUNNEL ==")
     for step, count, note in funnel.itertuples(index=False):

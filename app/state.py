@@ -225,6 +225,8 @@ def get_context() -> DataContext | None:
 
 
 RAW_FILES_KEY = "avs_raw_files"
+#: The last upload that failed, kept for the Debug page.
+LAST_FAILURE_KEY = "avs_last_failure"
 TRACKER_FILES_KEY = "avs_tracker_files"
 
 #: Passed where ``None`` already means "no tracking sheet", so a caller can say

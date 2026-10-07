@@ -278,6 +278,16 @@ under Streamlit's AppTest in both counting modes.
   decision with its reason. `fact["raw_row"]` (position in the combined upload) is what lets
   a trace show a cell as written; `report["scope"]["excluded_tpids"]` names accounts the
   FY25 floor dropped. The sidebar also warns whenever the sample is active.
+  `diagnostics.verdicts` leads the page and the text block with the cause in words (sample
+  loaded, empty rows skipped, a file contributing nothing, duplicate Task IDs, the last
+  failed upload — `state.LAST_FAILURE_KEY`, set by `data_upload._failure_panel` — no EOS
+  marker in the FDO file, no/unmatched sheet, period vs all-time); it also lists every
+  report's account counts and the top Primary Migration Path / Factory Offering values.
+- **Empty rows are skipped** (`cleaning.build_fact_frame` step 0): a row whose every mapped
+  identity column (`_IDENTITY_KEYS`: TPID, name, task, account, wave, offering, path,
+  nomination/migration status) is blank is dropped and counted in `report["empty_rows"]`
+  / `["empty_rows_by_file"]` — real exports carry hundreds of formatted-but-empty rows,
+  which used to become one bogus no-TPID account.
 - **EOS Programme Tracker** (`eos_programme.build` → `Programme`): the **sheet itself**, one
   row per TPID including ones the FDO lacks (`in_fdo`), with name/WW Region/PM/ACR (non
   From-AVS waves) looked up by TPID. Tiles, by status × gen, by state × gen, status × state,

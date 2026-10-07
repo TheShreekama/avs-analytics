@@ -389,6 +389,13 @@ def _failure_panel(failure: loader.IngestFailure) -> None:
     has to be self-diagnosing: which file, which step, which line of this code,
     what it most likely means, and the raw traceback to paste into a bug report.
     """
+    # Remembered for the Debug page: a failed sheet upload otherwise leaves no
+    # trace once the reader has moved on, and the reports simply lack the sheet.
+    st.session_state[state.LAST_FAILURE_KEY] = {
+        "when": pd.Timestamp.now().strftime("%d %b %Y %H:%M"),
+        "file": failure.filename, "stage": failure.stage_label,
+        "message": f"{failure.exc_type}: {failure.message}"[:300],
+        "hint": failure.hint, "origin": failure.origin}
     st.error(f"**Could not load {failure.filename}.** "
              f"It failed while **{failure.stage_label.lower()}**.")
     st.markdown(f"**{failure.exc_type}:** `{failure.message}`")

@@ -3242,3 +3242,31 @@ def test_the_trace_names_an_account_the_reporting_floor_dropped(raw_frame):
                       con=None)
     assert "before the FY25 reporting floor" in " ".join(
         diagnostics.trace(ctx, "500")["verdicts"])
+
+
+def test_empty_rows_in_an_export_are_skipped_and_counted(raw_frame):
+    padded = pd.concat([raw_frame, pd.DataFrame("", index=range(25),
+                                                 columns=raw_frame.columns)],
+                       ignore_index=True)
+    padded[schema.SOURCE_FILE_COLUMN] = ["a.xlsx"] * len(raw_frame) + ["b.xlsx"] * 25
+    mp = mapping.resolve_mapping(list(raw_frame.columns))
+    built, report = cleaning.build_fact_frame(padded, mp, pd.Timestamp("2026-09-01"))
+    assert report["empty_rows"] == 25
+    assert report["empty_rows_by_file"] == {"b.xlsx": 25}
+    assert len(built) == len(raw_frame)
+    # No account is conjured out of the blank rows.
+    assert not built["tpid_key"].astype(str).str.startswith("NAME:").any()
+
+
+def test_the_verdict_names_why_eos_is_empty():
+    from app import state as state_mod
+    from app.core import diagnostics
+    # The shape of a real export: no Gen tag and no EOS path anywhere.
+    data = state_mod.SAMPLE_DATA.read_bytes().replace(b"AVS36 - EGS", b"Onprem to AVS")
+    ctx = state_mod.build_dataset([("export.csv", data)], tracker_dayfirst=None)
+    text = " ".join(diagnostics.verdicts(ctx))
+    assert "marks NO account as EOS" in text
+    assert "No EOS tracking sheet is loaded" in text
+    assert "RESULT: 0 EOS accounts" in text
+    cats = diagnostics.categories(ctx).set_index("Report")
+    assert cats.loc["All AVS Migrations", "Accounts (all time)"] > 0
