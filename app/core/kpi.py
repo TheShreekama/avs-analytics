@@ -46,7 +46,8 @@ DRILLDOWN_COLUMNS = [
     "tpid", "customer_name", "solution_architect", "assigned_pm",
     "migration_category", "generation", "source_platform",
     "target_platform", "phase", "avs_sku", "migration_status_label", "approval_date",
-    "actual_start_date", "actual_end_date", "total_cores", "total_acr",
+    "actual_start_date", "actual_end_date", "reported_end_date", "end_date_source",
+    "total_cores", "total_acr",
     "current_state", "region_geo", "factory_offering", "migration_path",
 ]
 
@@ -319,24 +320,77 @@ def migrations_completed(fact: pd.DataFrame, start=None, end=None,
         return Metric(0, "customers")
     lasts = latest_wave(fact) if lasts is None else lasts
     done = lasts[account_state(fact, lasts) == STATE_COMPLETED].copy()
-    done["completion_date"] = completion_dates(done)
+    dates, sources = completion_dates(fact, done["tpid_key"])
+    done["completion_date"] = dates.to_numpy()
+    done["reported_end_date"] = done["completion_date"]
+    done["end_date_source"] = sources.to_numpy()
     hit = done[in_window(done["completion_date"], start, end)]
     return Metric(len(hit), "customers", hit)
 
 
-def completion_dates(lasts: pd.DataFrame) -> pd.Series:
-    """When each completed account finished: its latest wave's **Actual End
-    Date** as the FDO export records it.
+#: Where a completed wave's end date is read from — the first one filled in.
+#: The export's Actual End Date leads; a completed wave nobody dated still
+#: finished, so the nearest date the export does hold stands in for it.
+END_DATE_CHAIN: tuple[tuple[str, str], ...] = (
+    ("actual_end_date", "Actual End Date"),
+    ("planned_end_date", "Planned End Date"),
+    ("actual_start_date", "Actual Start Date"),
+    ("planned_start_date", "Planned Start Date"),
+    ("approval_date", "Nom. Approval Date"),
+    ("created_date", "Nom. Created Date"),
+)
 
-    Never the tracking sheet's Actual Migration End Date (that dates the
-    matrix's *migration end* row), and never a date the sheet filled into a
-    blank wave (``fdo_actual_end_date`` is saved before it does).  So
-    Migrations Completed and the matrix's *engagement end* are one rule and
-    always reconcile over the same months.
+
+def end_dates(df: pd.DataFrame, fallback=True) -> tuple[pd.Series, pd.Series]:
+    """Per row: the end date to report it by, and the column it came from.
+
+    The **Actual End Date as the FDO export records it** (``fdo_actual_end_date``
+    — never a date the EOS tracking sheet filled in), then, where *fallback*
+    holds for the row, :data:`END_DATE_CHAIN` in order.  *fallback* is a bool
+    or a per-row mask: completed waves fall back, anything else is dated by its
+    own Actual End Date or not at all.
     """
-    column = ("fdo_actual_end_date" if "fdo_actual_end_date" in lasts.columns
-              else "actual_end_date")
-    return pd.to_datetime(lasts.get(column), errors="coerce")
+    date = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
+    source = pd.Series(pd.NA, index=df.index, dtype="object")
+    if df.empty:
+        return date, source
+    mask = (pd.Series(bool(fallback), index=df.index) if isinstance(fallback, bool)
+            else pd.Series(as_bool(fallback), index=df.index))
+    for position, (column, label) in enumerate(END_DATE_CHAIN):
+        if position == 0 and "fdo_actual_end_date" in df.columns:
+            column = "fdo_actual_end_date"
+        if column not in df.columns:
+            continue
+        values = pd.to_datetime(df[column], errors="coerce")
+        take = date.isna() & values.notna()
+        if position:
+            take &= mask
+        date = date.where(~take, values)
+        source = source.where(~take, label)
+    return date, source
+
+
+def as_bool(mask) -> list[bool]:
+    return [bool(v) if not pd.isna(v) else False for v in mask]
+
+
+def completion_dates(fact: pd.DataFrame, keys: pd.Series
+                     ) -> tuple[pd.Series, pd.Series]:
+    """When each completed account finished, read from its **latest wave itself**.
+
+    That wave's Actual End Date as the FDO export records it, else its Planned
+    End Date, Actual Start Date, Planned Start Date, Nom. Approval Date and Nom.
+    Created Date, in that order (:data:`END_DATE_CHAIN`).  Never the tracking
+    sheet's Actual Migration End Date (that dates the matrix's *migration end*
+    row), so Migrations Completed and the matrix's *engagement end* are one
+    rule and always reconcile.  Returned aligned to *keys*.
+    """
+    latest = (_ordered(fact).groupby("tpid_key", sort=False).tail(1)
+              .set_index("tpid_key"))
+    rows = latest.reindex(pd.Index(keys))
+    dates, sources = end_dates(rows, True)
+    return (pd.Series(dates.to_numpy(), index=keys.index),
+            pd.Series(sources.to_numpy(), index=keys.index))
 
 
 def migration_starts(fact: pd.DataFrame, start=None, end=None) -> Metric:
@@ -425,9 +479,10 @@ def migration_end_dates(fact: pd.DataFrame,
     derived = pd.DataFrame()
     if not done.empty:
         derived = done.assign(
-            migration_end_date=pd.to_datetime(done["actual_end_date"],
-                                              errors="coerce"),
-            end_date_source=FDO_END_SOURCE)
+            migration_end_date=done["completion_date"],
+            end_date_source=[FDO_END_SOURCE if src == "Actual End Date"
+                             else f"{src} (latest wave, no Actual End Date)"
+                             for src in done["end_date_source"]])
         derived = derived[derived["migration_end_date"].notna()]
     tracked = _tracked_dates(fact, "eos_end_date", "migration_end_date",
                              "end_date_source", TRACKER_END_SOURCE)
@@ -450,8 +505,7 @@ def engagement_end_dates(fact: pd.DataFrame,
     if done.empty:
         return done
     # The very date Migrations Completed is counted by, so the two reconcile.
-    rows = done.assign(engagement_end_date=done["completion_date"],
-                       end_date_source="Actual End Date (latest wave)")
+    rows = done.assign(engagement_end_date=done["completion_date"])
     return rows[rows["engagement_end_date"].notna()].reset_index(drop=True)
 
 
@@ -541,8 +595,8 @@ def hosts_migrated(fact: pd.DataFrame, start=None, end=None) -> Metric:
     """
     if fact.empty:
         return Metric(0, "hosts")
-    rows = fact[is_completed(fact)]
-    rows = rows[in_window(rows["actual_end_date"], start, end)]
+    rows = _with_end_dates(fact[is_completed(fact)])
+    rows = rows[in_window(rows["reported_end_date"], start, end)]
     rows = _dedupe_records(rows)
     total = float(pd.to_numeric(rows.get("total_cores"), errors="coerce").sum())
     return Metric(total, "hosts", rows)
@@ -558,9 +612,21 @@ def acr_claimed(fact: pd.DataFrame, start=None, end=None) -> Metric:
     """
     if fact.empty:
         return Metric(0.0, "ACR")
-    rows = _dedupe_records(fact[in_window(fact["actual_end_date"], start, end)])
+    rows = _with_end_dates(fact)
+    rows = _dedupe_records(rows[in_window(rows["reported_end_date"], start, end)])
     total = float(pd.to_numeric(rows.get("total_acr"), errors="coerce").sum())
     return Metric(total, "ACR", rows)
+
+
+def _with_end_dates(rows: pd.DataFrame) -> pd.DataFrame:
+    """Waves carrying the date they are reported by (:func:`end_dates`): a
+    completed wave falls back along :data:`END_DATE_CHAIN`; any other wave
+    counts only on its own Actual End Date."""
+    if rows.empty:
+        return rows.assign(reported_end_date=pd.Series(dtype="datetime64[ns]"),
+                           end_date_source=pd.Series(dtype="object"))
+    dates, sources = end_dates(rows, is_completed(rows))
+    return rows.assign(reported_end_date=dates, end_date_source=sources)
 
 
 def on_track_accounts(fact: pd.DataFrame,
@@ -629,7 +695,7 @@ def monthly_acr_claimed(fact: pd.DataFrame, start=None, end=None
     rows = metric.records.copy()
     if rows.empty:
         return _empty_trend("ACR Claimed"), rows
-    rows["month"] = _month(rows["actual_end_date"])
+    rows["month"] = _month(rows["reported_end_date"])
     rows["_acr"] = pd.to_numeric(rows.get("total_acr"), errors="coerce")
     summary = rows.groupby("month", as_index=False).agg(value=("_acr", "sum"))
     return _finish_trend(summary, "ACR Claimed"), rows
@@ -639,11 +705,11 @@ def monthly_hosts(fact: pd.DataFrame, start=None, end=None) -> tuple[pd.DataFram
     """Hosts (Total Cores) completed per month, by actual end date."""
     if fact.empty:
         return _empty_trend("Hosts"), fact
-    rows = _dedupe_records(fact[is_completed(fact)])
-    rows = rows[in_window(rows["actual_end_date"], start, end)].copy()
+    rows = _dedupe_records(_with_end_dates(fact[is_completed(fact)]))
+    rows = rows[in_window(rows["reported_end_date"], start, end)].copy()
     if rows.empty:
         return _empty_trend("Hosts"), rows
-    rows["month"] = _month(rows["actual_end_date"])
+    rows["month"] = _month(rows["reported_end_date"])
     rows["_cores"] = pd.to_numeric(rows["total_cores"], errors="coerce")
     summary = rows.groupby("month", as_index=False).agg(value=("_cores", "sum"))
     return _finish_trend(summary, "Hosts"), rows
@@ -936,6 +1002,27 @@ def is_blocked(df: pd.DataFrame) -> pd.Series:
     return _current_state(df).str.contains("blocked", case=False, na=False).fillna(False)
 
 
+def account_acr(fact: pd.DataFrame) -> pd.Series:
+    """**Total ACR** per account (indexed by ``tpid_key``): summed across every
+    wave **except those whose Current State is Blocked** — money held up behind
+    a blocked wave is not money the account is bringing in.  NaN for an account
+    with no ACR on any counted wave."""
+    if fact.empty:
+        return pd.Series(dtype="float64")
+    acr = pd.to_numeric(fact.get("total_acr"), errors="coerce")
+    acr = acr.where(~is_blocked(fact).to_numpy())
+    return acr.groupby(_keys(fact).to_numpy()).sum(min_count=1)
+
+
+def held_up_acr(fact: pd.DataFrame) -> pd.Series:
+    """ACR per account across **every** wave, blocked ones included — what a
+    stopped account holds up, for the blocked, deferred & cancelled section."""
+    if fact.empty:
+        return pd.Series(dtype="float64")
+    acr = pd.to_numeric(fact.get("total_acr"), errors="coerce")
+    return acr.groupby(_keys(fact).to_numpy()).sum(min_count=1)
+
+
 def _state_key(values: pd.Series) -> pd.Series:
     """A Current State value reduced to what identifies it.
 
@@ -1188,7 +1275,8 @@ def by_state(fact: pd.DataFrame, lasts: pd.DataFrame | None = None,
         rows = rows[rows["state"].isin(only)]
     if rows.empty:
         return pd.DataFrame(columns=["category", "count", "acr"]), rows
-    rows["_acr"] = pd.to_numeric(rows.get("total_acr"), errors="coerce")
+    rows["total_acr"] = rows["tpid_key"].map(account_acr(fact)).to_numpy()
+    rows["_acr"] = pd.to_numeric(rows["total_acr"], errors="coerce")
     summary = (rows.groupby("state", as_index=False)
                    .agg(count=("tpid_key", "nunique"), acr=("_acr", "sum"))
                    .rename(columns={"state": "category"})
@@ -1301,7 +1389,8 @@ def excluded_accounts(fact: pd.DataFrame, lasts: pd.DataFrame | None = None
     rows = rows[rows["state"].isin(EXCLUDED_STATES)]
     if rows.empty:
         return pd.DataFrame(columns=["category", "count", "acr"]), rows
-    rows["_acr"] = pd.to_numeric(rows.get("total_acr"), errors="coerce")
+    rows["total_acr"] = rows["tpid_key"].map(held_up_acr(fact)).to_numpy()
+    rows["_acr"] = pd.to_numeric(rows["total_acr"], errors="coerce")
     summary = (rows.groupby("state", as_index=False)
                    .agg(count=("tpid_key", "nunique"), acr=("_acr", "sum"))
                    .rename(columns={"state": "category"})
@@ -1384,7 +1473,8 @@ def blocked_accounts(fact: pd.DataFrame, lasts: pd.DataFrame | None = None
     if rows.empty:
         return empty, rows
     rows["blocked_state"] = blocked_state_label(rows)
-    rows["_acr"] = pd.to_numeric(rows.get("total_acr"), errors="coerce")
+    rows["total_acr"] = rows["tpid_key"].map(held_up_acr(fact)).to_numpy()
+    rows["_acr"] = pd.to_numeric(rows["total_acr"], errors="coerce")
     summary = (rows.groupby("blocked_state", as_index=False)
                    .agg(count=("tpid_key", "nunique"), acr=("_acr", "sum"))
                    .rename(columns={"blocked_state": "category"})
@@ -1434,26 +1524,24 @@ MOTION_NATIVE = "native"    # AVS → Azure Native, and nothing else
 
 
 def mentions_from_avs(fact: pd.DataFrame) -> pd.Series:
-    """Waves whose Primary Migration Path **or** Factory Offering says "From AVS".
+    """Waves whose **Primary Migration Path** says "From AVS".
 
-    "From AVS" belongs to AVS → Azure Native and to nothing else, so wherever it
-    is written on a wave, the AVS and EOS figures leave that wave out.
+    The path and nothing else: "From AVS" is never written in an offering
+    name.  It belongs to AVS → Azure Native and to nothing else, so the AVS
+    and EOS figures leave such a wave out.
     """
-    if fact.empty:
-        return pd.Series(dtype=bool)
-    out = pd.Series(False, index=fact.index)
-    for column in ("migration_path", "factory_offering"):
-        if column in fact.columns:
-            out |= fact[column].astype("string").str.contains(
-                PIPELINE_FROM_AVS, case=False, na=False).fillna(False).astype(bool)
-    return out
+    if fact.empty or "migration_path" not in fact.columns:
+        return pd.Series(False, index=fact.index, dtype=bool)
+    return (fact["migration_path"].astype("string")
+            .str.contains(PIPELINE_FROM_AVS, case=False, na=False)
+            .fillna(False).astype(bool))
 
 
 def in_pipeline_scope(fact: pd.DataFrame, motion: str | None = None) -> pd.Series:
     """Waves the pipeline is counted over, by motion::
 
         AVS and EOS reports      Factory Offering = "AVS Migration Nominations"
-                                 and no "From AVS" in the path or the offering
+                                 and no "From AVS" in the path
         AVS → Azure Native       Primary Migration Path contains "From AVS"
 
     ``motion`` names the report (:data:`MOTION_AVS` / :data:`MOTION_NATIVE`);
@@ -1585,9 +1673,10 @@ def account_detail(fact: pd.DataFrame, approvals: pd.DataFrame | None = None,
     * **Wave-specific fields** (status, current state, region, cores, dates,
       owners) — the account's **latest** wave, so the row reads as where the
       account stands now.
-    * **Total ACR** — summed across **every** wave of the account.  An account
-      that claimed 10M, 15M and 20M over three waves has committed 45M; showing
-      the last wave's 20M would understate it.
+    * **Total ACR** — summed across every wave of the account **except blocked
+      ones** (:func:`account_acr`).  An account that claimed 10M, 15M and 20M
+      over three waves has committed 45M; showing the last wave's 20M would
+      understate it.
     * **Nomination approval date** — Wave-1's, because that is when the account
       was nominated, not when its latest wave was; when Wave-1 carries no
       approval date the rule falls through to the next wave that does
@@ -1601,9 +1690,7 @@ def account_detail(fact: pd.DataFrame, approvals: pd.DataFrame | None = None,
     lasts = latest_wave(fact) if lasts is None else lasts
 
     out = lasts.copy()
-    acr = (pd.to_numeric(fact.get("total_acr"), errors="coerce")
-           .groupby(fact["tpid_key"]).sum())
-    out["total_acr"] = out["tpid_key"].map(acr)
+    out["total_acr"] = out["tpid_key"].map(account_acr(fact))
     dates = approvals.set_index("tpid_key")["approval_date"]
     out["approval_date"] = out["tpid_key"].map(dates)
     return out.reset_index(drop=True)

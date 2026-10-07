@@ -324,7 +324,7 @@ def reconciliation(pop: pd.DataFrame, waves: kpi.WaveIndex) -> tuple[pd.DataFram
         return pd.DataFrame(columns=["State", "Accounts", "ACR", "Reported in"]), 0
     states = kpi.account_state(pop, lasts)
     frame = lasts.assign(_state=states,
-                         _acr=pd.to_numeric(lasts.get("total_acr"), errors="coerce"))
+                         _acr=lasts["tpid_key"].map(kpi.account_acr(pop)).to_numpy())
     _summary, blocked = kpi.blocked_accounts(pop, lasts=lasts)
     in_section = set(blocked["tpid_key"]) if not blocked.empty else set()
 
@@ -501,7 +501,8 @@ TOP_ACCOUNT_REPORTS = ("avs", "native")
 
 TOP_ACCOUNTS_NOTE = (
     "The accounts this category's money sits in, largest first. Total ACR is "
-    "summed across **every wave** of an account — an account with waves of 10M, "
+    "summed across **every wave** of an account except those whose Current "
+    "State is Blocked — an account with waves of 10M, "
     "15M and 20M is a 45M account — so the order is the account-level one the "
     "reconciliation and the account records both use. Accounts with no ACR are "
     "left out rather than listed as zeroes. **Read over the whole dataset, not "
@@ -525,7 +526,7 @@ def top_accounts_line(summary: pd.DataFrame, pop: pd.DataFrame) -> str:
     """One sentence stating what share of the category these accounts carry."""
     if summary.empty:
         return ""
-    total = float(pd.to_numeric(pop.get("total_acr"), errors="coerce").sum())
+    total = float(kpi.account_acr(pop).sum())
     shown = float(summary["acr"].sum())
     share = f" — {shown / total:.0%} of the category's ACR" if total else ""
     return (f"These {fmt_int(len(summary))} accounts carry "

@@ -119,7 +119,8 @@ def accounts(tracker: pd.DataFrame | None, fact: pd.DataFrame | None,
                              ("generation", "fdo_generation")):
                 if src in lasts.columns:
                     acc[dst] = key.map(lasts[src]).to_numpy()
-            acc["total_acr"] = key.map(sums["acr"]).to_numpy()
+            # Total ACR leaves out blocked waves (kpi.account_acr).
+            acc["total_acr"] = key.map(kpi.account_acr(onboarding)).to_numpy()
             acc["total_cores"] = key.map(sums["cores"]).to_numpy()
             acc["waves"] = key.map(sums["waves"]).fillna(0).astype(int).to_numpy()
 

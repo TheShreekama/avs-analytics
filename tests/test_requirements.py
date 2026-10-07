@@ -480,7 +480,7 @@ def test_glossary_explains_every_headline_metric():
     assert "Tags" in glossary.GENERATION_RULE
     assert "latest wave" in glossary.MIGRATIONS_COMPLETED
     assert "Current State" in glossary.ON_TRACK_ACCOUNTS
-    assert "ACTUAL END DATE" in glossary.ACR_CLAIMED
+    assert "Actual End Date" in glossary.ACR_CLAIMED
     assert set(glossary.CATEGORY_HELP) == set(segments.CATEGORY_LABELS)
 
 
@@ -2836,7 +2836,8 @@ def test_money_in_the_underlying_tables_reads_in_k_and_m(state_doc):
         acr = headers.index("Total ACR")
         for row in re.findall(r"<tr[^>]*>(.*?)</tr>", table.split("<tbody>")[-1], re.S):
             cells = re.findall(r"<td[^>]*>([^<]*)</td>", row)
-            if len(cells) > acr and cells[acr]:
+            # "—": an account whose every wave is Blocked has no Total ACR.
+            if len(cells) > acr and cells[acr] and cells[acr] != "—":
                 assert re.fullmatch(r"\$[\d.]+[KMB]?", cells[acr]), cells[acr]
         # Cores are whole things, not floats.
         if "Total Cores" in headers:
@@ -3569,3 +3570,82 @@ def test_money_goes_on_the_value_axis_of_a_horizontal_bar():
     doc.figure(fig, currency=True)
     assert fig.layout.xaxis.tickprefix == "$"
     assert fig.layout.yaxis.tickprefix in (None, "")
+
+
+# --------------------------------------------------------------------------- #
+# End-date fallbacks, blocked ACR, From AVS on the path only
+# --------------------------------------------------------------------------- #
+def _dated_waves():
+    from app.core import statuses as st_
+    return pd.DataFrame({
+        "tpid": ["A", "B", "C", "D"], "tpid_key": ["A", "B", "C", "D"],
+        "wave_num": [1, 1, 1, 1],
+        "migration_status_code": [7, 7, 7, 4],
+        "migration_status_label": ["Completed"] * 3 + ["Executing Migration"],
+        "migration_status": ["7 - Completed"] * 3 + ["4 - Executing Migration"],
+        "status_class": [st_.COMPLETED] * 3 + [st_.IN_FLIGHT],
+        "current_state": ["Done", "Done", "Done", "On Track"],
+        "nomination_status": ["Approved"] * 4,
+        "actual_end_date": pd.to_datetime(["2025-08-10", None, None, None]),
+        "planned_end_date": pd.to_datetime([None, "2025-09-15", None, "2025-09-20"]),
+        "actual_start_date": pd.to_datetime([None, None, None, None]),
+        "planned_start_date": pd.to_datetime([None, None, None, None]),
+        "approval_date": pd.to_datetime([None, None, None, None]),
+        "created_date": pd.to_datetime(["2025-07-01", "2025-07-01", "2025-10-02",
+                                        "2025-07-01"]),
+        "total_cores": [4, 6, 8, 10], "total_acr": [100.0, 200.0, 300.0, 400.0],
+    })
+
+
+def test_a_completion_with_no_actual_end_date_falls_back_along_the_chain():
+    waves = _dated_waves()
+    done = kpi.migrations_completed(waves).records.set_index("tpid_key")
+    assert done.loc["A", "completion_date"] == pd.Timestamp("2025-08-10")
+    assert done.loc["B", "completion_date"] == pd.Timestamp("2025-09-15")
+    assert done.loc["B", "end_date_source"] == "Planned End Date"
+    assert done.loc["C", "completion_date"] == pd.Timestamp("2025-10-02")
+    assert done.loc["C", "end_date_source"] == "Nom. Created Date"
+    # Engagement end reads the same date.
+    ends = kpi.engagement_end_dates(waves).set_index("tpid_key")
+    assert ends.loc["B", "engagement_end_date"] == pd.Timestamp("2025-09-15")
+
+
+def test_hosts_and_acr_claimed_fall_back_only_for_completed_waves():
+    waves = _dated_waves()
+    sept = (pd.Timestamp("2025-09-01"), pd.Timestamp("2025-09-30"))
+    # B's completed wave is dated by its Planned End Date; D is still running,
+    # so its Planned End Date claims nothing.
+    assert kpi.hosts_migrated(waves, *sept).value == 6
+    assert kpi.acr_claimed(waves, *sept).value == 200.0
+    assert kpi.hosts_migrated(waves).value == 18           # A, B and C, all dated
+    # An FDO date wins over a date the EOS sheet filled in.
+    filled = waves.assign(fdo_actual_end_date=pd.to_datetime([None] * 4))
+    assert kpi.hosts_migrated(filled, pd.Timestamp("2025-08-01"),
+                              pd.Timestamp("2025-08-31")).value == 0
+
+
+def test_total_acr_leaves_out_blocked_waves_everywhere_it_is_reported():
+    waves = _dated_waves().assign(
+        tpid_key=["A", "A", "B", "B"], tpid=["A", "A", "B", "B"], wave_num=[1, 2, 1, 2],
+        current_state=["Done", "Blocked - Customer", "Done", "On Track"])
+    acr = kpi.account_acr(waves)
+    assert acr["A"] == 100.0 and acr["B"] == 700.0
+    detail = kpi.account_detail(waves).set_index("tpid_key")
+    assert detail.loc["A", "total_acr"] == 100.0
+    _summary, rows = kpi.by_state(waves, only=None)
+    assert rows.set_index("tpid_key").loc["A", "total_acr"] == 100.0
+
+
+def test_from_avs_is_read_from_the_migration_path_alone():
+    frame = pd.DataFrame({
+        "migration_path": ["Onprem to AVS", "SQL Server MI Migration (From AVS)"],
+        "factory_offering": ["AVS Migration Nominations",
+                             "AVS Migration Nominations"],
+    })
+    assert list(kpi.mentions_from_avs(frame)) == [False, True]
+    # An offering name is never searched for it.
+    offering_only = frame.assign(migration_path="Onprem to AVS",
+                                 factory_offering="SQL Migration (From AVS)")
+    assert not kpi.mentions_from_avs(offering_only).any()
+    assert list(kpi.in_pipeline_scope(frame, kpi.MOTION_AVS)) == [True, False]
+    assert list(kpi.in_pipeline_scope(frame, kpi.MOTION_NATIVE)) == [False, True]

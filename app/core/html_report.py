@@ -99,6 +99,7 @@ _COLUMN_LABELS.update({
     "migration_category": "Category", "generation": "Generation",
     "source_platform": "From", "target_platform": "To",
     "blocked_state": "Current State", "phase": kpi.LATEST_WAVE_COLUMN,
+    "reported_end_date": "End date used", "end_date_source": "End date read from",
 })
 
 

@@ -177,10 +177,23 @@ under Streamlit's AppTest in both counting modes.
   Other. **On Hold** is a new state in `EXCLUDED_STATES` (stopped-accounts section, label
   "On Hold"). `kpi.on_track_wave` returns the latest wave for a sheet-on-track account with
   no export-on-track wave, and drops sheet-stopped ones. `kpi.migrations_completed` dates by
-  `kpi.completion_dates` — the latest wave's **FDO** Actual End Date (`fdo_actual_end_date`,
-  never the sheet's date, never one the sheet filled in), which is exactly the matrix's
-  *engagement end* (`engagement_end_dates` reuses `completion_date`), so the Migrations
-  Completed tile and the engagement-end row always reconcile over the same months.
+  `kpi.completion_dates` — read from the account's **real latest row** (not the
+  column-filled one): its **FDO** Actual End Date (`fdo_actual_end_date`, never the
+  sheet's date, never one the sheet filled in), else `kpi.END_DATE_CHAIN` — Planned End →
+  Actual Start → Planned Start → Nom. Approval → Nom. Created (`kpi.end_dates`; records
+  carry `reported_end_date` + `end_date_source`). That is exactly the matrix's
+  *engagement end* (`engagement_end_dates` reuses `completion_date`) and the fallback of
+  *migration end*, so the Migrations Completed tile and the engagement-end row always
+  reconcile. **Hosts Migrated and ACR Claimed** (and their trends / the matrix hosts
+  row) date each wave the same way (`kpi._with_end_dates`) — but only a **completed**
+  wave falls back; any other wave counts on its own FDO Actual End Date or not at all.
+- **Total ACR leaves out blocked waves** (`kpi.account_acr`: Current State contains
+  "Blocked"): account rows, Top 10, by-state, reconciliation, the Programme Tracker and
+  the `customer` rollup (`_acr_counted`). The stopped-accounts section's **ACR held up**
+  is the exception — every wave (`kpi.held_up_acr`).
+- **From AVS is read from the Primary Migration Path only** (`kpi.mentions_from_avs`,
+  `cleaning.migration_direction`); platform classification reads the offerings with any
+  "From AVS" stripped (`cleaning._without_from_avs`). It never counts in All AVS or EOS.
   Pipeline condition 4 excludes `On Hold` and `Cancelled` too
   (`kpi.PIPELINE_EXCLUDED_STATUSES`).
 - **Account state** (`kpi.account_state`, read across **all** of an account's waves, first
@@ -274,8 +287,9 @@ under Streamlit's AppTest in both counting modes.
   (4) `Migration Status NOT IN ("5 - Deferred By Customer", "6 - Cancelled / Archived",
   "On Hold", "Cancelled")`. Condition (1) is **per report** (`kpi.in_pipeline_scope(fact,
   motion)`, `exporter.pipeline_motion(category)`): AVS and EOS (`MOTION_AVS`) = the offering
-  **and no "From AVS" in the path or the offering** (`kpi.mentions_from_avs`); AVS → Azure
-  Native (`MOTION_NATIVE`) = the path contains "From AVS". **From AVS counts in AVS → Azure
+  **and no "From AVS" in the path** (`kpi.mentions_from_avs`); AVS → Azure
+  Native (`MOTION_NATIVE`) = the path contains "From AVS" (the path only — never an
+  offering name). **From AVS counts in AVS → Azure
   Native and nowhere else**; `nodes_planned` (EOS only) always reads `MOTION_AVS`.
   `acr_pipeline` sums Total ACR over them (every report); `nodes_planned` sums Total Cores
   (**EOS reports only**, `exporter.shows_nodes_planned`). Note the rule excludes 5 and 6

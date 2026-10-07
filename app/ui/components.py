@@ -272,6 +272,7 @@ _NICE = {f.key: f.label for f in schema.CANONICAL_FIELDS}
 _NICE.update({
     "eos_status": "Operational Status", "migration_direction": "Direction",
     "azure_target": "Azure Target",
+    "reported_end_date": "End date used", "end_date_source": "End date read from",
     "aging_days": "Age (days)", "cycle_time_days": "Cycle Time (days)",
     "migration_status_label": "Migration Status", "dq_flags": "Data Quality Notes",
     "approval_latency_days": "Approval Latency (days)", "is_open": "Open", "is_closed": "Closed",

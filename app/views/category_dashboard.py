@@ -392,10 +392,11 @@ def _top_accounts(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
     if summary.empty:
         components.empty_state("No account in this category carries any ACR.")
         return
-    total = float(pd.to_numeric(fact.get("total_acr"), errors="coerce").sum())
+    total = float(kpi.account_acr(fact).sum())
     shown = float(summary["acr"].sum())
     share = f" — **{shown / total:.0%}** of the category's ACR" if total else ""
-    st.caption(f"Total ACR summed across every wave of each account. These "
+    st.caption(f"Total ACR summed across every wave of each account, blocked "
+               f"waves left out. These "
                f"**{fmt_int(len(summary))}** accounts carry "
                f"**{fmt_currency(shown)}**{share}. Click a bar or a table row "
                f"to open the account behind it.")
