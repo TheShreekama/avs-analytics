@@ -3,13 +3,13 @@
 Two **different documents**, uploaded separately because they are not the same
 kind of thing:
 
-* The **FDO Dataset** is the nominations export, and can itself be assembled
+* The **FDO Dataset** is the FDO export, and can itself be assembled
   from several files (the source system exports per offering, so AVS and
   "(From AVS)" nominations often arrive apart); they are stacked on their shared
   headers into one dataset.
 * The **manual EOS tracking sheet** is the programme's own spreadsheet, keyed on
   TPID.  It is *joined* onto the dataset rather than stacked with it, and
-  supplies the answers the export cannot give as well: the Target SDDC
+  supplies the answers the FDO export cannot give as well: the Target SDDC
   Generation, the migration start and actual end dates, and — replacing the
   export's — each account's Migration Status and Current State.  Every
   other detail — Factory PM, Solution Architect, region, ACR — is looked up in
@@ -44,7 +44,7 @@ def render() -> None:
            f"code: stop it (Ctrl+C) and start it again.")
 
     section("1 · FDO Dataset")
-    st.caption("The nominations export. One file, or several that make up one "
+    st.caption("The FDO export. One file, or several that make up one "
                "dataset — an AVS export and an Azure-native export, say. Files "
                "are combined on their shared column headers and analysed "
                "together; every row remembers which file it came from.")
@@ -56,7 +56,7 @@ def render() -> None:
     st.caption("Optional, and a **different document**: the EOS programme's own "
                "sheet, keyed on **TPID**. It decides each account's generation "
                "(*Target SDDC Generation*), its *Migration Status* and "
-               "*Current State* (replacing the export's), and supplies the "
+               "*Current State* (replacing the FDO export's), and supplies the "
                "*Migration Start Date* and *Actual Migration End Date*; "
                "everything else — Factory PM, Solution Architect, region, ACR "
                "— is looked up against the FDO dataset by TPID. A title row "
@@ -67,6 +67,17 @@ def render() -> None:
         "EOS tracking sheet — choose file(s) (CSV, XLSX or XLS)",
         type=["csv", "xlsx", "xls"], accept_multiple_files=True, key="upload_eos")
     _date_order_control(ctx)
+
+    section("3 · All EOS customers list")
+    st.caption("Optional: every customer running **EOS SKUs**, one per row, keyed "
+               "on **TPID** (a customer name column is read too, for display). "
+               "When it is loaded, **AVS → Azure Native reports only the "
+               "customers on this list** — a customer the FDO export shows moving "
+               "From AVS who is not on it is left out of every figure. Nothing "
+               "else changes. Without it, every From AVS customer is reported.")
+    list_ups = st.file_uploader(
+        "All EOS customers — choose file(s) (CSV, XLSX or XLS)",
+        type=["csv", "xlsx", "xls"], accept_multiple_files=True, key="upload_eos_list")
 
     cols = st.columns([1, 1, 3])
     with cols[0]:
@@ -85,7 +96,8 @@ def render() -> None:
 
     files = [(u.name, u.getvalue()) for u in (ups or [])]
     tracker_files = [(u.name, u.getvalue()) for u in (tracker_ups or [])]
-    if not _load_uploads(ctx, files, tracker_files):
+    list_files = [(u.name, u.getvalue()) for u in (list_ups or [])]
+    if not _load_uploads(ctx, files, tracker_files, list_files):
         return
 
     # Active dataset summary
@@ -108,6 +120,8 @@ def render() -> None:
 
     _tracker_panel(ctx)
 
+    _eos_list_panel(ctx)
+
     _classification_panel(ctx)
 
     section("Source column profile")
@@ -119,7 +133,8 @@ def render() -> None:
                      "Fill %", min_value=0, max_value=100, format="%.0f%%")})
 
 
-def _load_uploads(ctx, files: list, tracker_files: list) -> bool:
+def _load_uploads(ctx, files: list, tracker_files: list,
+                  list_files: list | None = None) -> bool:
     """Rebuild the context when what is attached to the uploaders has changed.
 
     Signatures are compared rather than "is anything attached", because a
@@ -132,24 +147,29 @@ def _load_uploads(ctx, files: list, tracker_files: list) -> bool:
     Returns False when the page should stop (an upload failed and the diagnosis
     is on screen); the previously active dataset is left untouched.
     """
-    if not files and not tracker_files:
+    list_files = list_files or []
+    if not files and not tracker_files and not list_files:
         return True
     signature = loader.files_signature(files) if files else ctx.signature
     tracker_signature = (loader.files_signature(tracker_files)
                          if tracker_files else "")
-    if (signature, tracker_signature) == (ctx.signature, ctx.tracker_signature):
+    list_signature = loader.files_signature(list_files) if list_files else ""
+    if ((signature, tracker_signature, list_signature)
+            == (ctx.signature, ctx.tracker_signature, ctx.eos_list_signature)):
         return True
 
     label = loader.dataset_label(files) if files else ctx.filename
     try:
         if files:
-            new = state.build_dataset(files, tracker_files=tracker_files)
-            state.remember_files(files, tracker_files)
+            new = state.build_dataset(files, tracker_files=tracker_files,
+                                      eos_list_files=list_files)
+            state.remember_files(files, tracker_files, list_files)
             state.set_context(new)
         else:
-            # Only the sheet changed: keep the dataset that is loaded — which may
-            # be the bundled sample — and rebuild it with the new sheet.
-            new = state.reload_with(tracker_files=tracker_files)
+            # Only the sheet or the list changed: keep the dataset that is
+            # loaded — which may be the bundled sample — and rebuild it.
+            new = state.reload_with(tracker_files=tracker_files,
+                                    eos_list_files=list_files)
     except loader.IngestError as err:
         _failure_panel(err.failure)
         return False
@@ -213,7 +233,7 @@ def _date_order_control(ctx) -> None:
 def _tracker_panel(ctx) -> None:
     """What the EOS tracking sheet is answering for, and what it could not.
 
-    The sheet is the reason an EOS number can differ from what the export alone
+    The sheet is the reason an EOS number can differ from what the FDO export alone
     would say, so the page states plainly which accounts it reached, which
     generations it decided, and which of its TPIDs the FDO dataset has never
     heard of — those can be reported on nowhere until the nomination exists.
@@ -233,7 +253,7 @@ def _tracker_panel(ctx) -> None:
     unmatched = overlay.get("unmatched_tpids") or []
     if read.get("accounts") and not overlay.get("matched_accounts"):
         banner("⚠️ <b>None of the sheet's TPIDs matched the FDO dataset</b>, so "
-               "nothing in it reaches the EOS reports built on the export. "
+               "nothing in it reaches the EOS reports built on the FDO export. "
                "Compare the TPIDs below with the FDO file's; the EOS Programme "
                "Tracker page still reports the sheet on its own.", "warn")
     components.kpi_row([
@@ -265,7 +285,7 @@ def _tracker_panel(ctx) -> None:
     issues = eos_tracker.inconsistencies(ctx.fact, ctx.tracker, overlay)
     labels = {
         "unmatched_tpids": "In the sheet, not in the FDO dataset",
-        "untracked_eos_accounts": "Marked EOS in the export, not in the sheet (not reported as EOS)",
+        "untracked_eos_accounts": "Marked EOS in the FDO export, not in the sheet (not reported as EOS)",
         "generation_disagrees": "Sheet and tag disagree on the generation",
         "ended_with_sddcs_outstanding": "Ended, with SDDCs still outstanding",
         "status_state_disagree": "Migration Status and Current State disagree",
@@ -278,6 +298,43 @@ def _tracker_panel(ctx) -> None:
                 components.show_table(frame, height=260)
             else:
                 st.caption("None.")
+
+
+def _eos_list_panel(ctx) -> None:
+    """What the All EOS customers list holds, and what it did to AVS → Azure Native."""
+    section("All EOS customers list")
+    if not ctx.has_eos_list:
+        st.caption("No list loaded — AVS → Azure Native reports every customer "
+                   "moving From AVS.")
+        return
+    read = ctx.eos_list_report or {}
+    applied = ctx.report.get("eos_list") or {}
+    if not read.get("tpid_column"):
+        banner("⚠️ No <b>TPID</b> column was found in the list, so it names no "
+               "customer and AVS → Azure Native reports nobody. Check the header "
+               "row.", "warn")
+    components.kpi_row([
+        {"label": "List", "value": ctx.eos_list_filename},
+        {"label": "Customers listed", "value": fmt_int(read.get("accounts", 0))},
+        {"label": "AVS → Azure Native kept",
+         "value": fmt_int(applied.get("native_kept", 0)), "tone": "good"},
+        {"label": "Left out (not on the list)",
+         "value": fmt_int(applied.get("native_excluded", 0)),
+         "tone": "warn" if applied.get("native_excluded") else ""},
+        {"label": "Listed, not in the FDO dataset",
+         "value": fmt_int(applied.get("not_in_fdo", 0))},
+    ])
+    st.caption(f"TPID read from column *{read.get('tpid_column') or 'not found'}*"
+               + (f"; customer name from *{read['customer_column']}*"
+                  if read.get("customer_column") else "")
+               + (f"; {fmt_int(read['no_tpid_rows'])} row(s) with no TPID skipped"
+                  if read.get("no_tpid_rows") else "") + ".")
+    left = applied.get("excluded") or []
+    if left:
+        st.markdown("**Customers moving From AVS who are not on the list** — left "
+                    "out of AVS → Azure Native:")
+        st.dataframe(pd.DataFrame(left, columns=["TPID", "Customer Name"]),
+                     width="stretch", hide_index=True)
 
 
 def _tracker_read_panel(ctx, read: dict) -> None:

@@ -1,7 +1,7 @@
 """Plain-language explanations shown behind every ⓘ marker.
 
 One place for "what exactly does this number mean", written against the columns
-of the nominations export, so the tooltip on a dashboard, the Methodology page
+of the FDO export, so the tooltip on a dashboard, the Methodology page
 and the code all say the same thing.
 """
 from __future__ import annotations
@@ -54,7 +54,7 @@ MIGRATIONS_COMPLETED = (
     "Unique customers (TPIDs) whose migration finished inside the period.\n"
     "• Takes each TPID's LATEST wave (highest Phase/Wave number).\n"
     "• That wave's Migration Status must be '7 - Completed'.\n"
-    "• Dated by its Actual End Date in the export; with none, its Planned End "
+    "• Dated by its Actual End Date in the FDO export; with none, its Planned End "
     "Date, Actual Start Date, Planned Start Date, Nom. Approval Date, then Nom. "
     "Created Date.\n"
     "An account with Wave 7 completed but Wave 8 still running is NOT counted — "
@@ -64,7 +64,7 @@ MIGRATIONS_COMPLETED = (
 HOSTS_MIGRATED = (
     "Sum of the Total Cores column — treated as nodes/hosts — over every wave "
     "record that is '7 - Completed' dated inside the period: its Actual End "
-    "Date in the export, else Planned End, Actual Start, Planned Start, Nom. "
+    "Date in the FDO export, else Planned End, Actual Start, Planned Start, Nom. "
     "Approval, then Nom. Created Date.\n"
     "This is deliberately NOT a customer count: an account with three completed "
     "waves contributes the cores of all three. Each source record is counted once."
@@ -97,7 +97,7 @@ ON_TRACK_ACCOUNTS = (
 
 ACR_CLAIMED = (
     "ACR of every wave whose end date falls inside the reporting period — its "
-    "Actual End Date in the export.\n"
+    "Actual End Date in the FDO export.\n"
     "• Wave-level, not account-level: if Waves 2 and 3 of one account and Wave 5 "
     "of another ended inside the window, all three waves' Total ACR is summed.\n"
     "• A wave that ended outside the window contributes nothing, even when a "
@@ -349,7 +349,7 @@ GENERATION_RULE = (
 EOS_POPULATION = (
     "With the EOS tracking sheet loaded, the sheet is the list: a TPID in it "
     "is an EOS account when the FDO export holds it (matched by TPID), and no "
-    "other account is. A sheet TPID the export does not hold is not counted — "
+    "other account is. A sheet TPID the FDO export does not hold is not counted — "
     "there is no ACR, cores or waves for it — and is listed on Data "
     "Inconsistency.\n"
     "Without a sheet, an account is an EOS Migration account when either:\n"
@@ -406,6 +406,8 @@ EOS_MATRIX = (
     "Migration - Gen1', 'Gen1 to Gen2' every account tagged '- Gen2'. Accounts "
     "in EOS scope by migration path with no generation tag on any wave belong "
     "to neither block; they are listed under Data → Data Inconsistency.\n"
+    "A last block, 'All EOS migrations', adds the blocks together — each "
+    "account counted once — so the programme's totals are in the grid too.\n"
     "Rows use the same calculations as the rest of the report: new engagements "
     "are unique TPIDs in the month of their Wave-1 approval date; migration "
     "ends are unique TPIDs whose LATEST wave is '7 - Completed', in the month "
@@ -415,8 +417,8 @@ EOS_MATRIX = (
     "first, for every account it covers: its Migration Start Date and Actual "
     "Migration End Date are the programme stating when the work began and "
     "ended, in its own document. Only where the sheet is silent — or where no "
-    "sheet is loaded — does the export answer, by the rules below.\n"
-    "MIGRATION START is then derived, since the export has no such field: an "
+    "sheet is loaded — does the FDO export answer, by the rules below.\n"
+    "MIGRATION START is then derived, since the FDO export has no such field: an "
     "account's earliest wave whose Current State reads 'On Track' or 'Done' — "
     "the first wave actually under way — and from it the Actual Start Date, "
     "falling back to Planned Start Date and then to Nom. Approval Date. An "
@@ -424,7 +426,7 @@ EOS_MATRIX = (
     "MIGRATION END, without the sheet, is the account's latest wave completing "
     "('7 - Completed' with no wave still on track), in the month of its Actual "
     "End Date — the same measure the trends report.\n"
-    "ENGAGEMENT END repeats the migration-end figure. The export marks when a "
+    "ENGAGEMENT END repeats the migration-end figure. The FDO export marks when a "
     "wave ended but not an engagement closure distinct from its last wave "
     "completing, so an account whose latest wave has completed is the closest "
     "the data comes to an engagement that ended — the two rows therefore carry "
@@ -463,7 +465,7 @@ class Definition(NamedTuple):
 #: as the spreadsheet heads it (**Nom. Approval Date**, **Current State**), or a
 #: value written exactly as that column holds it (**7 - Completed**, **AVS
 #: Migration Nominations**).  Everything else is description.  That convention
-#: is what makes a definition checkable — a reader can open the export, find the
+#: is what makes a definition checkable — a reader can open the FDO export, find the
 #: column, and see the same value the report read.
 REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
     ("How to read these definitions", (
@@ -472,7 +474,7 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         "**Anything in bold is in the spreadsheet** — either a column name, "
         "written exactly as the file heads it, or a value written exactly as "
         "that column holds it. Everything else is description. So any number "
-        "here can be checked by opening the export, finding the column and "
+        "here can be checked by opening the FDO export, finding the column and "
         "reading the same value the report read.",
         "**These definitions state the rule the application actually applies** "
         "— not the intended rule, not a simplification of it. Where a figure "
@@ -489,7 +491,7 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Unit: customer.",
         )),
         Definition("Wave", (
-            "One piece of work for an account — one row of the export.",
+            "One piece of work for an account — one row of the FDO export.",
             "Numbered in the **Phase** column: **Wave 1**, **Wave 2** and so on.",
             "The **first wave** is the lowest **Phase** number; ties are broken "
             "by the earlier **Nom. Created Date**.",
@@ -499,7 +501,7 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         )),
         Definition("ACR", (
             "The annual revenue a piece of work is expected to bring in.",
-            "Read from **Total ACR**, as the export records it.",
+            "Read from **Total ACR**, as the FDO export records it.",
             "Written short throughout: $12.5K, $125K, $1.25M.",
             "Unit: currency.",
         )),
@@ -561,7 +563,7 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Where the EOS tracking sheet covers the account, its **Migration "
             "Status** of **Completed** or **Current State** of **Completed** "
             "decides instead.",
-            "Date it by the latest wave's **Actual End Date** as the export "
+            "Date it by the latest wave's **Actual End Date** as the FDO export "
             "records it — the same date as engagement end in the EOS matrix.",
             "With none, use that same wave's **Planned End Date**, **Actual "
             "Start Date**, **Planned Start Date**, **Nom. Approval Date** or "
@@ -573,7 +575,7 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Identify every wave whose **Migration Status** is **7 - "
             "Completed**, or **Completed** where the EOS tracking sheet "
             "supplied it.",
-            "Date each by its **Actual End Date** as the export records it; "
+            "Date each by its **Actual End Date** as the FDO export records it; "
             "with none, by its **Planned End Date**, **Actual Start Date**, "
             "**Planned Start Date**, **Nom. Approval Date** and **Nom. Created "
             "Date**, in that order.",
@@ -605,7 +607,7 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Unit: customer.",
         )),
         Definition("ACR Claimed", (
-            "Identify every wave whose **Actual End Date**, as the export "
+            "Identify every wave whose **Actual End Date**, as the FDO export "
             "records it, falls in the reporting period, whatever state the "
             "account is in now.",
             "Add up **Total ACR** over those waves.",
@@ -694,7 +696,7 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "or no stage stated.",
             "**Other** — a stage with no state.",
             "Where the sheet leaves both cells blank, or uses a value outside "
-            "this list, the export decides as above.",
+            "this list, the FDO export decides as above.",
         )),
         Definition("What is not on track", (
             "A wave nobody has approved is not on track, however far along it "
@@ -756,6 +758,9 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "counting it under All AVS Migrations or EOS would file it in the "
             "wrong story.",
             "Not even a Gen-1 or Gen-2 tag pulls one into another report.",
+            "With the All EOS customers list loaded, only customers whose "
+            "**TPID** is on that list are reported; the rest are left out of "
+            "every figure.",
             "The Azure-native service each one lands on is read from the same "
             "**Primary Migration Path** — SQL MI, SQL Database, SQL on IaaS, "
             "PostgreSQL/MySQL, Windows or Linux virtual machines, Oracle "
@@ -765,7 +770,7 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Include accounts refreshing ageing AVS hardware, reported by the "
             "generation they are moving on to.",
             "With the EOS tracking sheet loaded, the sheet is the list: a "
-            "**TPID** in it that the export holds is an EOS account, and no "
+            "**TPID** in it that the FDO export holds is an EOS account, and no "
             "other account is.",
             "Without a sheet, an account is in scope when a wave's **Tags** "
             "carry a generation, or its **Primary Migration Path**, **Factory "
@@ -813,10 +818,12 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "and cancelled accounts take none.",
             "Gen1 to Gen1 and Gen1 to Gen2 count the customers by generation.",
             "Gen1 to Azure Native counts customers whose **Primary Migration "
-            "Path** contains **(From AVS)** and whose first **Nom. Approval "
-            "Date**, else **Nom. Created Date**, is 1 July 2025 or later.",
+            "Path** contains **(From AVS)**, whose first **Nom. Approval "
+            "Date**, else **Nom. Created Date**, is 1 July 2025 or later and, "
+            "with the All EOS customers list loaded, whose **TPID** is on it.",
             "Ticking Include Azure Native customers adds those to every total, "
-            "each customer still counted once.",
+            "each customer still counted once, and shows the Gen1 to Azure "
+            "Native line, which is hidden until then.",
             "Unit: customer.",
         )),
     )),
@@ -824,14 +831,14 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         "The EOS programme keeps its own spreadsheet beside the nominations "
         "export, and it is uploaded separately. Where it is loaded, it leads on "
         "the generation, the migration's status and state, and its two dates; "
-        "everything else still comes from the export.",
+        "everything else still comes from the FDO export.",
         Definition("How it is matched", (
             "Matched on **TPID**, and on nothing else.",
             "**Assigned To (Factory PM)**, **Solution Architect**, **WW "
             "Region**, **Factory Offering**, **Total ACR** and the waves are "
-            "all looked up in the nominations export by that **TPID**.",
+            "all looked up in the FDO export by that **TPID**.",
             "So the sheet never has to repeat or contradict them.",
-            "A **TPID** the export does not hold is not counted as EOS: there "
+            "A **TPID** the FDO export does not hold is not counted as EOS: there "
             "is no **Total ACR**, **Total Cores** or wave to report for it.",
             "Nor is one whose only waves are **From AVS**: those stay in AVS to "
             "Azure Native.",
@@ -840,17 +847,17 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         )),
         Definition("What it decides", (
             "**Target SDDC Generation** decides the account's generation.",
-            "**Migration Status** and **Current State** replace the export's "
-            "for the account, on every wave the export still has open — or on "
+            "**Migration Status** and **Current State** replace the FDO export's "
+            "for the account, on every wave the FDO export still has open — or on "
             "the latest wave when all are closed.",
-            "A wave the export already shows as **7 - Completed** or **6 - "
+            "A wave the FDO export already shows as **7 - Completed** or **6 - "
             "Cancelled / Archived** keeps its own status.",
             "**Migration Start Date** and **Actual Migration End Date** supply "
             "the migration start and migration end rows of the monthly "
             "programme matrix, and nothing else.",
             "**Total SDDCs in Scope for Migration** and **Number of SDDCs "
             "Migrated** feed the EOS Programme Tracker only.",
-            "Where the sheet is silent, the export answers exactly as it did "
+            "Where the sheet is silent, the FDO export answers exactly as it did "
             "before there was a sheet.",
             "A report built with no sheet loaded is unchanged.",
         )),
@@ -886,11 +893,11 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         "reporting period and the filters.",
         Definition("EOS accounts", (
             "Count each **TPID** in the tracking sheet once.",
-            "Keep it only when the nominations export holds a wave for it that "
+            "Keep it only when the FDO export holds a wave for it that "
             "is not **From AVS**.",
             "The rest are shown as Not in FDO dataset, named, and not counted.",
             "Customer name, **WW Region**, **Assigned To (Factory PM)** and "
-            "**Total ACR** come from the export where it holds the account.",
+            "**Total ACR** come from the FDO export where it holds the account.",
             "Otherwise the sheet's own **Customer** and **Region** are shown.",
             "Unit: customer.",
         )),
@@ -959,9 +966,9 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         Definition("Total number of migration start (monthly)", (
             "Use the tracking sheet's **Migration Start Date** wherever it has "
             "one.",
-            "Otherwise, for each **TPID**, identify the earliest **Phase** / "
-            "wave whose **Current State** reads **On Track** or **Done** — the "
-            "first wave actually under way.",
+            "Otherwise, for each **TPID**, find its earliest **Phase** / wave "
+            "that actually got going: its **Current State** in the FDO export "
+            "reads **On Track** or **Done**, not Blocked, waiting or blank.",
             "Use that wave's **Actual Start Date**; if it is blank, its "
             "**Planned Start Date**; if that is blank too, its **Nom. Approval "
             "Date**.",
@@ -984,7 +991,7 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "For each **TPID**, identify the latest **Phase** / wave record.",
             "The account's state must be Completed, by the rules above — the "
             "same test All AVS Migrations uses.",
-            "Use that wave's **Actual End Date**, as the export records it — "
+            "Use that wave's **Actual End Date**, as the FDO export records it — "
             "never the tracking sheet's **Actual Migration End Date** — else "
             "the fallback dates Migrations Completed lists.",
             "With no tracking sheet, this row equals migration end.",
@@ -1002,7 +1009,7 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         )),
     )),
     ("Dates and durations the app works out", (
-        "These are derived from the export's own dates rather than read from a "
+        "These are derived from the FDO export's own dates rather than read from a "
         "column of their own. They drive the insights and the delivery-health "
         "wording; none of them changes a headline figure.",
         Definition("Approved, closed, open", (
@@ -1097,8 +1104,8 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "stopped-account sections cover the accounts with a wave whose "
             "**Nom. Created Date** is in the period, each with all its waves.",
             "On screen, those sections always cover the whole programme.",
-            "The HTML report switches between Current FY and All reporting "
-            "period (July 2025 to the as-of date) from its side panel.",
+            "The HTML report switches between Current FY and the Reporting "
+            "Period it was generated for, from its side panel.",
             "Selecting any period other than the current fiscal year adds a "
             "**This FY** row of tiles above the selected one, so a month's "
             "numbers keep the year they sit in.",

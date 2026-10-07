@@ -37,7 +37,7 @@ def render() -> None:
                "**Anything in bold is in the spreadsheet** — a column name "
                "written exactly as the file heads it, or a value written "
                "exactly as that column holds it — so any number here can be "
-               "checked by opening the export and reading the same cell. "
+               "checked by opening the FDO export and reading the same cell. "
                "Rendered from the same source the exported reports print, so "
                "this page and a circulated report cannot disagree.")
     for heading, items in glossary.REPORT_METHODOLOGY:
@@ -262,7 +262,7 @@ def render() -> None:
         f"date.\n\n"
         f"The This-Week / This-Month / This-Quarter / Year-to-Date KPI tiles compare "
         f"each window to the **prior equivalent** window for the delta arrows.\n\n"
-        f"**Date values are read in whatever shape the export uses** — Excel serial "
+        f"**Date values are read in whatever shape the FDO export uses** — Excel serial "
         f"numbers (a date cell that was never formatted as a date, e.g. `45855`), ISO "
         f"stamps with or without a timezone, month names, and `d/m/y` triples in either "
         f"order (day-first vs month-first is inferred per column). Times of day are "

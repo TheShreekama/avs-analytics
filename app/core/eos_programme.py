@@ -1,9 +1,9 @@
 """The EOS Programme Tracker report — the tracking sheet, reported on its own terms.
 
 Every other EOS figure is the FDO export with the sheet laid over it, so an
-account the export does not hold cannot appear in them.  This report starts
+account the FDO export does not hold cannot appear in them.  This report starts
 from the **sheet**: one row per account the programme is tracking, whether or
-not the export has a nomination for it yet, with the export looked up by TPID
+not the FDO export has a nomination for it yet, with the FDO export looked up by TPID
 for what the sheet does not carry (the account's name and WW Region as the
 export spells them, its Factory PM, ACR and cores).
 
@@ -29,7 +29,7 @@ TITLE = "EOS Programme Tracker"
 BLURB = ("The manual EOS tracking sheet, account by account: where the programme "
          "says each migration is (Migration Status), how it is going (Current "
          "State), and how many SDDCs are done. Only accounts whose TPID is in "
-         "the FDO dataset are counted: one the export does not hold has no ACR, "
+         "the FDO dataset are counted: one the FDO export does not hold has no ACR, "
          "cores or waves to report, and is listed apart.")
 
 #: Migration Status values in the order a migration moves through them.
@@ -79,14 +79,14 @@ class Programme:
 
 def accounts(tracker: pd.DataFrame | None, fact: pd.DataFrame | None,
              as_of=None) -> pd.DataFrame:
-    """One row per account in the sheet, with the export's details beside it.
+    """One row per account in the sheet, with the FDO export's details beside it.
 
     From the sheet: TPID, Migration Status, Current State, Target SDDC
     Generation, the SDDC counts and the two dates.  From the FDO export, by
     TPID, where it holds the account: the customer name and WW Region as the
     export writes them, Factory PM and Solution Architect from the latest wave,
     and ACR and Total Cores summed across every wave that is not a "(From AVS)"
-    move.  The sheet's own Customer and Region stand in where the export has
+    move.  The sheet's own Customer and Region stand in where the FDO export has
     nothing.
     """
     if tracker is None or tracker.empty:

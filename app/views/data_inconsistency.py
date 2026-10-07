@@ -80,14 +80,14 @@ _CHECK_HELP = {
         "nomination exists. Raise the nomination, or correct the TPID in the sheet."
     ),
     "tracker_missing": (
-        "Accounts the export marks as EOS (a Gen-1/Gen-2 tag, or an AV36/EOS "
+        "Accounts the FDO export marks as EOS (a Gen-1/Gen-2 tag, or an AV36/EOS "
         "path or offering) that the tracking sheet does not list. With a sheet "
         "loaded, the sheet is the list of EOS accounts, so these are NOT "
         "reported as EOS. Add them to the sheet if they belong in the programme."
     ),
     "tracker_generation": (
         "Accounts whose Target SDDC Generation in the sheet disagrees with the "
-        "'AVS Migration - Gen1/Gen2' tag in the export. The sheet wins — it is "
+        "'AVS Migration - Gen1/Gen2' tag in the FDO export. The sheet wins — it is "
         "the programme's own statement of what an account is landing on — so "
         "this is the list of accounts it overrode."
     ),
@@ -109,7 +109,7 @@ _CHECK_HELP = {
 def render() -> None:
     ctx = state.ensure_context()
     page_header("Data Inconsistency",
-                "Where the export contradicts itself — with the records to fix.",
+                "Where the FDO export contradicts itself — with the records to fix.",
                 help="Every check runs over the whole file. Counts are rows unless the "
                      "check is account-level, and each one exports to CSV.")
     fact = ctx.fact
@@ -186,7 +186,7 @@ _LABELS = {
     "duplicate_task": "Duplicate Task IDs",
     "state_vs_status": "Current State contradicts Migration Status",
     "tracker_unmatched": "In the EOS tracking sheet, not in the FDO dataset",
-    "tracker_missing": "Marked EOS in the export, not in the EOS tracking sheet",
+    "tracker_missing": "Marked EOS in the FDO export, not in the EOS tracking sheet",
     "tracker_generation": "EOS tracking sheet and tag disagree on the generation",
     "tracker_sddcs": "Ended in the sheet, with SDDCs still outstanding",
     "tracker_status_state": "Tracking sheet status and state disagree",
@@ -194,7 +194,7 @@ _LABELS = {
 
 #: Tracker check key -> the frame :func:`app.core.eos_tracker.inconsistencies`
 #: returns it under.  The sheet is a second document, so its disagreements are
-#: with the export rather than inside it — but they are the same question this
+#: with the FDO export rather than inside it — but they are the same question this
 #: page exists to answer, so they are listed here alongside the rest.
 _TRACKER_CHECKS = {
     "tracker_unmatched": "unmatched_tpids",

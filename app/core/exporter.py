@@ -36,7 +36,7 @@ from reportlab.platypus import KeepTogether, PageBreak, Paragraph
 
 from ..config import EOS_MATRIX_START_FY, FY_START_MONTH
 from ..ui import pdf_charts as pc
-from . import (analytics, eos_programme, glossary, insights as insights_mod, kpi,
+from . import (analytics, eos_customers, eos_programme, glossary, insights as insights_mod, kpi,
                metrics, nulls,
                pdf_kit as kit, segments)
 from .metrics import fmt_currency, fmt_int
@@ -98,7 +98,7 @@ class ReportSections:
 
 #: What a report calls itself when the caller says nothing.  Deliberately about
 #: the subject — the migration programme — and never about the application that
-#: rendered it or the export it was read from: a report circulated to leadership
+#: rendered it or the FDO export it was read from: a report circulated to leadership
 #: should read as analysis, not as a tool's output.
 DEFAULT_TITLE = "Migration Programme Report"
 DEFAULT_SUBTITLE = "Management Report"
@@ -568,33 +568,28 @@ def report_views(as_of, date_window=None, period_label: str = ""
                  ) -> tuple[list[ReportView], str]:
     """The periods the HTML report carries, and which one it opens on.
 
-    Always **Current FY** (the whole fiscal year the as-of date is in) and
-    **All reporting period** (July 2025 — the start of FY26, where the EOS
-    programme begins — to the as-of date).  A period chosen on the Reports page
-    that is neither is carried as a third view, and the report opens on the
-    view matching that choice ("All reporting period" when none was made).
+    **Current FY** (the whole fiscal year the as-of date is in) and the
+    **Reporting Period** chosen on the Reports page — "All dates in the
+    dataset" when none was.  When the two are the same window there is one
+    view.  The report opens on the Reporting Period.
     """
     as_of = pd.Timestamp(as_of).normalize()
     span = metrics.date_preset_range(as_of, "This FY", FY_START_MONTH)
     fy_start, fy_end = pd.Timestamp(span[0]), pd.Timestamp(span[1])
     fy_name = metrics.fiscal_year_label(fy_start, FY_START_MONTH)
-    first = summary_native_start()
-    views = [
-        ReportView("fy", f"Current FY ({fy_name}) · {fy_start:%b %Y} – "
-                         f"{fy_end:%b %Y}", fy_start, fy_end),
-        ReportView("all", f"All reporting period · {first:%b %Y} – {as_of:%b %Y}",
-                   first, as_of),
-    ]
+    fy = ReportView("fy", f"Current FY ({fy_name}) · {fy_start:%b %Y} – "
+                          f"{fy_end:%b %Y}", fy_start, fy_end)
     start, end = date_window or (None, None)
-    if start is None and end is None:
-        return views, "all"
-    for view in views:
-        if (pd.Timestamp(start).date() == pd.Timestamp(view.start).date()
-                and pd.Timestamp(end).date() == pd.Timestamp(view.end).date()):
-            return views, view.key
-    views.append(ReportView("sel", f"Selected · {period_label or ''}".rstrip(" ·"),
-                            start, end))
-    return views, "sel"
+    if (start is not None and end is not None
+            and pd.Timestamp(start).date() == fy_start.date()
+            and pd.Timestamp(end).date() == fy_end.date()):
+        return [fy], "fy"
+    label = period_label or "All dates in the dataset"
+    return [fy, ReportView("sel", f"{REPORTING_PERIOD} · {label}", start, end)], "sel"
+
+
+#: What the HTML report calls the period chosen when it was generated.
+REPORTING_PERIOD = "Reporting Period"
 
 
 def this_fiscal_year(as_of, start, end) -> tuple[tuple | None, str]:
@@ -853,21 +848,11 @@ def _matrix_block(ctx, pop: pd.DataFrame, ss) -> list:
     """
     start = metrics.named_fiscal_year_start(EOS_MATRIX_START_FY, FY_START_MONTH)
     out = [Paragraph("Monthly programme matrix", ss["H2"]),
-           Paragraph(f"From {start:%b %Y} to {pd.Timestamp(ctx.as_of):%b %Y}, "
-                     "every month included, each fiscal year closing with its "
-                     "own total column — the whole programme, not narrowed by "
-                     "the reporting period the rest of this report uses. Blocks "
-                     "are the generation each account is refreshing on to; all "
-                     "EOS accounts are coming from Gen-1 hardware. Migration "
-                     "start and migration end are the manual EOS tracking "
-                     "sheet's own dates wherever it covers an account, and "
-                     "otherwise the export's. Engagement end is always the "
-                     "export's: a completed account, dated by its latest wave's "
-                     "Actual End Date.", ss["Muted"]),
+           Paragraph(_esc(matrix_note(start, ctx.as_of)), ss["Muted"]),
            kit.spacer(0.2)]
     width = kit.CONTENT_WIDTH[kit.PORTRAIT]
     for generation, title in matrix_blocks(pop):
-        block = pop[pop["generation"] == generation] if not pop.empty else pop
+        block = matrix_block_rows(pop, generation)
         accounts = segments.tpid_key(block).nunique() if not block.empty else 0
         months = kpi.matrix_month_span(block, start, ctx.as_of)
         grid = kpi.monthly_matrix(block, months, fy_start_month=FY_START_MONTH)
@@ -969,13 +954,24 @@ def summary_sentence(t: SummaryTotals) -> str:
             f"currently in progress and {fmt_int(t.planning)} in planning.")
 
 
-def summary_lines(s: ProgrammeSummary) -> list[str]:
+def summary_lines(s: ProgrammeSummary, include_native: bool = False) -> list[str]:
+    """The per-destination lines.  Gen1 to Azure Native appears only when the
+    Azure Native customers are included in the totals above it."""
     lines = [f"{_customers(s.gen1)} from Gen1 to Gen1",
-             f"{_customers(s.gen2)} from Gen1 to Gen2",
-             f"{_customers(s.native)} from Gen1 to Azure Native"]
+             f"{_customers(s.gen2)} from Gen1 to Gen2"]
     if s.no_generation:
         lines.append(f"{_customers(s.no_generation)} with no generation stated")
+    if include_native:
+        lines.append(f"{_customers(s.native)} from Gen1 to Azure Native")
     return lines
+
+
+#: Shown whenever the Azure Native customers are added to the summary.
+NATIVE_CAVEAT = (
+    "Read with care: a customer moving from AVS to Azure Native is not "
+    "necessarily leaving because an AVS SKU is reaching end of support. Many "
+    "move to Azure-native services as part of a wider modernisation, so these "
+    "totals cover more than the EOS refresh itself.")
 
 
 def summary_note(include_native: bool) -> str:
@@ -988,22 +984,60 @@ def summary_note(include_native: bool) -> str:
             f"or stage 3 Finalize Scope. All time.")
 
 
+#: The matrix block that adds every other block together.
+ALL_EOS_BLOCK = "All EOS"
+
+
 def matrix_blocks(pop: pd.DataFrame) -> list[tuple[str, str]]:
-    """The matrix's blocks: Gen1 to Gen1, Gen1 to Gen2 — and, when the EOS
-    tracking sheet lists accounts with no generation, a block for those, so
-    every EOS account the report counts appears in the grid."""
+    """The matrix's blocks: Gen1 to Gen1, Gen1 to Gen2 — a block for accounts
+    the EOS tracking sheet lists with no generation, when there are any — and
+    last, **all of them added together** (:data:`ALL_EOS_BLOCK`), so the
+    programme's own totals sit in the grid rather than in a reader's head."""
     blocks = [(segments.GEN_1, "Gen1 to Gen1"), (segments.GEN_2, "Gen1 to Gen2")]
-    if not pop.empty and "generation" in pop.columns and bool(
-            (pop["generation"] == segments.GEN_UNCLASSIFIED).any()):
+    unstated = (not pop.empty and "generation" in pop.columns and bool(
+        (pop["generation"] == segments.GEN_UNCLASSIFIED).any()))
+    if unstated:
         blocks.append((segments.GEN_UNCLASSIFIED, NO_GENERATION_BLOCK))
+    blocks.append((ALL_EOS_BLOCK,
+                   "All EOS migrations — every block above" if unstated
+                   else "All EOS migrations — Gen1 to Gen1 or Gen2"))
     return blocks
+
+
+def matrix_block_rows(pop: pd.DataFrame, key: str) -> pd.DataFrame:
+    """The rows a matrix block is drawn from."""
+    if key == ALL_EOS_BLOCK or pop.empty:
+        return pop
+    return pop[pop["generation"] == key]
 
 
 def matrix_block_note(generation: str) -> str:
     """Which accounts a block holds, in words."""
+    if generation == ALL_EOS_BLOCK:
+        return "in the blocks above, added together — each account counted once"
     if generation in (segments.GEN_1, segments.GEN_2):
         return f"tagged AVS Migration - {generation.replace('-', '')}"
     return "with no generation stated in the tracking sheet or the tags"
+
+
+def matrix_note(start, as_of) -> str:
+    """What the monthly programme matrix shows and where each row's date comes
+    from — one text for the page and both exports."""
+    return (
+        f"From {pd.Timestamp(start):%b %Y} to {pd.Timestamp(as_of):%b %Y}, every "
+        "month shown, each fiscal year closing with its own total column — the "
+        "whole programme, never narrowed by the reporting period. Each block is "
+        "the generation the account is moving on to (every EOS account starts on "
+        "Gen1 hardware); the last block adds them together. Migration start: the "
+        "EOS tracking sheet's Migration Start Date; for an account the sheet does "
+        "not date, the FDO export's first wave that actually got going (its "
+        "Current State reads On Track or Done, not Blocked or blank), dated by its "
+        "Actual Start Date, else Planned Start Date, else Nom. Approval Date. "
+        "Migration end: the sheet's Actual Migration End Date, else the FDO "
+        "export's end date for the completed account. Engagement end: always the "
+        "FDO export's — a completed account, dated by its latest wave's Actual End "
+        "Date (else its Planned End, Actual Start, Planned Start, Nom. Approval or "
+        "Nom. Created Date).")
 
 
 def _matrix_grid(grid: pd.DataFrame, ss, width: float) -> list:
@@ -1369,6 +1403,8 @@ def _report_section(ctx, fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
              kit.nav_bar(ss, spec.title, links),
              kit.spacer(0.15),
              Paragraph(_esc(spec.blurb), ss["Body2"]),
+             *([Paragraph(_esc(eos_customers.scope_note(ctx)), ss["Muted"])]
+               if spec.key == "native" else []),
              kit.spacer(0.1),
              _population_line(spec, pop, ss),
              kit.spacer(0.3)]
@@ -1443,17 +1479,22 @@ def _report_section(ctx, fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
 
 def _programme_summary_block(summary: ProgrammeSummary, ss) -> list:
     """The opening summary, EOS customers only.  Paper has no checkbox, so the
-    reading with the Azure Native customers added is given underneath."""
+    reading with the Azure Native customers added is given underneath, with
+    its caveat."""
     other_line = ("With the Azure Native customers added: "
-                  + summary_sentence(summary.totals(True)).replace("To date, ", "", 1))
+                  + summary_sentence(summary.totals(True)).replace("To date, ", "", 1)
+                  + f" That adds {_customers(summary.native)} from Gen1 to Azure "
+                    "Native.")
     return [KeepTogether([
         Paragraph(SUMMARY_TITLE, ss["H2"]),
         Paragraph(_esc(summary_sentence(summary.totals(False))), ss["Body2"]),
         kit.spacer(0.1),
         *[Paragraph(_esc(line), ss["Body2"]) for line in summary_lines(summary)],
         kit.spacer(0.1),
-        Paragraph(_esc(other_line), ss["Muted"]),
         Paragraph(_esc(summary_note(False)), ss["Muted"]),
+        kit.spacer(0.1),
+        Paragraph(_esc(other_line), ss["Muted"]),
+        Paragraph(_esc(NATIVE_CAVEAT), ss["Muted"]),
     ])]
 
 

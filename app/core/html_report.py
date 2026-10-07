@@ -31,7 +31,7 @@ from plotly.offline import get_plotlyjs
 
 from ..config import FY_START_MONTH, EOS_MATRIX_START_FY
 from ..ui import charts
-from . import (analytics, exporter, glossary, html_style,
+from . import (analytics, eos_customers, exporter, glossary, html_style,
                insights as insights_mod, kpi, metrics, schema, segments)
 from .metrics import fmt_currency, fmt_int
 
@@ -100,6 +100,8 @@ _COLUMN_LABELS.update({
     "source_platform": "From", "target_platform": "To",
     "blocked_state": "Current State", "phase": kpi.LATEST_WAVE_COLUMN,
     "reported_end_date": "End date used", "end_date_source": "End date read from",
+    "matrix_measure": "Measure", "matrix_month": "Month",
+    "matrix_date": "Date counted", "date_source": "Date read from",
 })
 
 
@@ -268,7 +270,8 @@ def _kpi_tiles(tiles: list["_Tile"], group: str = "") -> str:
 
 def _table(frame: pd.DataFrame, table_id: str, *, numeric: set[str] | None = None,
            row_head: bool = False, highlight: str = "",
-           buckets: pd.Series | None = None, sticky_first: bool = False) -> str:
+           buckets: pd.Series | None = None, sticky_first: bool = False,
+           cell_drill: str = "") -> str:
     """A DataFrame as a sortable table.  Values are already display strings.
 
     ``buckets`` tags each row with the chart point it belongs to, so a click on
@@ -300,6 +303,11 @@ def _table(frame: pd.DataFrame, table_id: str, *, numeric: set[str] | None = Non
         for index, column in enumerate(columns):
             value = esc(record[column])
             css = classes(column, index == 0)
+            # A matrix cell with a count in it opens the accounts behind it.
+            if cell_drill and index and value not in ("", "0"):
+                cell = esc(f"{record[columns[0]]}{_REGION_STAGE_JOIN}{column}")
+                css = (css[:-1] + ' cell-drill"') if css else ' class="cell-drill"'
+                css += f' data-cell="{cell}" tabindex="0" role="button"' 
             if not value and index and not css:
                 css = ' class="blank"'
             elif not value and index:
@@ -307,7 +315,8 @@ def _table(frame: pd.DataFrame, table_id: str, *, numeric: set[str] | None = Non
             cells.append(f"<td{css}>{value}</td>")
         rows.append(f"<tr{tags[position]}>{''.join(cells)}</tr>")
     css = "data sticky-first" if sticky_first else "data"
-    return (f'<div class="table-wrap"><table class="{css}" id="{table_id}">'
+    drill = f' data-cell-drill="{cell_drill}"' if cell_drill else ""
+    return (f'<div class="table-wrap"><table class="{css}" id="{table_id}"{drill}>'
             f"<thead><tr>{head}</tr></thead>"
             f"<tbody>{''.join(rows)}</tbody></table></div>")
 
@@ -337,7 +346,9 @@ def _accordion(title: str, body: str, badge: str = "", open_: bool = False,
 
 def _accounts_panel(title: str, rows: pd.DataFrame, table_id: str, *,
                     buckets=None, limit: int = 800, open_: bool = False,
-                    columns: list[str] | None = None) -> str:
+                    columns: list[str] | None = None,
+                    hint: str = "Click a point on the chart above to filter these rows.",
+                    noun: str = "accounts") -> str:
     """The accounts behind a chart, in an accordion the chart can filter.
 
     ``buckets`` is a callable taking the (truncated) record frame and returning
@@ -370,12 +381,12 @@ def _accounts_panel(title: str, rows: pd.DataFrame, table_id: str, *,
              f'{fmt_int(len(shown))} rows</span>'
              + (f'<button class="btn" data-drill-clear="{table_id}" hidden '
                 f'type="button">Clear selection</button>' if tags is not None else "")
-             + (f'<span class="drill-note" data-drill-note="{table_id}">Click a '
-                "point on the chart above to filter these rows.</span>"
+             + (f'<span class="drill-note" data-drill-note="{table_id}" '
+                f'data-hint="{esc(hint)}">{esc(hint)}</span>'
                 if tags is not None else "")
              + "</div>")
     body = note + tools + _table(shown, table_id, buckets=tags)
-    return _accordion(title, body, badge=f"{fmt_int(total)} accounts",
+    return _accordion(title, body, badge=f"{fmt_int(total)} {noun}",
                       open_=open_, anchor=f"acc-{table_id}")
 
 
@@ -852,6 +863,13 @@ def _offerings(doc: _Builder, spec, pop) -> None:
         "period. Click a bar or slice to narrow the records beneath it.", body))
 
 
+def _matrix_cell_buckets(rows: pd.DataFrame) -> list[str]:
+    """Each record's two matrix cells: its month's, and its fiscal year total's."""
+    return [f"{m}{_REGION_STAGE_JOIN}{mo}{_BUCKET_JOIN}{m}{_REGION_STAGE_JOIN}{fy}"
+            for m, mo, fy in zip(rows["matrix_measure"], rows["matrix_month"],
+                                 rows["matrix_fy"])]
+
+
 def _eos_matrix(doc: _Builder, ctx, pop) -> None:
     """The programme's month-by-month grid, exactly as the EOS dashboard shows it.
 
@@ -863,31 +881,32 @@ def _eos_matrix(doc: _Builder, ctx, pop) -> None:
     start = metrics.named_fiscal_year_start(EOS_MATRIX_START_FY, FY_START_MONTH)
     blocks = []
     for generation, title in exporter.matrix_blocks(pop):
-        block = pop[pop["generation"] == generation]
+        block = exporter.matrix_block_rows(pop, generation)
         months = kpi.matrix_month_span(block, start, ctx.as_of)
         grid = kpi.monthly_matrix(block, months, fy_start_month=FY_START_MONTH)
         accounts = segments.tpid_key(block).nunique() if not block.empty else 0
+        key = generation.lower().replace("-", "").replace(" ", "")
+        panel_id = _slug("mxa", key)
+        records = kpi.matrix_records(block, months, fy_start_month=FY_START_MONTH)
         blocks.append(
             f'<h4 class="sub">{esc(title)}</h4>'
             f'<p class="note"><b>{fmt_int(accounts)}</b> accounts '
             f'{esc(exporter.matrix_block_note(generation))} · '
-            f'<b>{fmt_int(len(block))}</b> nomination waves.</p>'
-            + _table(grid, _slug("mx", generation.lower().replace("-", "")),
+            f'<b>{fmt_int(len(block))}</b> nomination waves. Click a number to '
+            "see the accounts behind it.</p>"
+            + _table(grid, _slug("mx", key),
                      numeric=set(grid.columns[1:]), row_head=True,
-                     highlight="Total", sticky_first=True))
+                     highlight="Total", sticky_first=True,
+                     cell_drill=panel_id if not records.empty else "")
+            + _accounts_panel(f"Accounts behind {title}", records, panel_id,
+                              buckets=_matrix_cell_buckets,
+                              columns=kpi.MATRIX_DRILL_COLUMNS,
+                              hint="Click a number in the matrix above to see "
+                                   "the accounts behind it.",
+                              noun="rows"))
     doc.write(_card(
         "Monthly programme matrix",
-        f"From {start:%b %Y} to {ctx.as_of:%b %Y}, every month included, each "
-        "fiscal year closing with its own total column — the whole programme, "
-        "not narrowed by the reporting period the rest of this report uses. "
-        "Blocks are the generation each account is refreshing on to — all EOS "
-        "accounts are coming from Gen-1 hardware. Migration start and migration "
-        "end are the manual EOS tracking sheet's own dates wherever it covers "
-        "an account, and otherwise the export's: start derived (earliest wave "
-        "reading On Track or Done → Actual Start Date, else Planned Start, else "
-        "Nom. Approval), end from the latest wave completing. Engagement end "
-        "is always the export's: a completed account, dated by its latest "
-        "wave's Actual End Date.",
+        exporter.matrix_note(start, ctx.as_of),
         "".join(blocks)))
 
 
@@ -1116,6 +1135,8 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec
     doc.write(f'<section class="report" id="{anchor}">'
               f'<div class="report-head"><h2>{esc(spec.title)}</h2>'
               f"<p>{esc(spec.blurb)}</p>")
+    if spec.key == "native":
+        doc.write(f'<p class="note">{esc(eos_customers.scope_note(ctx))}</p>')
     pops = {v.key: exporter.period_population(whole, v.start, v.end) for v in views}
     for view in views:
         with _period_view(doc, view):
@@ -1207,14 +1228,18 @@ def _programme_summary(doc: _Builder, summary) -> None:
     def note(flag: bool, cls: str) -> str:
         return f'<p class="note sum-note {cls}">{esc(exporter.summary_note(flag))}</p>'
 
-    lines = "".join(f"<li>{esc(line)}</li>" for line in exporter.summary_lines(summary))
+    def lines(flag: bool, cls: str) -> str:
+        items = "".join(f"<li>{esc(line)}</li>"
+                        for line in exporter.summary_lines(summary, flag))
+        return f'<ul class="sum-lines {cls}">{items}</ul>'
     doc.write(f'<div class="card prog-summary">'
               f'<h3 class="block">{esc(exporter.SUMMARY_TITLE)}</h3>'
               f'<input type="checkbox" class="sum-toggle" id="sum-native">'
               f'<label class="sum-label" for="sum-native">'
               f"{esc(exporter.SUMMARY_NATIVE_LABEL)}</label>"
               + sentence(False, "sum-eos") + sentence(True, "sum-all")
-              + f'<ul class="sum-lines">{lines}</ul>'
+              + lines(False, "sum-eos") + lines(True, "sum-all")
+              + f'<p class="sum-caveat sum-all">{esc(exporter.NATIVE_CAVEAT)}</p>'
               + note(False, "sum-eos") + note(True, "sum-all") + "</div>")
 
 
@@ -1458,8 +1483,8 @@ def build_html_report(ctx, where: str = "", scope_label: str = "All data",
     ``all_time_where`` is the same filter clause with the reporting-period
     condition dropped; defaults to ``where``.  The report is built from it and
     carries its own **period switch** (:func:`app.core.exporter.report_views`):
-    Current FY and All reporting period always, plus the period chosen here
-    when it is neither — and opens on the one matching ``date_window``.
+    Current FY and the Reporting Period chosen here (one view when they are the
+    same), opening on the Reporting Period.
     """
     specs = [exporter._BY_KEY[k]
              for k in (reports if reports is not None else exporter.REPORT_KEYS)

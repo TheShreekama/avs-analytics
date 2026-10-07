@@ -2329,7 +2329,7 @@ def test_the_regional_breakdown_keeps_only_the_heatmap(state_doc):
     assert "WW Region × status heatmap" in body
     assert "Migration status by WW Region" not in body
     # …and the heatmap still opens the accounts for a region and a stage.
-    assert 'data-drill="all-rh-eos" data-drill-mode="y-x"' in body
+    assert 'data-drill="sel-rh-eos" data-drill-mode="y-x"' in body
 
 
 def test_money_in_tooltips_is_written_in_k_and_m(state_doc):
@@ -2352,10 +2352,10 @@ def test_the_optional_sections_are_present_but_hidden_by_default(state_doc):
     body = _main(state_doc)
     toggles = re.findall(
         r'<input type="checkbox" class="opt-toggle" id="([^"]+)"([^>]*)>', body)
-    # One blocked section per report and period (Current FY, All reporting
-    # period), then the methodology.
-    assert [t for t, _ in toggles] == ["fy-optx-avs", "all-optx-avs", "fy-optx-eos",
-                                       "all-optx-eos", "opt-methodology"]
+    # One blocked section per report and period (Current FY, Reporting
+    # Period), then the methodology.
+    assert [t for t, _ in toggles] == ["fy-optx-avs", "sel-optx-avs", "fy-optx-eos",
+                                       "sel-optx-eos", "opt-methodology"]
     for _id, attrs in toggles:
         assert "checked" not in attrs              # unticked when the file opens
     # Hidden by a CSS rule on the checkbox itself, so it is hidden from the
@@ -2371,7 +2371,7 @@ def test_the_optional_sections_are_present_but_hidden_by_default(state_doc):
 def test_the_blocked_accounts_table_carries_the_status_summary(state_doc):
     """The reason an account has stopped, in the programme's own words."""
     body = _main(state_doc)
-    blocked = body.split('id="all-optx-eos-body"', 1)[1]
+    blocked = body.split('id="sel-optx-eos-body"', 1)[1]
     assert "<th>Status Summary</th>" in blocked
     # …and only in a blocked section: everything before the first one — tiles,
     # trends, pipeline, regional — must not carry a paragraph per row.
@@ -2632,7 +2632,7 @@ def test_the_optional_sections_default_to_blocked_in_insights_out(state_ctx):
 
     doc = html_report.build_html_report(state_ctx, reports=["avs"]).decode()
     body = _main(doc)
-    assert 'id="all-optx-avs"' in body             # the blocked section's card
+    assert 'id="sel-optx-avs"' in body             # the blocked section's card
     assert '<h3 class="block">Insights</h3>' not in body
 
 
@@ -2647,7 +2647,7 @@ def test_each_optional_section_is_included_only_when_asked_for(
         state_ctx, reports=["avs"], sections=sections).decode())
     # The section's own card, not its title: the methodology names the section
     # too, and would answer for it.
-    assert ('id="all-optx-avs"' in body) is blocked
+    assert ('id="sel-optx-avs"' in body) is blocked
     assert ('<h3 class="block">Insights</h3>' in body) is insights
 
     # The PDF answers to the same selector.  The marker is the closing sentence
@@ -3005,14 +3005,14 @@ def test_the_generation_heatmap_is_in_the_eos_report_only(every_state_fact):
 
     eos = _main(html_report.build_html_report(ctx, reports=["eos"]).decode())
     assert "Accounts by generation and state" in eos
-    assert 'data-drill="all-gs-eos" data-drill-mode="y-x"' in eos  # a cell opens rows
+    assert 'data-drill="sel-gs-eos" data-drill-mode="y-x"' in eos  # a cell opens rows
     assert "The counts — generation × state" in eos
 
     # The rendered grid covers EVERY account in the report — a regression on a
     # generation's wave index leaking into it, which silently dropped a whole
     # row from the heatmap while the table above it still read correctly.
     parser = _Cells()
-    parser.feed(eos.split('id="all-gt-eos"', 1)[1].split("</table>", 1)[0])
+    parser.feed(eos.split('id="sel-gt-eos"', 1)[1].split("</table>", 1)[0])
     header, *body_rows = [r for r in parser.rows if r]
     total = header.index("Total")
     pop = segments.population(every_state_fact, segments.CAT_EOS_ALL)
@@ -3468,7 +3468,9 @@ def test_the_eos_report_opens_on_the_programme_summary():
     assert eos_line.startswith("To date, 5 customers are participating in "
                                "factory-driven migrations, including 1 completed "
                                "migration, 2 currently in progress and 1 in planning")
-    assert "5 customers from Gen1 to Azure Native" in _exp().summary_lines(s)
+    # Gen1 to Azure Native is listed only once its customers are included.
+    assert "5 customers from Gen1 to Azure Native" in _exp().summary_lines(s, True)
+    assert not any("Azure Native" in line for line in _exp().summary_lines(s))
 
     # The HTML report carries both readings behind the reader's own checkbox,
     # unticked, ahead of the executive summary.
@@ -3540,25 +3542,32 @@ def test_a_report_period_keeps_every_wave_of_the_accounts_it_covers():
     assert list(kept["tpid_key"]) == ["a", "a"]      # both of a's waves, none of b's
 
 
-def test_the_html_report_switches_between_current_fy_and_all_reporting_period():
+def test_the_html_report_switches_between_current_fy_and_the_reporting_period():
     from app.core import html_report
     ctx = _sample_with_sheet()
     doc = html_report.build_html_report(ctx, reports=["eos", "native"]).decode()
-    assert '<body data-period="all">' in doc
+    assert '<body data-period="sel">' in doc
     assert 'data-period="fy"' in doc and "Current FY (FY" in doc
-    assert "All reporting period · Jul 2025" in doc
+    assert "Reporting Period · All dates in the dataset" in doc
+    assert "All reporting period" not in doc
     body = _main(doc)
     # Period-bound sections exist once per period; the matrix only once.
-    assert 'data-pv="fy"' in body and 'data-pv="all"' in body
+    assert 'data-pv="fy"' in body and 'data-pv="sel"' in body
     assert body.count('id="mx-gen1"') == 1
     assert 'class="data sticky-first" id="mx-gen1"' in body
     # Hidden by CSS alone until the switch is pressed.
     assert 'body[data-period="fy"] .pv:not([data-pv="fy"])' in doc
-    # A period chosen on the Reports page that is neither is carried as a third.
+    # A chosen period is the Reporting Period; This FY itself is one view.
     month = html_report.build_html_report(
         ctx, reports=["eos"], period_label="Nov 2025",
         date_window=(pd.Timestamp("2025-11-01"), pd.Timestamp("2025-11-30"))).decode()
-    assert '<body data-period="sel">' in month and "Selected · Nov 2025" in month
+    assert "Reporting Period · Nov 2025" in month
+    span = metrics.date_preset_range(ctx.as_of, "This FY", 7)
+    fy_only = html_report.build_html_report(
+        ctx, reports=["eos"], period_label="This FY",
+        date_window=(span[0], span[1])).decode()
+    assert '<body data-period="fy">' in fy_only
+    assert 'data-pv="sel"' not in _main(fy_only)
 
 
 def test_money_goes_on_the_value_axis_of_a_horizontal_bar():
@@ -3649,3 +3658,81 @@ def test_from_avs_is_read_from_the_migration_path_alone():
     assert not kpi.mentions_from_avs(offering_only).any()
     assert list(kpi.in_pipeline_scope(frame, kpi.MOTION_AVS)) == [True, False]
     assert list(kpi.in_pipeline_scope(frame, kpi.MOTION_NATIVE)) == [False, True]
+
+
+# --------------------------------------------------------------------------- #
+# All EOS customers list, and the matrix's combined block
+# --------------------------------------------------------------------------- #
+def test_azure_native_reports_only_customers_on_the_eos_customer_list():
+    from app import state as state_mod
+    from app.core import eos_customers, html_report
+    data = state_mod.SAMPLE_DATA.read_bytes()
+    plain = state_mod.build_dataset([(state_mod.SAMPLE_DATA.name, data)])
+    native = segments.population(plain.fact, segments.CAT_AVS_NATIVE)
+    keep = sorted(native["tpid_key"].unique())[:2]
+    listed = ("TPID,Customer\n" + "".join(f"{k},Some Customer\n" for k in keep)
+              + "99999,Not In FDO\n").encode()
+    ctx = state_mod.build_dataset([(state_mod.SAMPLE_DATA.name, data)],
+                                  eos_list_files=[("eos.csv", listed)])
+    assert ctx.has_eos_list and ctx.eos_list_report["customer_column"] == "Customer"
+    after = segments.population(ctx.fact, segments.CAT_AVS_NATIVE)
+    assert sorted(after["tpid_key"].unique()) == keep
+    applied = ctx.report["eos_list"]
+    assert applied["native_excluded"] == native["tpid_key"].nunique() - 2
+    assert applied["not_in_fdo"] == 1
+    # Nothing outside AVS → Azure Native moves.
+    for category in (segments.CAT_ALL_AVS, segments.CAT_EOS_ALL):
+        assert (segments.population(ctx.fact, category)["tpid_key"].nunique()
+                == segments.population(plain.fact, category)["tpid_key"].nunique())
+    note = eos_customers.scope_note(ctx)
+    assert "Only customers on the All EOS customers list" in note
+    html = html_report.build_html_report(ctx, reports=["native"]).decode()
+    assert esc(note) in html
+    # Without a list, every From AVS customer is reported, and the report says so.
+    assert "No All EOS customers list" in eos_customers.scope_note(plain)
+
+
+def test_the_matrix_ends_with_all_its_blocks_added_together():
+    ctx = _sample_with_sheet()
+    eos = segments.population(ctx.fact, segments.CAT_EOS_ALL)
+    blocks = _exp().matrix_blocks(eos)
+    assert blocks[-1][0] == _exp().ALL_EOS_BLOCK
+    start = metrics.named_fiscal_year_start(26, 7)
+    months = kpi.matrix_month_span(eos, start, ctx.as_of)
+
+    def grid(key):
+        return kpi.monthly_matrix(_exp().matrix_block_rows(eos, key), months,
+                                  fy_start_month=7).set_index("Measure")
+    total = grid(_exp().ALL_EOS_BLOCK)
+    parts = [grid(key) for key, _title in blocks[:-1]]
+    for column in total.columns:
+        if column == "Cumulative":
+            continue
+        for row in ("Total number of new engagement", "Total number of engagement end"):
+            assert int(total.loc[row, column]) == sum(int(p.loc[row, column]) for p in parts)
+
+
+def test_every_matrix_cell_opens_the_records_that_make_it_up():
+    """Click "Engagement end · Sep-25" and see exactly the accounts counted there."""
+    import re
+    from app.core import html_report
+    ctx = _sample_with_sheet()
+    eos = segments.population(ctx.fact, segments.CAT_EOS_ALL)
+    start = metrics.named_fiscal_year_start(26, 7)
+    months = kpi.matrix_month_span(eos, start, ctx.as_of)
+    grid = kpi.monthly_matrix(eos, months, fy_start_month=7).set_index("Measure")
+    records = kpi.matrix_records(eos, months, fy_start_month=7)
+    for measure in ("Total number of new engagement", "Total number of migration start",
+                    "Total number of engagement end"):
+        for column in grid.columns:
+            cell = int(grid.loc[measure, column].replace(",", "") or 0)
+            hits = records[(records["matrix_measure"] == measure)
+                           & ((records["matrix_month"] == column)
+                              | (records["matrix_fy"] == column))]
+            assert hits["tpid_key"].nunique() == cell, (measure, column)
+    body = _main(html_report.build_html_report(ctx, reports=["eos"]).decode())
+    assert 'data-cell-drill="mxa-alleos"' in body
+    cell = re.search(r'data-cell="([^"]+)"', body.split('id="mx-alleos"', 1)[1]).group(1)
+    # The panel's rows carry the same bucket the cell names.
+    panel = body.split('id="mxa-alleos"', 1)[1].split("</table>", 1)[0]
+    assert f'data-bucket="{cell}' in panel or f"|{cell}" in panel
