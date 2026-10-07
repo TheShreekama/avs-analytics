@@ -11,6 +11,7 @@ import streamlit as st
 
 from app import state
 from app.core import diagnostics as dg
+from app.ui import components
 from app.ui.theme import banner, page_header, section
 
 
@@ -39,14 +40,28 @@ def render() -> None:
     columns = dg.column_report(ctx)
     traced = dg.trace(ctx, tpid) if tpid else None
 
+    failure = st.session_state.get(state.LAST_FAILURE_KEY)
+    period = components.global_range(ctx)
+    st.markdown("### What is wrong")
+    for line in dg.verdicts(ctx, failure, period):
+        st.markdown(f"- {line}")
+    st.markdown("**Every report's accounts**")
+    st.dataframe(dg.categories(ctx), width="stretch", hide_index=True)
+    st.caption("Sidebar reporting period: " + dg.period_line(ctx, period))
+
     section("1 · The whole diagnosis (copy or photograph this)")
-    st.code(dg.summary_text(ctx, funnel, columns, traced), language=None,
+    st.code(dg.summary_text(ctx, funnel, columns, traced, failure, period),
+            language=None,
             wrap_lines=True)
 
     section("2 · What is loaded")
     st.dataframe(pd.DataFrame(dg.loaded(ctx), columns=["", "Value"]),
                  width="stretch", hide_index=True)
 
+    files = dg.files_report(ctx)
+    if not files.empty:
+        st.markdown("**FDO files**")
+        st.dataframe(files, width="stretch", hide_index=True)
     section("3 · EOS — from the file to the report")
     st.dataframe(funnel, width="stretch", hide_index=True)
 
@@ -64,6 +79,11 @@ def render() -> None:
 
     section("5 · FDO columns as read")
     st.dataframe(columns, width="stretch", hide_index=True)
+    cols = st.columns(2)
+    for col, key in zip(cols, ("migration_path", "factory_offering")):
+        with col:
+            st.dataframe(dg.value_report(ctx, key, 12), width="stretch",
+                         hide_index=True)
     tags = dg.tag_report(ctx)
     if not tags.empty:
         st.markdown("**Most common Tags values, and the generation each reads as**")

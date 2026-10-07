@@ -217,6 +217,14 @@ def build_dataset(files: list[tuple[str, bytes]], mapping: dict | None = None,
 
 
 def set_context(ctx: DataContext) -> None:
+    previous = st.session_state.get(CTX_KEY)
+    if previous is not None and previous.signature != ctx.signature:
+        # A custom date range is a pair of dates picked inside the *previous*
+        # dataset's span; carried onto a new file it can quietly exclude every
+        # row, so a different dataset starts from the presets again.
+        for key in [k for k in st.session_state.keys()
+                    if str(k) == "global_date_custom" or str(k).endswith("_custom")]:
+            del st.session_state[key]
     st.session_state[CTX_KEY] = ctx
 
 
@@ -225,6 +233,8 @@ def get_context() -> DataContext | None:
 
 
 RAW_FILES_KEY = "avs_raw_files"
+#: The last upload that failed, kept for the Debug page.
+LAST_FAILURE_KEY = "avs_last_failure"
 TRACKER_FILES_KEY = "avs_tracker_files"
 
 #: Passed where ``None`` already means "no tracking sheet", so a caller can say
