@@ -229,6 +229,9 @@ under Streamlit's AppTest in both counting modes.
   Current State plays no part. X = every EOS (All) account, so X ≥ Y+Z+U. Azure Native =
   `avs_native` accounts whose first `cleaning.nomination_date` ≥ 1 Jul 2025
   (`kpi.nominated_since`, `exporter.summary_native_start` = `EOS_MATRIX_START_FY`).
+  A customer on an EOS line *and* the Azure Native line is counted once in the total;
+  `ProgrammeSummary.overlap` / `exporter.summary_overlap_note` says so whenever the
+  lines add up to more than the total.
   The **Gen1 → Azure Native line is shown only when the box is ticked**
   (`summary_lines(s, include_native)`), and then with `exporter.NATIVE_CAVEAT` (moving
   to Azure Native is often modernisation, not an EOS exit).
@@ -427,7 +430,12 @@ under Streamlit's AppTest in both counting modes.
   and their FY-total column). The explanatory text is one function,
   `exporter.matrix_note`, used by the page, the PDF and the HTML. User-facing text says
   **"FDO export"**, never a bare "the export". Columns run from `config.EOS_MATRIX_START_FY` (FY26 =
-  Jul 2025) to the as-of month or the latest completion, **every month shown**, each
+  Jul 2025) to the **as-of month**, and every row is counted **up to the as-of date**
+  (`kpi._matrix_sources(…, as_of)`, shared by `monthly_matrix` and `matrix_records`) — a
+  date after it is not counted, so a tile over Jul 2025 → as-of equals the matrix
+  total. Hosts Migrated / ACR Claimed **dedupe Task IDs before windowing**, the order
+  the trends use. Custom-range date pickers accept **any date** (`components.PICKER_MIN`
+  / `PICKER_MAX`), never just the file's span. **Every month shown**, each
   fiscal year closing with its own total column. The Trend Analysis "Fiscal years
   side by side" grid likewise lists all twelve months. **The reporting period never
   narrows it**, on the dashboard (which draws it from the unfiltered category) or in

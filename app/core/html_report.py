@@ -883,11 +883,14 @@ def _eos_matrix(doc: _Builder, ctx, pop) -> None:
     for generation, title in exporter.matrix_blocks(pop):
         block = exporter.matrix_block_rows(pop, generation)
         months = kpi.matrix_month_span(block, start, ctx.as_of)
-        grid = kpi.monthly_matrix(block, months, fy_start_month=FY_START_MONTH)
+        grid = kpi.monthly_matrix(block, months, fy_start_month=FY_START_MONTH,
+                                  as_of=ctx.as_of)
         accounts = segments.tpid_key(block).nunique() if not block.empty else 0
         key = generation.lower().replace("-", "").replace(" ", "")
         panel_id = _slug("mxa", key)
-        records = kpi.matrix_records(block, months, fy_start_month=FY_START_MONTH)
+        records = kpi.matrix_records(block, months,
+                                     fy_start_month=FY_START_MONTH,
+                                     as_of=ctx.as_of)
         blocks.append(
             f'<h4 class="sub">{esc(title)}</h4>'
             f'<p class="note"><b>{fmt_int(accounts)}</b> accounts '
@@ -1239,6 +1242,8 @@ def _programme_summary(doc: _Builder, summary) -> None:
               f"{esc(exporter.SUMMARY_NATIVE_LABEL)}</label>"
               + sentence(False, "sum-eos") + sentence(True, "sum-all")
               + lines(False, "sum-eos") + lines(True, "sum-all")
+              + (f'<p class="note sum-all">{esc(exporter.summary_overlap_note(summary))}</p>'
+                 if exporter.summary_overlap_note(summary) else "")
               + f'<p class="sum-caveat sum-all">{esc(exporter.NATIVE_CAVEAT)}</p>'
               + note(False, "sum-eos") + note(True, "sum-all") + "</div>")
 

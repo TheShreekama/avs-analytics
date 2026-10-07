@@ -129,6 +129,8 @@ def _sidebar_brand(ctx, state, app_name: str, tagline: str) -> None:
     st.sidebar.markdown("  \n".join(lines))
     cur = pd.Timestamp(ctx.as_of).date()
     new_asof = st.sidebar.date_input("Reporting as-of date", value=cur,
+                                     min_value=pd.Timestamp("2000-01-01").date(),
+                                     max_value=pd.Timestamp("2100-12-31").date(),
                                      help="Anchors all date-range presets and the "
                                           "This-Week/Month/Quarter/YTD windows. "
                                           "Defaults to today; change it to report as "

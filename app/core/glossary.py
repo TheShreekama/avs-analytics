@@ -954,10 +954,11 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         "hardware, so the constant half of each heading is where it is coming "
         "from, and the account's own generation names where it is landing.",
         "The grid ignores the reporting period the rest of the report uses. It "
-        "runs from July 2025 to the current month — further if a completion is "
-        "dated ahead of it — and shows every month in between, because a month "
-        "with nothing in it is itself the number being reported. Each fiscal "
-        "year closes with its own total column.",
+        "runs from July 2025 to the as-of month and counts up to the as-of date "
+        "— a date after it is not counted until it arrives — so a headline tile "
+        "set to the same months reads the same. Every month is shown, because a "
+        "month with nothing in it is itself the number being reported. Each "
+        "fiscal year closes with its own total column.",
         Definition("Total number of new engagement (monthly)", (
             "Use the same **Nom. Approval Date** rule as New Engagements.",
             "Count the unique **TPID** in that date's month, once only.",

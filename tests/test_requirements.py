@@ -1480,12 +1480,13 @@ def test_engagement_end_mirrors_migration_end(matrix_fact):
     assert list(grid.index) == list(kpi.MATRIX_ROWS)
 
 
-def test_matrix_runs_past_the_as_of_date_to_reach_a_future_completion(matrix_fact):
+def test_matrix_stops_at_the_as_of_month_even_with_a_later_completion(matrix_fact):
+    """Counted to the as-of date, like a tile over the same months: Gamma's
+    Feb-26 completion is not in a grid read as of Sep-25."""
     gen2 = matrix_fact[matrix_fact["generation"] == segments.GEN_2]
-    # As-of Sep-25, but Gamma completes in Feb-26: the span has to reach it.
     months = kpi.matrix_month_span(gen2, pd.Timestamp("2025-07-01"),
                                    pd.Timestamp("2025-09-15"))
-    assert str(months[0]) == "2025-07" and str(months[-1]) == "2026-02"
+    assert str(months[0]) == "2025-07" and str(months[-1]) == "2025-09"
 
 
 def test_an_empty_generation_still_renders_the_whole_grid(matrix_fact):
@@ -3736,3 +3737,57 @@ def test_every_matrix_cell_opens_the_records_that_make_it_up():
     # The panel's rows carry the same bucket the cell names.
     panel = body.split('id="mxa-alleos"', 1)[1].split("</table>", 1)[0]
     assert f'data-bucket="{cell}' in panel or f"|{cell}" in panel
+
+
+def test_the_hosts_tile_and_the_matrix_count_the_same_nodes():
+    """Card over July 2025 → as-of = the matrix's total, whatever the data does
+    beyond the as-of date or with a Task ID that appears twice."""
+    from app.core import statuses as st_
+    as_of = pd.Timestamp("2026-10-07")
+    waves = pd.DataFrame({
+        "tpid": ["A", "B", "C", "D", "D"], "tpid_key": ["A", "B", "C", "D", "D"],
+        "task_id": ["t1", "t2", "t3", "t4", "t4"],          # t4 twice (two files)
+        "wave_num": [1, 1, 1, 1, 1],
+        "migration_status_code": [7] * 5, "migration_status_label": ["Completed"] * 5,
+        "migration_status": ["7 - Completed"] * 5, "status_class": [st_.COMPLETED] * 5,
+        "current_state": ["Done"] * 5, "nomination_status": ["Approved"] * 5,
+        "approval_date": pd.to_datetime(["2025-07-10"] * 5),
+        "created_date": pd.to_datetime(["2025-07-01"] * 5),
+        "actual_end_date": pd.to_datetime(["2025-09-01", "2026-09-28",
+                                           "2026-12-15",    # after the as-of date
+                                           "2026-10-01", "2025-06-30"]),
+        "total_cores": [10, 20, 14, 8, 8], "total_acr": [1.0] * 5,
+        "generation": ["Gen-1"] * 5,
+    })
+    start = metrics.named_fiscal_year_start(26, 7)
+    card = kpi.hosts_migrated(waves, start, as_of).value
+    months = kpi.matrix_month_span(waves, start, as_of)
+    assert str(months[-1]) == "2026-10"                       # stops at the as-of month
+    grid = kpi.monthly_matrix(waves, months, fy_start_month=7, as_of=as_of)
+    row = grid.set_index("Measure").loc["Number of hosts migrated"]
+    matrix_total = sum(int(row[c].replace(",", "")) for c in row.index if c.endswith("Total"))
+    assert card == matrix_total == 38                         # 10 + 20 + 8; C is not yet
+    # The matrix's clickable records agree with it too.
+    records = kpi.matrix_records(waves, months, fy_start_month=7, as_of=as_of)
+    hosts = records[records["matrix_measure"] == "Number of hosts migrated"]
+    assert int(hosts["total_cores"].sum()) == 38
+
+
+def test_a_custom_range_can_reach_any_date():
+    from app.ui import components
+    assert components.PICKER_MIN.year <= 2000 and components.PICKER_MAX.year >= 2100
+
+
+def test_a_customer_on_two_summary_lines_is_counted_once_and_explained():
+    from app.core import statuses as st_
+    eos = _phase_frame([("A", 1, 7, "Completed", st_.SOURCE_FDO, "Done", st_.COMPLETED),
+                        ("B", 1, 4, "Executing Migration", st_.SOURCE_FDO,
+                         "On Track", st_.IN_FLIGHT)])
+    eos["generation"] = segments.GEN_1
+    native = _phase_frame([("A", 2, 2, "Executing Pre-requisites", st_.SOURCE_FDO,
+                            "On Track", st_.IN_FLIGHT)])
+    native["approval_date"] = pd.Timestamp("2025-09-01")
+    s = _exp().programme_summary(eos, native)
+    assert (s.gen1, s.native, s.overlap, s.with_native.customers) == (2, 1, 1, 2)
+    note = _exp().summary_overlap_note(s)
+    assert "add up to 3" in note and "counted once in the total of 2" in note
