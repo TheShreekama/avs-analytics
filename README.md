@@ -243,6 +243,15 @@ behind it, so it is **named** under Data Inconsistency rather than invented — 
 *none* of the sheet's TPIDs match, an empty EOS report says so. With no sheet loaded,
 every EOS figure is what it was before the sheet existed.
 
+### When a report looks wrong: Data → Debug
+
+**Debug** shows, for the data loaded right now, what was read and what every rule made of
+it: whether it is your file or the bundled sample (uploads last only for the browser
+session), the EOS funnel from "in the file" to "in the report", each key column with its
+dates as written beside how they were read, the tracking sheet's columns and the TPIDs on
+each side of the join, and — for any TPID you type — every decision taken on that account
+and why. The whole diagnosis is one text block with a copy button, sized to photograph.
+
 ### Several files, one dataset
 
 The source system exports per offering, so AVS nominations and the "(From AVS)"

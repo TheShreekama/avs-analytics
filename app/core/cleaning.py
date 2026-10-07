@@ -27,6 +27,8 @@ from ..config import DIR_FROM_AVS, DIR_OTHER, DIR_TO_AVS
 _DATE_FORMATS_COMMON = (
     "%Y-%m-%d", "%Y/%m/%d", "%Y%m%d",
     "%d-%b-%Y", "%d %b %Y", "%d-%b-%y", "%b %d %Y", "%b %d, %Y", "%d %B %Y", "%B %d, %Y",
+    "%d %b %y", "%d-%B-%Y", "%d-%B-%y", "%d %B %y", "%b %d %y", "%b %d, %y",
+    "%d/%b/%Y", "%d/%b/%y", "%d.%b.%Y",
 )
 #: A month with no day — "Feb-26", "Feb 2026" — is how a hand-kept sheet often
 #: dates a milestone (Excel's ``mmm-yy`` format saved as CSV writes exactly
@@ -34,8 +36,10 @@ _DATE_FORMATS_COMMON = (
 #: dates buckets them by month, so nothing is invented that a report shows.
 _DATE_FORMATS_MONTH_YEAR = ("%b-%y", "%b-%Y", "%B-%y", "%B-%Y", "%b %y", "%b %Y",
                             "%B %Y", "%b'%y", "%b/%Y", "%b/%y")
-_DATE_FORMATS_MONTH_FIRST = ("%m-%d-%Y", "%m/%d/%Y", "%m.%d.%Y", "%m-%d-%y", "%m/%d/%y")
-_DATE_FORMATS_DAY_FIRST = ("%d-%m-%Y", "%d/%m/%Y", "%d.%m.%Y", "%d-%m-%y", "%d/%m/%y")
+_DATE_FORMATS_MONTH_FIRST = ("%m-%d-%Y", "%m/%d/%Y", "%m.%d.%Y", "%m-%d-%y", "%m/%d/%y",
+                             "%m.%d.%y")
+_DATE_FORMATS_DAY_FIRST = ("%d-%m-%Y", "%d/%m/%Y", "%d.%m.%Y", "%d-%m-%y", "%d/%m/%y",
+                           "%d.%m.%y")
 
 # Excel / Google-Sheets serial day numbers, counted from 1899-12-30.  A date cell
 # that was never *formatted* as a date exports as this bare number.
@@ -151,10 +155,12 @@ def parse_date_series(s: pd.Series, dayfirst: bool | None = None) -> pd.Series:
     # 3) Generic pass for anything left.  ``utc=True`` keeps mixed-timezone input
     #    from raising (it does so even under errors="coerce"); the offset is then
     #    dropped, since every date in this dataset is a calendar day.
-    #    Only values that carry a four-digit year go this far: the generic parser
-    #    fills a missing year with the current one ("1/2" -> 2 Jan this year),
-    #    which is a date nobody wrote.
-    remaining &= s.str.contains(r"\d{4}", na=False)
+    #    Only values that name a day, a month *and* a year go this far: the
+    #    generic parser fills a missing year with the current one ("1/2" -> 2 Jan
+    #    this year), which is a date nobody wrote.  A four-digit year, or three
+    #    separate parts ("13 May 26"), is enough.
+    parts = s.str.count(r"[0-9]+|[A-Za-z]{3,}")
+    remaining &= (s.str.contains(r"\d{4}", na=False) | parts.ge(3).fillna(False))
     if remaining.any():
         try:
             generic = pd.to_datetime(s[remaining], errors="coerce", utc=True,
@@ -377,6 +383,9 @@ def build_fact_frame(
     # once the files have been concatenated.
     if schema.SOURCE_FILE_COLUMN in raw.columns:
         fact["source_file"] = raw[schema.SOURCE_FILE_COLUMN].astype("string")
+    # Where each row came from in the uploaded (combined) file, so a trace can
+    # show the cells exactly as they were written beside what was read from them.
+    fact["raw_row"] = pd.RangeIndex(len(raw)).to_numpy()
 
     # Track per-row data-quality notes.
     dq_flags: list[list[str]] = [[] for _ in range(n)]
@@ -614,7 +623,11 @@ def apply_reporting_floor(fact: pd.DataFrame, floor_fy: int,
     if summary["excluded_rows"] and "tpid_key" in fact.columns:
         dropped = fact.loc[before, "tpid_key"]
         kept = fact.loc[~before, "tpid_key"]
-        summary["excluded_accounts"] = int(dropped[~dropped.isin(set(kept))].nunique())
+        gone = dropped[~dropped.isin(set(kept))]
+        summary["excluded_accounts"] = int(gone.nunique())
+        # Named, so a trace can say "this account was nominated before the
+        # floor" instead of leaving it to look as if it never existed.
+        summary["excluded_tpids"] = sorted(set(map(str, gone)))[:20000]
     return fact.loc[~before].reset_index(drop=True), summary
 
 

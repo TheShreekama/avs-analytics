@@ -25,8 +25,8 @@ def run() -> None:
     from app.version import build_stamp, version_line
     from app.ui.theme import inject_css
     from app.views import (category_dashboard, column_mapping, data_inconsistency,
-                           data_upload, eos_programme, insights_page, methodology,
-                           overview, reports, trend_analysis)
+                           data_upload, debug, eos_programme, insights_page,
+                           methodology, overview, reports, trend_analysis)
 
     global _BOOT_LOGGED
     if not _BOOT_LOGGED:                    # once per server start, into the console
@@ -86,6 +86,8 @@ def run() -> None:
                     url_path="data-upload"),
             st.Page(column_mapping.render, title="Column Mapping",
                     icon=":material/table_chart:", url_path="column-mapping"),
+            st.Page(debug.render, title="Debug", icon=":material/bug_report:",
+                    url_path="debug"),
         ],
         "Reference": [
             st.Page(methodology.render, title="Methodology & Logic",
@@ -110,6 +112,11 @@ def _sidebar_brand(ctx, state, app_name: str, tagline: str) -> None:
     st.sidebar.divider()
 
     src = "Sample dataset" if ctx.is_sample else ctx.filename
+    if ctx.is_sample:
+        # Uploads live only as long as the browser session: a refresh or a
+        # restart silently puts the sample back, and every report then reads it.
+        st.sidebar.warning("Showing the bundled **sample** data, not your file. "
+                           "Upload again on **Data & Upload**.")
     n_cust = len(ctx.customer)
     lines = [f"**FDO Dataset:** {src}",
              f"**Waves:** {len(ctx.fact):,} · **Accounts:** {n_cust:,}"]
