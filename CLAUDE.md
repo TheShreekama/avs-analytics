@@ -139,21 +139,24 @@ under Streamlit's AppTest in both counting modes.
   the displayed months only.
 - **Two status vocabularies; rules read `status_class`, never the number.** The FDO export
   numbers 1-4 in flight, 5 Deferred, 6 Cancelled / Archived, 7 Completed; the EOS tracking
-  sheet numbers `Kick-Off Awaited`, `Planning & Prerequisites`, `3. Ready for
-  Migration`, `Executing Migration`, `Sign-off Pending` (all in flight), `Completed`,
-  `On Hold`, `Cancelled`. 6 means opposite things, so every row carries
+  sheet's values carry **no numbers at all** — `Kick-Off Awaited`, `Planning &
+  Prerequisites`, `Ready for Migration`, `Executing Migration`, `Sign-off Pending` (all in
+  flight), `Completed`, `On Hold`, `Cancelled` — and none is ever read, stored or shown
+  (`TrackerStatus.order` is internal, for sorting and "least advanced" only; a sheet stage
+  has a blank `migration_status_code`). The two vocabularies overlap, so every row carries
   `status_class` (`statuses.IN_FLIGHT/COMPLETED/DEFERRED/ON_HOLD/CANCELLED/UNKNOWN`) and
   `status_source` ("FDO export"/"EOS tracker"); `kpi.is_completed/in_flight/is_deferred/
   is_on_hold/is_cancelled`, the pipeline, `derive_eos_status` and the rollup all read the
-  class. `kpi.stage_labels` labels a sheet stage **"EOS 4"**, an export stage "Stage 4".
+  class. `kpi.stage_labels` labels an export stage "Stage 4" (with a legend) and a sheet
+  stage by its own wording ("Executing Migration").
 - **The sheet's Migration Status and Current State replace the export's**
   (`eos_tracker.apply_status`, in `build_fact_frame` after the status split): on every wave
   the export still has **open** (class not completed/cancelled), or on the latest wave when
   all are closed — a closed wave keeps its status (and its cores stay migrated). Originals
   kept as `fdo_migration_status`/`fdo_current_state`; a wave the sheet completes with no
   Actual End Date takes the sheet's end date. Values are parsed by **wording**
-  (`eos_tracker.parse_status`/`parse_state`, case/punctuation-insensitive; a bare number is
-  read by position, but "5 - Deferred by Customer" is *not* the sheet's 5); unrecognised
+  (`eos_tracker.parse_status`/`parse_state`, case/punctuation-insensitive; a number — alone
+  or in front of the wording — is never read, and "5 - Deferred by Customer" names nothing); unrecognised
   values leave the export answering and are listed on Data & Upload. Several rows per
   TPID: least advanced in-flight stage, then On Hold, Completed, Cancelled; state Blocked >
   On Track > Completed.
@@ -218,7 +221,12 @@ under Streamlit's AppTest in both counting modes.
   (2) `Nomination Status = "Approved"` (`kpi.is_nomination_approved` — the column, not
   `is_approved`, which also accepts a stray approval date);
   (3) `Current State = "On Track"` and nothing else;
-  (4) `Migration Status NOT IN ("5 - Deferred By Customer", "6 - Cancelled / Archived")`.
+  (4) `Migration Status NOT IN ("5 - Deferred By Customer", "6 - Cancelled / Archived",
+  "On Hold", "Cancelled")`. Condition (1) is **per report** (`kpi.in_pipeline_scope(fact,
+  motion)`, `exporter.pipeline_motion(category)`): AVS and EOS (`MOTION_AVS`) = the offering
+  **and no "From AVS" in the path or the offering** (`kpi.mentions_from_avs`); AVS → Azure
+  Native (`MOTION_NATIVE`) = the path contains "From AVS". **From AVS counts in AVS → Azure
+  Native and nowhere else**; `nodes_planned` (EOS only) always reads `MOTION_AVS`.
   `acr_pipeline` sums Total ACR over them (every report); `nodes_planned` sums Total Cores
   (**EOS reports only**, `exporter.shows_nodes_planned`). Note the rule excludes 5 and 6
   only — a completed wave is kept out by condition 3, since a finished wave reads *Done*,
@@ -326,9 +334,11 @@ under Streamlit's AppTest in both counting modes.
   Actual Start, else Planned Start, else Nom. Approval; `kpi.migration_end_dates`: the
   account's latest wave completing, by its Actual End Date). Only the matrix reads them —
   `monthly_migrations_completed`, which the trends and tiles use, is untouched.
-  *Engagement end* **mirrors migration end** (`MATRIX_ROWS_MIRRORED`) — the
-  export has no closure date distinct from the last wave completing, so the two rows
-  carry identical values by construction. Columns run from `config.EOS_MATRIX_START_FY` (FY26 =
+  *Engagement end* is **always the export's** (`kpi.engagement_end_dates`): account state
+  Completed (the All AVS rule), dated by the latest wave's **Actual End Date** as the export
+  records it (`fdo_actual_end_date`, saved by `apply_status` before the sheet fills any
+  blank in) — never the sheet's Actual Migration End Date, which dates *migration end*.
+  With no sheet the two rows are identical. Columns run from `config.EOS_MATRIX_START_FY` (FY26 =
   Jul 2025) to the as-of month or the latest completion, **every month shown**, each
   fiscal year closing with its own total column. The Trend Analysis "Fiscal years
   side by side" grid likewise lists all twelve months. **The reporting period never
