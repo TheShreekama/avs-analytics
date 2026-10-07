@@ -15,7 +15,7 @@ import streamlit as st
 
 from .config import (FY_START_MONTH, REPORTING_FLOOR_FY, SAMPLE_DATA,
                      SAMPLE_EOS_TRACKER)
-from .core import (cleaning, eos_tracker as trackermod, loader,
+from .core import (cleaning, eos_customers as eoslist, eos_tracker as trackermod, loader,
                    mapping as mapmod, rollup as rollupmod, segments)
 
 CTX_KEY = "avs_ctx"
@@ -46,6 +46,12 @@ class DataContext:
     tracker_filename: str = ""
     tracker_signature: str = ""
     tracker_report: dict = field(default_factory=dict)
+    #: The All EOS customers list: one row per TPID running EOS SKUs.  When it
+    #: is loaded, AVS → Azure Native reports only the customers on it.
+    eos_list: pd.DataFrame | None = None
+    eos_list_filename: str = ""
+    eos_list_signature: str = ""
+    eos_list_report: dict = field(default_factory=dict)
 
     @property
     def is_multi_file(self) -> bool:
@@ -54,6 +60,10 @@ class DataContext:
     @property
     def has_tracker(self) -> bool:
         return self.tracker is not None and not self.tracker.empty
+
+    @property
+    def has_eos_list(self) -> bool:
+        return self.eos_list is not None
 
 
 # --------------------------------------------------------------------------- #
@@ -83,10 +93,24 @@ def _read_tracker(signature: str, files: tuple[tuple[str, bytes], ...],
     return raw, tracker, report
 
 
+@st.cache_data(show_spinner=False, max_entries=4)
+def _read_eos_list(signature: str, files: tuple[tuple[str, bytes], ...]
+                   ) -> tuple[pd.DataFrame, dict]:
+    """The All EOS customers list: one row per TPID, and the read report."""
+    raw, notes = eoslist.read_files(list(files))
+    label = loader.dataset_label(list(files))
+    with loader.ingest_stage("eos list", label, raw):
+        frame, report = eoslist.build_list(raw)
+    report["files"] = notes
+    return frame, report
+
+
 @st.cache_data(show_spinner=False, max_entries=6)
 def _build_fact(signature: str, mapping_json: str, as_of_str: str, filename: str,
                 _raw: pd.DataFrame, tracker_signature: str = "",
-                _tracker: pd.DataFrame | None = None
+                _tracker: pd.DataFrame | None = None,
+                eos_list_signature: str = "",
+                _eos_list: pd.DataFrame | None = None
                 ) -> tuple[pd.DataFrame, dict, pd.DataFrame]:
     mp = json.loads(mapping_json)
     as_of = pd.Timestamp(as_of_str) if as_of_str else None
@@ -99,6 +123,10 @@ def _build_fact(signature: str, mapping_json: str, as_of_str: str, filename: str
     with loader.ingest_stage("floor", filename, _raw, mp):
         fact, report["scope"] = cleaning.apply_reporting_floor(
             fact, REPORTING_FLOOR_FY, FY_START_MONTH)
+    # AVS → Azure Native covers only the customers on the All EOS customers
+    # list, when one is loaded: the others' From AVS waves leave here.
+    with loader.ingest_stage("eos list", filename, _raw, mp):
+        fact, report["eos_list"] = eoslist.apply_to_fact(fact, _eos_list)
     with loader.ingest_stage("rollup", filename, _raw, mp):
         customer = rollupmod.build_customer_rollup(fact, report["as_of"])
         report["rollup"] = rollupmod.rollup_summary(customer)
@@ -144,7 +172,8 @@ def build_dataset(files: list[tuple[str, bytes]], mapping: dict | None = None,
                   as_of: pd.Timestamp | None = None,
                   is_sample: bool = False,
                   tracker_files: list[tuple[str, bytes]] | None = None,
-                  tracker_dayfirst: "bool | None | object" = _FROM_SESSION
+                  tracker_dayfirst: "bool | None | object" = _FROM_SESSION,
+                  eos_list_files: list[tuple[str, bytes]] | None = None
                   ) -> DataContext:
     """Build a context from one or more files read as a single dataset.
 
@@ -197,13 +226,25 @@ def build_dataset(files: list[tuple[str, bytes]], mapping: dict | None = None,
         tracker_raw, tracker, tracker_report = _read_tracker(
             tracker_signature, tuple(tracker_files), tracker_dayfirst)
 
+    eos_list_files = [(name, data) for name, data in (eos_list_files or [])]
+    eos_list = None
+    eos_list_signature = eos_list_label = ""
+    eos_list_report: dict = {}
+    if eos_list_files:
+        eos_list_signature = loader.files_signature(eos_list_files)
+        eos_list_label = loader.dataset_label(eos_list_files)
+        eos_list, eos_list_report = _read_eos_list(eos_list_signature,
+                                                   tuple(eos_list_files))
+
     as_of_str = pd.Timestamp(as_of).isoformat() if as_of is not None else ""
     mapping_json = json.dumps(mapping, sort_keys=True)
     fact, report, customer = _build_fact(signature, mapping_json, as_of_str,
-                                         label, raw, tracker_key, tracker)
+                                         label, raw, tracker_key, tracker,
+                                         eos_list_signature, eos_list)
     report["sources"] = sources
     report["tracker_read"] = tracker_report
-    cache_key = f"{signature}:{hash(mapping_json)}:{as_of_str}:{tracker_key}"
+    cache_key = (f"{signature}:{hash(mapping_json)}:{as_of_str}:{tracker_key}:"
+                 f"{eos_list_signature}")
     with loader.ingest_stage("register", label, raw, mapping):
         con = _make_con(cache_key, fact, customer)
 
@@ -213,7 +254,10 @@ def build_dataset(files: list[tuple[str, bytes]], mapping: dict | None = None,
                        tracker=tracker, tracker_raw=tracker_raw,
                        tracker_filename=tracker_label,
                        tracker_signature=tracker_signature,
-                       tracker_report=tracker_report)
+                       tracker_report=tracker_report,
+                       eos_list=eos_list, eos_list_filename=eos_list_label,
+                       eos_list_signature=eos_list_signature,
+                       eos_list_report=eos_list_report)
 
 
 def set_context(ctx: DataContext) -> None:
@@ -236,6 +280,7 @@ RAW_FILES_KEY = "avs_raw_files"
 #: The last upload that failed, kept for the Debug page.
 LAST_FAILURE_KEY = "avs_last_failure"
 TRACKER_FILES_KEY = "avs_tracker_files"
+EOS_LIST_FILES_KEY = "avs_eos_list_files"
 
 #: Passed where ``None`` already means "no tracking sheet", so a caller can say
 #: "leave the sheet alone" and "drop the sheet" as two different things.
@@ -243,11 +288,14 @@ KEEP = object()
 
 
 def remember_files(files: list[tuple[str, bytes]],
-                   tracker_files: list[tuple[str, bytes]] | None = KEEP) -> None:
+                   tracker_files: list[tuple[str, bytes]] | None = KEEP,
+                   eos_list_files: list[tuple[str, bytes]] | None = KEEP) -> None:
     """Stash the uploaded bytes so a re-map can rebuild without a re-upload."""
     st.session_state[RAW_FILES_KEY] = list(files)
     if tracker_files is not KEEP:
         st.session_state[TRACKER_FILES_KEY] = list(tracker_files or [])
+    if eos_list_files is not KEEP:
+        st.session_state[EOS_LIST_FILES_KEY] = list(eos_list_files or [])
 
 
 def remembered_files() -> list[tuple[str, bytes]]:
@@ -256,6 +304,10 @@ def remembered_files() -> list[tuple[str, bytes]]:
 
 def remembered_tracker_files() -> list[tuple[str, bytes]]:
     return list(st.session_state.get(TRACKER_FILES_KEY) or [])
+
+
+def remembered_eos_list_files() -> list[tuple[str, bytes]]:
+    return list(st.session_state.get(EOS_LIST_FILES_KEY) or [])
 
 
 def sample_tracker_files() -> list[tuple[str, bytes]]:
@@ -268,7 +320,7 @@ def load_sample(with_tracker: bool = False) -> DataContext:
     tracker_files = sample_tracker_files() if with_tracker else None
     ctx = build_context(SAMPLE_DATA.name, data, is_sample=True,
                         tracker_files=tracker_files)
-    remember_files([(SAMPLE_DATA.name, data)], tracker_files or [])
+    remember_files([(SAMPLE_DATA.name, data)], tracker_files or [], [])
     set_context(ctx)
     return ctx
 
@@ -282,7 +334,8 @@ def ensure_context() -> DataContext:
 
 
 def reload_with(mapping: dict | None = None, as_of: pd.Timestamp | None = None,
-                tracker_files: list[tuple[str, bytes]] | None = KEEP) -> DataContext:
+                tracker_files: list[tuple[str, bytes]] | None = KEEP,
+                eos_list_files: list[tuple[str, bytes]] | None = KEEP) -> DataContext:
     """Rebuild the current context with a new mapping, as-of date and/or tracker.
 
     ``tracker_files`` left alone keeps whichever sheet is loaded; pass a list to
@@ -295,20 +348,23 @@ def reload_with(mapping: dict | None = None, as_of: pd.Timestamp | None = None,
     keep_tracker = tracker_files is KEEP
     tracker_files = (remembered_tracker_files() if keep_tracker
                      else list(tracker_files or []))
+    keep_list = eos_list_files is KEEP
+    eos_list_files = (remembered_eos_list_files() if keep_list
+                      else list(eos_list_files or []))
     if ctx.is_sample:
-        data = SAMPLE_DATA.read_bytes()
-        new = build_context(ctx.filename, data, mapping=mapping or ctx.mapping,
-                            as_of=as_of if as_of is not None else ctx.as_of,
-                            is_sample=True, tracker_files=tracker_files)
+        files = [(ctx.filename, SAMPLE_DATA.read_bytes())]
     else:
         # every uploaded file's bytes are stashed on the session, so a re-map
         # rebuilds the whole dataset without asking for the files again
         files = remembered_files()
-        new = build_dataset(files, mapping=mapping or ctx.mapping,
-                            as_of=as_of if as_of is not None else ctx.as_of,
-                            tracker_files=tracker_files)
+    new = build_dataset(files, mapping=mapping or ctx.mapping,
+                        as_of=as_of if as_of is not None else ctx.as_of,
+                        is_sample=ctx.is_sample, tracker_files=tracker_files,
+                        eos_list_files=eos_list_files)
     if not keep_tracker:
         st.session_state[TRACKER_FILES_KEY] = list(tracker_files)
+    if not keep_list:
+        st.session_state[EOS_LIST_FILES_KEY] = list(eos_list_files)
     set_context(new)
     return new
 

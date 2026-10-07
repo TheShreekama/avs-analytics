@@ -95,7 +95,6 @@ nav.toc {{
 .period-switch .period-note {{ font-size: .72rem; color: var(--muted);
                                margin: .6rem 0 0; line-height: 1.35; }}
 body[data-period="fy"] .pv:not([data-pv="fy"]),
-body[data-period="all"] .pv:not([data-pv="all"]),
 body[data-period="sel"] .pv:not([data-pv="sel"]) {{ display: none; }}
 
 nav.toc h2 {{ font-size: .72rem; text-transform: uppercase; letter-spacing: .09em;
@@ -179,6 +178,8 @@ h4.sub {{ font-size: .95rem; margin: 1rem 0 .4rem; color: var(--ink); }}
                             user-select: none; }}
 .prog-summary .sum-text {{ font-size: 1.02rem; line-height: 1.5; margin: .8rem 0 .3rem; }}
 .prog-summary .sum-lines {{ margin: .4rem 0 .8rem 1.2rem; }}
+.prog-summary .sum-caveat {{ font-size: .84rem; color: var(--muted);
+  border-left: 3px solid var(--warn); padding: .2rem 0 .2rem .6rem; margin: .2rem 0 .6rem; }}
 .sum-toggle:checked ~ .sum-eos {{ display: none; }}
 .sum-toggle:not(:checked) ~ .sum-all {{ display: none; }}
 

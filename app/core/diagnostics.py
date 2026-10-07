@@ -199,6 +199,12 @@ def verdicts(ctx, last_failure: dict | None = None,
     if ctx.is_sample:
         out.append("The BUNDLED SAMPLE is loaded, not your file. Upload again on "
                    "Data & Upload (uploads last only for the browser session).")
+    if getattr(ctx, "has_eos_list", False):
+        applied = ctx.report.get("eos_list") or {}
+        out.append(f"All EOS customers list loaded ({int(applied.get('listed_accounts', 0)):,} "
+                   f"TPIDs): AVS → Azure Native keeps {int(applied.get('native_kept', 0)):,} "
+                   f"customer(s) and leaves out {int(applied.get('native_excluded', 0)):,} "
+                   "not on the list.")
     empty = int(ctx.report.get("empty_rows", 0))
     if empty:
         where = ", ".join(f"{f} ({n:,})" for f, n in

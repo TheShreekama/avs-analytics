@@ -22,12 +22,14 @@ produced it.
 """
 from __future__ import annotations
 
+import html
+
 import pandas as pd
 import streamlit as st
 
 from app import state
 from app.config import EOS_MATRIX_START_FY, FY_START_MONTH
-from app.core import exporter, glossary, kpi, metrics, segments
+from app.core import eos_customers, exporter, glossary, kpi, metrics, segments
 from app.core.metrics import fmt_currency, fmt_int
 from app.ui import charts, components, drilldown
 from app.ui.theme import banner, page_header, section, subheading
@@ -130,7 +132,10 @@ def _programme_summary(ctx, fact: pd.DataFrame, key: str) -> None:
     include = st.checkbox(exporter.SUMMARY_NATIVE_LABEL, value=False,
                           key=f"{key}_summary_native")
     st.markdown(f"**{exporter.summary_sentence(summary.totals(include))}**")
-    st.markdown("\n".join(f"- {line}" for line in exporter.summary_lines(summary)))
+    st.markdown("\n".join(f"- {line}"
+                          for line in exporter.summary_lines(summary, include)))
+    if include:
+        st.caption("⚠︎ " + exporter.NATIVE_CAVEAT)
     st.caption(exporter.summary_note(include))
 
 # --------------------------------------------------------------------------- #
@@ -145,19 +150,9 @@ def _generation_matrix(ctx, fact: pd.DataFrame, key: str) -> None:
     section("Monthly programme matrix", help=glossary.EOS_MATRIX,
             period="Fixed — July onwards, every month shown")
     start = metrics.named_fiscal_year_start(EOS_MATRIX_START_FY, FY_START_MONTH)
-    st.caption(f"From **{start:%b %Y}** to **{ctx.as_of:%b %Y}**, every month "
-               "included, each fiscal year closing with its own total column. "
-               "Blocks are the generation each account is refreshing on to — all "
-               "EOS accounts are coming from Gen-1 hardware. *Migration start* "
-               "and *migration end* come from the **manual EOS tracking sheet** "
-               "wherever it covers an account, and otherwise from the export: "
-               "start derived (earliest wave reading On Track or Done → Actual "
-               "Start Date, else Planned Start, else Nom. Approval), end from "
-               "the latest wave completing. *Engagement end* is always the "
-               "export's: a completed account, dated by its latest wave's "
-               "Actual End Date — the All AVS rule.")
+    st.caption(exporter.matrix_note(start, ctx.as_of))
     for generation, title in exporter.matrix_blocks(fact):
-        block = fact[fact["generation"] == generation]
+        block = exporter.matrix_block_rows(fact, generation)
         accounts = segments.tpid_key(block).nunique() if not block.empty else 0
         subheading(title)
         st.caption(f"**{fmt_int(accounts)}** accounts "
@@ -168,7 +163,7 @@ def _generation_matrix(ctx, fact: pd.DataFrame, key: str) -> None:
         components.show_table(grid)
         st.download_button(
             f"⬇️ Export {title} to CSV", grid.to_csv(index=False).encode("utf-8"),
-            file_name=f"eos-matrix-{generation.lower().replace('-', '')}.csv",
+            file_name=f"eos-matrix-{generation.lower().replace('-', '').replace(' ', '')}.csv",
             mime="text/csv", key=f"{key}_matrix_{generation}")
 
 
@@ -180,6 +175,8 @@ def _population_note(ctx, category: str, fact: pd.DataFrame) -> None:
                     if ctx.has_tracker else
                     "scope from the <b>AVS Migration - Gen1/Gen2</b> tag on any wave, "
                     "or the <b>AV36/AV36P/AV52 - EOS</b> path when untagged")
+    if category == segments.CAT_AVS_NATIVE:
+        bits.append(html.escape(eos_customers.scope_note(ctx)))
     if category == segments.CAT_EOS_ALL and not fact.empty:
         split = (fact.drop_duplicates("tpid_key")["generation"]
                  .value_counts().rename({segments.GEN_UNCLASSIFIED: "no generation tag"}))

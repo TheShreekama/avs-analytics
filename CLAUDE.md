@@ -121,6 +121,16 @@ under Streamlit's AppTest in both counting modes.
   generation); with no tag on any wave, an "AV36/AV36P/AV52 - EOS" path/offering is the
   fallback (`segments.eos_population`) and the account lands on the "No generation tag"
   page. Each row carries `generation_source` so a reader can see which document answered.
+- **All EOS customers list** (third upload on Data & Upload, `app/core/eos_customers.py`,
+  columns **TPID** and **Customer**, read like the tracking sheet): when loaded, **AVS →
+  Azure Native reports only customers on it** — `eos_customers.apply_to_fact`, run in
+  `state._build_fact` after the floor, **drops the From AVS waves of every TPID not on
+  the list**, so no page, export or total can count them (nothing else moves: From AVS
+  counts nowhere else). `report["eos_list"]` (kept/excluded/not-in-FDO, excluded names)
+  feeds Data & Upload's panel, the Debug verdicts and `eos_customers.scope_note(ctx)`,
+  printed on the native dashboard, PDF and HTML report. No list → unchanged.
+  `ctx.eos_list`, `has_eos_list`, `eos_list_signature` (in the cache key),
+  `state.reload_with(eos_list_files=…)`.
 - **TPID is authoritative** for joins, dedup and counts (`segments.tpid_key`; falls back to
   the account name only when a row has no TPID). The `customer` rollup keys on it — never
   on the account name, which differs between worksheets.
@@ -219,6 +229,9 @@ under Streamlit's AppTest in both counting modes.
   Current State plays no part. X = every EOS (All) account, so X ≥ Y+Z+U. Azure Native =
   `avs_native` accounts whose first `cleaning.nomination_date` ≥ 1 Jul 2025
   (`kpi.nominated_since`, `exporter.summary_native_start` = `EOS_MATRIX_START_FY`).
+  The **Gen1 → Azure Native line is shown only when the box is ticked**
+  (`summary_lines(s, include_native)`), and then with `exporter.NATIVE_CAVEAT` (moving
+  to Azure Native is often modernisation, not an EOS exit).
   "Include Azure Native customers" adds them (unique TPIDs) to every total — each customer
   classified within its own motion, EOS phase winning (`exporter._totals`): a
   `st.checkbox` on the page and a CSS-only `.sum-toggle` in the HTML (both readings written
@@ -232,9 +245,9 @@ under Streamlit's AppTest in both counting modes.
   regional, generation, insights and stopped-account sections read
   `period_population` — accounts with a wave whose Nom. Created Date is in the period,
   **all** their waves kept. **The HTML report carries a period switch** at the top of the
-  side panel: Current FY and All reporting period (Jul 2025 → as-of) always, plus the
-  Reports page's period as "Selected · …" when it is neither; it opens on the matching
-  view (All when none). Period-bound sections are written once per view inside
+  side panel: **Current FY** and **Reporting Period** (the Reports page's period, "All
+  dates in the dataset" when none) — one view when they are the same window; it opens
+  on the Reporting Period (`exporter.report_views`, keys `fy` / `sel`). Period-bound sections are written once per view inside
   `<div class="pv" data-pv=…>` via `html_report._period_view`, which sets `_ID_PREFIX`
   so every `_slug` id is view-prefixed (`all-optx-eos`, `fy-kpis-eos`); CSS on
   `<body data-period>` hides the others with no script. The programme summary, matrix,
@@ -395,15 +408,21 @@ under Streamlit's AppTest in both counting modes.
   reuse `monthly_unique_tpids` / `monthly_hosts`; *migration start* and *migration end*
   take the **EOS tracking sheet's** `Migration Start Date` / `Actual Migration End Date`
   for every account it covers and fall back to the export for the rest
-  (`kpi.migration_start_dates`: earliest wave whose Current State reads On Track/Done →
-  Actual Start, else Planned Start, else Nom. Approval; `kpi.migration_end_dates`: the
+  (`kpi.migration_start_dates`: the earliest wave that actually got going — Current
+  State On Track/Done — read from **that wave alone** (`_first_of`), its Actual Start,
+  else Planned Start, else Nom. Approval; `kpi.migration_end_dates`: the
   account's latest wave completing, by its Actual End Date). Only the matrix reads them —
   `monthly_migrations_completed`, which the trends and tiles use, is untouched.
   *Engagement end* is **always the export's** (`kpi.engagement_end_dates`): account state
   Completed (the All AVS rule), dated by the latest wave's **Actual End Date** as the export
   records it (`fdo_actual_end_date`, saved by `apply_status` before the sheet fills any
   blank in) — never the sheet's Actual Migration End Date, which dates *migration end*.
-  With no sheet the two rows are identical. Columns run from `config.EOS_MATRIX_START_FY` (FY26 =
+  With no sheet the two rows are identical. Blocks come from `exporter.matrix_blocks`
+  (+ `matrix_block_rows`, `matrix_block_note`): Gen1→Gen1, Gen1→Gen2, "Generation not
+  stated" when present, and last **"All EOS migrations"** (`ALL_EOS_BLOCK`, the blocks
+  added together, each TPID once). The explanatory text is one function,
+  `exporter.matrix_note`, used by the page, the PDF and the HTML. User-facing text says
+  **"FDO export"**, never a bare "the export". Columns run from `config.EOS_MATRIX_START_FY` (FY26 =
   Jul 2025) to the as-of month or the latest completion, **every month shown**, each
   fiscal year closing with its own total column. The Trend Analysis "Fiscal years
   side by side" grid likewise lists all twelve months. **The reporting period never

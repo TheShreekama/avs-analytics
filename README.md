@@ -199,6 +199,14 @@ The app understands the standard AVS nominations export schema out of the box an
 
 Supported uploads: **CSV, XLSX, XLS**. First row must be headers.
 
+### The All EOS customers list
+
+A third, optional upload on **Data & Upload**: every customer running EOS SKUs, with
+two columns, **TPID** and **Customer**. When it is loaded, the **AVS → Azure Native**
+report covers only the customers on it; a customer the FDO export shows moving From AVS
+who is not on the list is left out of every figure (and named on Data & Upload).
+Nothing else changes, and without the list every From AVS customer is reported.
+
 ### The manual EOS tracking sheet
 
 The EOS programme keeps its own spreadsheet beside the export, and **Data & Upload** takes
@@ -244,7 +252,7 @@ after 1 July 2025. An **Include Azure Native customers** checkbox adds them to t
 totals (on the page and in the HTML report; the PDF prints both readings).
 
 The HTML report has a **Reporting period** switch at the top of its side panel: **Current
-FY** and **All reporting period** (July 2025 to the as-of date). Every period-bound figure
+FY** and **Reporting Period** (the period chosen on the Reports page). Every period-bound figure
 changes with it; the programme summary, the monthly programme matrix, the fiscal years
 side by side and the top accounts always cover the whole programme.
 

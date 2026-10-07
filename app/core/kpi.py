@@ -444,7 +444,8 @@ def _derived_start_dates(fact: pd.DataFrame) -> pd.DataFrame:
     rows = _ordered(fact[started])
     if rows.empty:
         return rows
-    firsts = rows.groupby("tpid_key", as_index=False, sort=False).first()
+    # That one wave's own dates — never a blank cell filled from a later wave.
+    firsts = _first_of(rows)
 
     out = firsts.copy()
     out["migration_start_date"] = pd.NaT
