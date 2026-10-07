@@ -831,6 +831,70 @@ def monthly_matrix(fact: pd.DataFrame, months: list[pd.Period],
     return _matrix_frame(data, months, fy_start_month)
 
 
+#: The date each matrix row is counted by — what a cell's accounts are dated with.
+_MATRIX_DATES = {
+    "Total number of new engagement": ("approval_date", None),
+    "Total number of migration start": ("migration_start_date", "start_date_source"),
+    "Total number of migration end": ("migration_end_date", "end_date_source"),
+    "Total number of engagement end": ("engagement_end_date", "end_date_source"),
+    "Number of hosts migrated": ("reported_end_date", "end_date_source"),
+}
+
+#: The columns a matrix cell's accounts are listed with.
+MATRIX_DRILL_COLUMNS = ["matrix_measure", "matrix_month", "tpid", "customer_name",
+                        "matrix_date", "date_source", "phase", "total_cores",
+                        "migration_status_label", "region_geo"]
+
+
+def matrix_records(fact: pd.DataFrame, months: list[pd.Period],
+                   waves: "WaveIndex | None" = None,
+                   fy_start_month: int = 7) -> pd.DataFrame:
+    """The records behind every cell of :func:`monthly_matrix`, one row per
+    record per measure — the same rows each count was made from.
+
+    Each row carries ``matrix_measure`` (the row label), ``matrix_month`` (the
+    column label, "Sep-25"), ``matrix_fy`` (its fiscal-year total column,
+    "FY26 Total") and ``matrix_date`` / ``date_source`` (the date it was
+    counted by), so a cell can open exactly the accounts that make it up.
+    """
+    if fact.empty or not months:
+        return pd.DataFrame(columns=MATRIX_DRILL_COLUMNS + ["matrix_fy"])
+    if waves is None:
+        waves = wave_index(fact)
+    sources = {
+        "Total number of new engagement":
+            monthly_unique_tpids(fact, "approval_date", waves=waves)[1],
+        "Total number of migration start": monthly_migration_starts(fact)[1],
+        "Total number of migration end":
+            monthly_migration_ends(fact, lasts=waves.last)[1],
+        "Total number of engagement end":
+            monthly_engagement_ends(fact, lasts=waves.last)[1],
+        "Number of hosts migrated": monthly_hosts(fact)[1],
+    }
+    shown = {str(m) for m in months}
+    parts = []
+    for label, rows in sources.items():
+        if rows is None or rows.empty or "month" not in rows.columns:
+            continue
+        rows = rows[rows["month"].astype(str).isin(shown)].copy()
+        if rows.empty:
+            continue
+        date_col, source_col = _MATRIX_DATES[label]
+        periods = [pd.Period(str(m), "M") for m in rows["month"]]
+        rows["matrix_measure"] = label
+        rows["matrix_month"] = [p.strftime(MATRIX_MONTH_FORMAT) for p in periods]
+        rows["matrix_fy"] = [
+            f"{metrics.fiscal_year_label(p.to_timestamp(), fy_start_month)} Total"
+            for p in periods]
+        rows["matrix_date"] = pd.to_datetime(rows.get(date_col), errors="coerce")
+        rows["date_source"] = (rows[source_col] if source_col and source_col in rows.columns
+                               else "Nom. Approval Date")
+        parts.append(rows)
+    if not parts:
+        return pd.DataFrame(columns=MATRIX_DRILL_COLUMNS + ["matrix_fy"])
+    return pd.concat(parts, ignore_index=True)
+
+
 def _matrix_frame(data: dict[str, list], months: list[pd.Period],
                   fy_start_month: int) -> pd.DataFrame:
     """Lay the measures out as rows, with a total column closing each fiscal year.

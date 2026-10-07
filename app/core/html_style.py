@@ -253,6 +253,11 @@ table.data.sticky-first th:first-child, table.data.sticky-first td:first-child {
 table.data.sticky-first thead th:first-child {{ z-index: 3; background: #F0F4F9; }}
 table.data.sticky-first tbody tr:nth-child(even) td:first-child {{ background: #FBFCFE; }}
 table.data.sticky-first tbody tr:hover td:first-child {{ background: #EAF3FC; }}
+table.data td.cell-drill {{ cursor: pointer; color: var(--primary-dark);
+  text-decoration: underline dotted; text-underline-offset: 3px; }}
+table.data td.cell-drill:hover {{ background: #DCEBFA; }}
+table.data td.cell-drill.picked {{ background: var(--primary); color: #fff;
+  text-decoration: none; font-weight: 600; }}
 table.data td.blank {{ background: repeating-linear-gradient(
     -45deg, #FAFBFD, #FAFBFD 5px, #F2F4F8 5px, #F2F4F8 10px); }}
 table.data .fytot {{ background: #EAF3FC; font-weight: 700; }}
@@ -460,7 +465,8 @@ def script() -> str:
     if (note) {
       note.textContent = st.bucket
         ? 'Filtered to ' + st.bucket + ' — click the same point again to clear.'
-        : 'Click a point on the chart above to filter these rows.';
+        : (note.getAttribute('data-hint')
+           || 'Click a point on the chart above to filter these rows.');
       note.classList.toggle('on', !!st.bucket);
     }
     var clear = document.querySelector('[data-drill-clear="' + id + '"]');
@@ -511,7 +517,37 @@ def script() -> str:
     btn.addEventListener('click', function () {
       var id = btn.getAttribute('data-drill-clear');
       slot(id).bucket = null;
+      document.querySelectorAll('table[data-cell-drill="' + id + '"] td.picked')
+        .forEach(function (td) { td.classList.remove('picked'); });
       apply(id);
+    });
+  });
+
+  // ---- matrix cells ------------------------------------------------------
+  // A number in the monthly programme matrix opens the accounts that make it
+  // up: its table names the accounts panel, the cell carries its bucket
+  // ("Measure · Sep-25"), and a second click on the same cell clears it.
+  document.querySelectorAll('table[data-cell-drill]').forEach(function (table) {
+    var id = table.getAttribute('data-cell-drill');
+    table.querySelectorAll('td[data-cell]').forEach(function (td) {
+      function pick() {
+        var st = slot(id), value = td.getAttribute('data-cell');
+        st.bucket = st.bucket === value ? null : value;
+        table.querySelectorAll('td.picked').forEach(function (other) {
+          other.classList.remove('picked');
+        });
+        if (st.bucket) td.classList.add('picked');
+        var box = document.getElementById('acc-' + id);
+        if (box && st.bucket) {
+          box.open = true;
+          box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+        apply(id);
+      }
+      td.addEventListener('click', pick);
+      td.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pick(); }
+      });
     });
   });
 

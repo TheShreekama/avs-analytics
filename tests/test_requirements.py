@@ -3710,3 +3710,29 @@ def test_the_matrix_ends_with_all_its_blocks_added_together():
             continue
         for row in ("Total number of new engagement", "Total number of engagement end"):
             assert int(total.loc[row, column]) == sum(int(p.loc[row, column]) for p in parts)
+
+
+def test_every_matrix_cell_opens_the_records_that_make_it_up():
+    """Click "Engagement end · Sep-25" and see exactly the accounts counted there."""
+    import re
+    from app.core import html_report
+    ctx = _sample_with_sheet()
+    eos = segments.population(ctx.fact, segments.CAT_EOS_ALL)
+    start = metrics.named_fiscal_year_start(26, 7)
+    months = kpi.matrix_month_span(eos, start, ctx.as_of)
+    grid = kpi.monthly_matrix(eos, months, fy_start_month=7).set_index("Measure")
+    records = kpi.matrix_records(eos, months, fy_start_month=7)
+    for measure in ("Total number of new engagement", "Total number of migration start",
+                    "Total number of engagement end"):
+        for column in grid.columns:
+            cell = int(grid.loc[measure, column].replace(",", "") or 0)
+            hits = records[(records["matrix_measure"] == measure)
+                           & ((records["matrix_month"] == column)
+                              | (records["matrix_fy"] == column))]
+            assert hits["tpid_key"].nunique() == cell, (measure, column)
+    body = _main(html_report.build_html_report(ctx, reports=["eos"]).decode())
+    assert 'data-cell-drill="mxa-alleos"' in body
+    cell = re.search(r'data-cell="([^"]+)"', body.split('id="mx-alleos"', 1)[1]).group(1)
+    # The panel's rows carry the same bucket the cell names.
+    panel = body.split('id="mxa-alleos"', 1)[1].split("</table>", 1)[0]
+    assert f'data-bucket="{cell}' in panel or f"|{cell}" in panel

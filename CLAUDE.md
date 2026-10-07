@@ -420,7 +420,11 @@ under Streamlit's AppTest in both counting modes.
   With no sheet the two rows are identical. Blocks come from `exporter.matrix_blocks`
   (+ `matrix_block_rows`, `matrix_block_note`): Gen1→Gen1, Gen1→Gen2, "Generation not
   stated" when present, and last **"All EOS migrations"** (`ALL_EOS_BLOCK`, the blocks
-  added together, each TPID once). The explanatory text is one function,
+  added together, each TPID once). **In the HTML report every non-zero matrix cell is
+  clickable** (`_table(..., cell_drill=panel_id)` writes `data-cell="Measure · Sep-25"`;
+  the script's matrix-cell handler filters the block's `_accounts_panel` of
+  `kpi.matrix_records` — the very rows each count was made from, bucketed to their month
+  and their FY-total column). The explanatory text is one function,
   `exporter.matrix_note`, used by the page, the PDF and the HTML. User-facing text says
   **"FDO export"**, never a bare "the export". Columns run from `config.EOS_MATRIX_START_FY` (FY26 =
   Jul 2025) to the as-of month or the latest completion, **every month shown**, each

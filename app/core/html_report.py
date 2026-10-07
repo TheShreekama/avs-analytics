@@ -100,6 +100,8 @@ _COLUMN_LABELS.update({
     "source_platform": "From", "target_platform": "To",
     "blocked_state": "Current State", "phase": kpi.LATEST_WAVE_COLUMN,
     "reported_end_date": "End date used", "end_date_source": "End date read from",
+    "matrix_measure": "Measure", "matrix_month": "Month",
+    "matrix_date": "Date counted", "date_source": "Date read from",
 })
 
 
@@ -268,7 +270,8 @@ def _kpi_tiles(tiles: list["_Tile"], group: str = "") -> str:
 
 def _table(frame: pd.DataFrame, table_id: str, *, numeric: set[str] | None = None,
            row_head: bool = False, highlight: str = "",
-           buckets: pd.Series | None = None, sticky_first: bool = False) -> str:
+           buckets: pd.Series | None = None, sticky_first: bool = False,
+           cell_drill: str = "") -> str:
     """A DataFrame as a sortable table.  Values are already display strings.
 
     ``buckets`` tags each row with the chart point it belongs to, so a click on
@@ -300,6 +303,11 @@ def _table(frame: pd.DataFrame, table_id: str, *, numeric: set[str] | None = Non
         for index, column in enumerate(columns):
             value = esc(record[column])
             css = classes(column, index == 0)
+            # A matrix cell with a count in it opens the accounts behind it.
+            if cell_drill and index and value not in ("", "0"):
+                cell = esc(f"{record[columns[0]]}{_REGION_STAGE_JOIN}{column}")
+                css = (css[:-1] + ' cell-drill"') if css else ' class="cell-drill"'
+                css += f' data-cell="{cell}" tabindex="0" role="button"' 
             if not value and index and not css:
                 css = ' class="blank"'
             elif not value and index:
@@ -307,7 +315,8 @@ def _table(frame: pd.DataFrame, table_id: str, *, numeric: set[str] | None = Non
             cells.append(f"<td{css}>{value}</td>")
         rows.append(f"<tr{tags[position]}>{''.join(cells)}</tr>")
     css = "data sticky-first" if sticky_first else "data"
-    return (f'<div class="table-wrap"><table class="{css}" id="{table_id}">'
+    drill = f' data-cell-drill="{cell_drill}"' if cell_drill else ""
+    return (f'<div class="table-wrap"><table class="{css}" id="{table_id}"{drill}>'
             f"<thead><tr>{head}</tr></thead>"
             f"<tbody>{''.join(rows)}</tbody></table></div>")
 
@@ -337,7 +346,9 @@ def _accordion(title: str, body: str, badge: str = "", open_: bool = False,
 
 def _accounts_panel(title: str, rows: pd.DataFrame, table_id: str, *,
                     buckets=None, limit: int = 800, open_: bool = False,
-                    columns: list[str] | None = None) -> str:
+                    columns: list[str] | None = None,
+                    hint: str = "Click a point on the chart above to filter these rows.",
+                    noun: str = "accounts") -> str:
     """The accounts behind a chart, in an accordion the chart can filter.
 
     ``buckets`` is a callable taking the (truncated) record frame and returning
@@ -370,12 +381,12 @@ def _accounts_panel(title: str, rows: pd.DataFrame, table_id: str, *,
              f'{fmt_int(len(shown))} rows</span>'
              + (f'<button class="btn" data-drill-clear="{table_id}" hidden '
                 f'type="button">Clear selection</button>' if tags is not None else "")
-             + (f'<span class="drill-note" data-drill-note="{table_id}">Click a '
-                "point on the chart above to filter these rows.</span>"
+             + (f'<span class="drill-note" data-drill-note="{table_id}" '
+                f'data-hint="{esc(hint)}">{esc(hint)}</span>'
                 if tags is not None else "")
              + "</div>")
     body = note + tools + _table(shown, table_id, buckets=tags)
-    return _accordion(title, body, badge=f"{fmt_int(total)} accounts",
+    return _accordion(title, body, badge=f"{fmt_int(total)} {noun}",
                       open_=open_, anchor=f"acc-{table_id}")
 
 
@@ -852,6 +863,13 @@ def _offerings(doc: _Builder, spec, pop) -> None:
         "period. Click a bar or slice to narrow the records beneath it.", body))
 
 
+def _matrix_cell_buckets(rows: pd.DataFrame) -> list[str]:
+    """Each record's two matrix cells: its month's, and its fiscal year total's."""
+    return [f"{m}{_REGION_STAGE_JOIN}{mo}{_BUCKET_JOIN}{m}{_REGION_STAGE_JOIN}{fy}"
+            for m, mo, fy in zip(rows["matrix_measure"], rows["matrix_month"],
+                                 rows["matrix_fy"])]
+
+
 def _eos_matrix(doc: _Builder, ctx, pop) -> None:
     """The programme's month-by-month grid, exactly as the EOS dashboard shows it.
 
@@ -867,15 +885,25 @@ def _eos_matrix(doc: _Builder, ctx, pop) -> None:
         months = kpi.matrix_month_span(block, start, ctx.as_of)
         grid = kpi.monthly_matrix(block, months, fy_start_month=FY_START_MONTH)
         accounts = segments.tpid_key(block).nunique() if not block.empty else 0
+        key = generation.lower().replace("-", "").replace(" ", "")
+        panel_id = _slug("mxa", key)
+        records = kpi.matrix_records(block, months, fy_start_month=FY_START_MONTH)
         blocks.append(
             f'<h4 class="sub">{esc(title)}</h4>'
             f'<p class="note"><b>{fmt_int(accounts)}</b> accounts '
             f'{esc(exporter.matrix_block_note(generation))} · '
-            f'<b>{fmt_int(len(block))}</b> nomination waves.</p>'
-            + _table(grid, _slug("mx", generation.lower().replace("-", "")
-                                 .replace(" ", "")),
+            f'<b>{fmt_int(len(block))}</b> nomination waves. Click a number to '
+            "see the accounts behind it.</p>"
+            + _table(grid, _slug("mx", key),
                      numeric=set(grid.columns[1:]), row_head=True,
-                     highlight="Total", sticky_first=True))
+                     highlight="Total", sticky_first=True,
+                     cell_drill=panel_id if not records.empty else "")
+            + _accounts_panel(f"Accounts behind {title}", records, panel_id,
+                              buckets=_matrix_cell_buckets,
+                              columns=kpi.MATRIX_DRILL_COLUMNS,
+                              hint="Click a number in the matrix above to see "
+                                   "the accounts behind it.",
+                              noun="rows"))
     doc.write(_card(
         "Monthly programme matrix",
         exporter.matrix_note(start, ctx.as_of),
