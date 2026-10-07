@@ -120,16 +120,26 @@ def eos_funnel(ctx, window: tuple | None = None) -> pd.DataFrame:
                      "Unique TPIDs in the sheet"))
         rows.append(("…whose TPID is in the FDO dataset",
                      int(overlay.get("matched_accounts", 0)),
-                     "Only these can reach the FDO-based reports"))
-        stated = tracked["eos_target_generation"].isin((segments.GEN_1, segments.GEN_2))
+                     "Reported with their FDO waves, ACR and cores"))
+        counted = set(fact.loc[segments.eos_population(fact, sheet=True).to_numpy(),
+                               "tpid_key"])
+        dropped = int((~ctx.tracker["tpid_key"].isin(counted)).sum())
+        rows.append(("…not counted as EOS", dropped,
+                     "Not in the FDO dataset, or only From AVS / pre-floor waves "
+                     "there: no ACR, cores or waves to report"))
+        stated = (ctx.tracker["target_generation"]
+                  .isin((segments.GEN_1, segments.GEN_2)))
         rows.append(("…with a readable Target SDDC Generation",
-                     int(stated.sum()), "Gen1 / Gen2 recognised in the cell"))
-    gen = acc["generation"].isin((segments.GEN_1, segments.GEN_2))
-    rows.append(("Accounts with a generation (sheet, else tag)", int(gen.sum()),
-                 "What puts an account in EOS scope"))
-    leaving = acc["is_from_avs"].astype(bool)
-    rows.append(("…of those, (From AVS) moves — never EOS", int((gen & leaving).sum()),
-                 "Primary Migration Path contains From AVS"))
+                     int(stated.sum()), "Gen1 / Gen2; the rest are EOS with "
+                                        "the generation not stated"))
+    else:
+        gen = acc["generation"].isin((segments.GEN_1, segments.GEN_2))
+        rows.append(("Accounts with a generation tag", int(gen.sum()),
+                     "What puts an account in EOS scope without a sheet"))
+        leaving = acc["is_from_avs"].astype(bool)
+        rows.append(("…of those, (From AVS) moves — never EOS",
+                     int((gen & leaving).sum()),
+                     "Primary Migration Path contains From AVS"))
     eos = segments.population(fact, segments.CAT_EOS_ALL)
     rows.append(("EOS Migrations (All) — accounts", int(eos["tpid_key"].nunique())
                  if not eos.empty else 0, "What the EOS report counts, all time"))
@@ -252,15 +262,22 @@ def verdicts(ctx, last_failure: dict | None = None,
             out.append("The tracking sheet is loaded but no row has a TPID.")
         elif not matched:
             out.append(f"None of the sheet's {accounts:,} TPIDs is in the FDO "
-                       "dataset — compare the two TPID columns below.")
+                       "dataset, so there is no EOS account to report — compare "
+                       "the two TPID columns below.")
         elif matched < accounts:
             out.append(f"{matched:,} of the sheet's {accounts:,} TPIDs are in the FDO "
-                       f"dataset; the other {accounts - matched:,} are reported only on "
-                       "the EOS Programme Tracker page.")
+                       f"dataset; the other {accounts - matched:,} are NOT counted as "
+                       "EOS (no ACR, cores or waves to report) and are listed on "
+                       "Data Inconsistency.")
+        if accounts:
+            out.append("The sheet is the list of EOS accounts: its TPIDs that the "
+                       "FDO dataset holds are reported as EOS, and an account the "
+                       "FDO export tags as EOS but the sheet omits is not.")
         if accounts and read.get("no_generation", 0) == accounts:
             out.append("The sheet's Target SDDC Generation could not be read for any "
                        "account (column: "
-                       f"{(read.get('mapping') or {}).get('target_generation') or 'NOT FOUND'}).")
+                       f"{(read.get('mapping') or {}).get('target_generation') or 'NOT FOUND'}"
+                       "), so none of them falls in the Gen-1 or Gen-2 blocks.")
     eos = segments.population(fact, segments.CAT_EOS_ALL)
     n_eos = int(eos["tpid_key"].nunique()) if not eos.empty else 0
     if n_eos:
@@ -440,6 +457,10 @@ def trace(ctx, tpid: str) -> dict:
                      "the reports read — see the floor line above.")
         else:
             v.append("NOT in the FDO dataset at all.")
+        if ctx.has_tracker and key in set(ctx.tracker["tpid_key"]):
+            v.append("It is in the tracking sheet, but NOT counted as an EOS "
+                     "account: with no FDO wave there is no ACR, cores or waves "
+                     "to report.")
     else:
         v.append(f"In the FDO dataset: {len(rows)} wave(s).")
         waves = pd.DataFrame({label: rows[col].astype("string") if col in rows.columns

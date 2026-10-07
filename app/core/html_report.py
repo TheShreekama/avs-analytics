@@ -846,16 +846,15 @@ def _eos_matrix(doc: _Builder, ctx, pop) -> None:
     """
     start = metrics.named_fiscal_year_start(EOS_MATRIX_START_FY, FY_START_MONTH)
     blocks = []
-    for generation, title in ((segments.GEN_1, "Gen1 to Gen1"),
-                              (segments.GEN_2, "Gen1 to Gen2")):
+    for generation, title in exporter.matrix_blocks(pop):
         block = pop[pop["generation"] == generation]
         months = kpi.matrix_month_span(block, start, ctx.as_of)
         grid = kpi.monthly_matrix(block, months, fy_start_month=FY_START_MONTH)
         accounts = segments.tpid_key(block).nunique() if not block.empty else 0
         blocks.append(
             f'<h4 class="sub">{esc(title)}</h4>'
-            f'<p class="note"><b>{fmt_int(accounts)}</b> accounts tagged '
-            f'<b>AVS Migration - {esc(generation.replace("-", ""))}</b> · '
+            f'<p class="note"><b>{fmt_int(accounts)}</b> accounts '
+            f'{esc(exporter.matrix_block_note(generation))} · '
             f'<b>{fmt_int(len(block))}</b> nomination waves.</p>'
             + _table(grid, _slug("mx", generation.lower().replace("-", "")),
                      numeric=set(grid.columns[1:]), row_head=True,
@@ -1175,20 +1174,23 @@ def _programme(doc: _Builder, ctx) -> None:
     line = ""
     if not report.empty:
         t = report.tiles
-        line = (f'<p class="pop"><b>{fmt_int(t["accounts"])}</b> accounts in the '
-                f'sheet · <b>{fmt_int(t["in_fdo"])}</b> with a nomination in the '
-                "FDO dataset · the reporting period and filters do not apply</p>")
+        line = (f'<p class="pop"><b>{fmt_int(t["accounts"])}</b> EOS accounts of '
+                f'<b>{fmt_int(t.get("sheet_accounts", t["accounts"]))}</b> in the '
+                "sheet · the reporting period and filters do not apply</p>")
     doc.write(f'<section class="report" id="{anchor}">'
               f'<div class="report-head"><h2>{esc(prog.TITLE)}</h2>'
               f"<p>{esc(prog.BLURB)}</p>{line}</div>")
     if report.empty:
-        doc.write('<div class="card"><p class="empty">The tracking sheet has no '
-                  "rows with a TPID.</p></div></section>")
+        doc.write(f'<div class="card"><p class="empty">'
+                  f"{esc(exporter.programme_empty_note(report))}</p></div></section>")
         return
 
     tiles = [_Tile(label, value, note)
              for label, value, note in exporter.programme_tiles(report.tiles)]
     doc.write(_card("", "", _kpi_tiles(tiles)))
+    gap = exporter.programme_gap_note(report)
+    if gap:
+        doc.write(f'<p class="note">{esc(gap)}</p>')
     acc = report.accounts
     table = prog.account_table(acc, metrics.fmt_compact_currency)
     no_total = lambda g: g.drop(columns="Total", errors="ignore")  # noqa: E731

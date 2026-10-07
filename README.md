@@ -205,7 +205,11 @@ The EOS programme keeps its own spreadsheet beside the export, and **Data & Uplo
 it as a second, separate upload. It is keyed on **TPID and nothing else**: every other
 detail an EOS report needs — Factory PM, Solution Architect, region, offering, ACR, waves
 — is looked up in the FDO Dataset by that TPID, so the sheet never has to repeat or
-contradict them. These columns lead wherever they are filled in:
+contradict them. With a sheet loaded, **the sheet is the list of EOS accounts** — of the
+accounts the FDO Dataset holds. A sheet TPID the FDO Dataset does not hold (or holds only
+`From AVS` waves for) has no ACR, cores or waves, so it is **not counted** in any report;
+it is named on Data & Upload, Data Inconsistency, the Debug page and the Programme
+Tracker instead. These columns lead wherever they are filled in:
 
 | Column | What it decides |
 |---|---|
@@ -227,8 +231,8 @@ so no rule tests a number: each row carries a `status_class` (`app/core/statuses
 Programme Tracker** page (Status Report → EOS Programme Tracker, and a section after the
 EOS report in both exports): accounts by Migration Status and Current State, status ×
 state, SDDC progress, starts and completions by month, days in migration, WW Region ×
-status and the accounts that need attention. It reads the sheet itself, so an account
-the FDO Dataset does not hold yet is still reported there.
+status and the accounts that need attention. It counts the same accounts as the EOS
+report; the sheet's TPIDs the FDO Dataset does not hold are named under its tiles.
 
 The sheet is read forgivingly: a title row above the headers is fine (the header row is
 the first with a TPID column), a workbook's sheets are tried until one has a TPID column,

@@ -80,11 +80,10 @@ _CHECK_HELP = {
         "nomination exists. Raise the nomination, or correct the TPID in the sheet."
     ),
     "tracker_missing": (
-        "Accounts in EOS scope that the tracking sheet does not cover. Their "
-        "generation still comes from the Gen-1/Gen-2 tag and their dates from "
-        "the export's own derivation — which is what the reports did before "
-        "there was a sheet, so nothing is lost; the sheet simply is not leading "
-        "for them."
+        "Accounts the export marks as EOS (a Gen-1/Gen-2 tag, or an AV36/EOS "
+        "path or offering) that the tracking sheet does not list. With a sheet "
+        "loaded, the sheet is the list of EOS accounts, so these are NOT "
+        "reported as EOS. Add them to the sheet if they belong in the programme."
     ),
     "tracker_generation": (
         "Accounts whose Target SDDC Generation in the sheet disagrees with the "
@@ -187,7 +186,7 @@ _LABELS = {
     "duplicate_task": "Duplicate Task IDs",
     "state_vs_status": "Current State contradicts Migration Status",
     "tracker_unmatched": "In the EOS tracking sheet, not in the FDO dataset",
-    "tracker_missing": "In EOS scope, not in the EOS tracking sheet",
+    "tracker_missing": "Marked EOS in the export, not in the EOS tracking sheet",
     "tracker_generation": "EOS tracking sheet and tag disagree on the generation",
     "tracker_sddcs": "Ended in the sheet, with SDDCs still outstanding",
     "tracker_status_state": "Tracking sheet status and state disagree",

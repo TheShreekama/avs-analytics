@@ -837,8 +837,10 @@ def inconsistencies(fact: pd.DataFrame, tracker: pd.DataFrame | None,
         reported for them — no offering, no ACR, no waves — so they are absent
         from every report until the nomination exists.
     ``untracked_eos_accounts``
-        In EOS scope by tag or migration path, but not in the tracking sheet.
-        Their generation, start and end dates fall back to the export.
+        Marked EOS in the export (a Gen1/Gen2 tag or an EOS path) but not in the
+        tracking sheet.  With a sheet loaded the sheet is the list of EOS
+        accounts, so these are **not** reported as EOS — this is where to see
+        them, and to add them to the sheet if they belong there.
     ``generation_disagrees``
         The sheet says one generation and the account's own Gen-1/Gen-2 tag says
         the other. The sheet wins (that is the rule) — this is where to see
@@ -869,8 +871,13 @@ def inconsistencies(fact: pd.DataFrame, tracker: pd.DataFrame | None,
         cols = [c for c in ("tpid", "customer_name", "generation", "tags",
                             "migration_path", "factory_offering")
                 if c in accounts.columns]
-        in_scope = accounts[accounts["is_eos_population"].astype(bool)
-                            & ~accounts[TRACKED_FLAG].astype(bool)]
+        tag_gen = segments.generation_by_tpid(fact)
+        marked = (accounts["tpid_key"].map(tag_gen).isin((segments.GEN_1, segments.GEN_2))
+                  | accounts["tpid_key"].map(fact.groupby("tpid_key")["is_av36_eos"].any())
+                  .fillna(False).astype(bool))
+        in_scope = accounts[marked.to_numpy()
+                            & ~accounts[TRACKED_FLAG].astype(bool).to_numpy()
+                            & ~accounts["is_from_avs"].astype(bool).to_numpy()]
         if not in_scope.empty:
             out["untracked_eos_accounts"] = in_scope[cols].reset_index(drop=True)
 

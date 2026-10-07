@@ -265,7 +265,7 @@ def _tracker_panel(ctx) -> None:
     issues = eos_tracker.inconsistencies(ctx.fact, ctx.tracker, overlay)
     labels = {
         "unmatched_tpids": "In the sheet, not in the FDO dataset",
-        "untracked_eos_accounts": "In EOS scope, not in the sheet",
+        "untracked_eos_accounts": "Marked EOS in the export, not in the sheet (not reported as EOS)",
         "generation_disagrees": "Sheet and tag disagree on the generation",
         "ended_with_sddcs_outstanding": "Ended, with SDDCs still outstanding",
         "status_state_disagree": "Migration Status and Current State disagree",

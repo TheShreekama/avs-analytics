@@ -37,7 +37,7 @@ from reportlab.platypus import KeepTogether, PageBreak, Paragraph
 from ..config import EOS_MATRIX_START_FY, FY_START_MONTH
 from ..ui import pdf_charts as pc
 from . import (analytics, eos_programme, glossary, insights as insights_mod, kpi,
-               metrics,
+               metrics, nulls,
                pdf_kit as kit, segments)
 from .metrics import fmt_currency, fmt_int
 
@@ -235,18 +235,12 @@ def tracker_scope_note(ctx) -> str:
     accounts = int(read.get("accounts", 0))
     matched = int(overlay.get("matched_accounts", 0))
     if accounts and not matched:
-        sheet = ", ".join(str(t) for t in ctx.tracker["tpid"].head(3))
-        fdo = ", ".join(str(t) for t in ctx.fact["tpid_key"].drop_duplicates()
-                        .head(3)) if not ctx.fact.empty else ""
         return (f"None of the {accounts} TPIDs in the EOS tracking sheet matches "
-                f"a TPID in the FDO dataset (the sheet has {sheet}…; the dataset "
-                f"has {fdo}…), so the sheet brings no account into EOS scope. "
-                f"The EOS Programme Tracker reports the sheet on its own.")
-    stated = accounts - int(read.get("no_generation", 0))
-    if accounts and not stated:
-        return ("The EOS tracking sheet states no Target SDDC Generation that "
-                "could be read (Gen1 or Gen2), so it brings no account into EOS "
-                "scope. Data & Upload shows which column was read.")
+                f"a TPID in the FDO dataset, so there is no EOS account to report: "
+                f"an account counts only when the FDO dataset holds it.")
+    if not accounts:
+        return ("The EOS tracking sheet is loaded but holds no row with a TPID, "
+                "so there is no EOS account to report.")
     return ""
 
 
@@ -807,8 +801,7 @@ def _matrix_block(ctx, pop: pd.DataFrame, ss) -> list:
                      "Actual End Date.", ss["Muted"]),
            kit.spacer(0.2)]
     width = kit.CONTENT_WIDTH[kit.PORTRAIT]
-    for generation, title in ((segments.GEN_1, "Gen1 to Gen1"),
-                              (segments.GEN_2, "Gen1 to Gen2")):
+    for generation, title in matrix_blocks(pop):
         block = pop[pop["generation"] == generation] if not pop.empty else pop
         accounts = segments.tpid_key(block).nunique() if not block.empty else 0
         months = kpi.matrix_month_span(block, start, ctx.as_of)
@@ -820,6 +813,27 @@ def _matrix_block(ctx, pop: pd.DataFrame, ss) -> list:
                 kit.spacer(0.1),
                 *_matrix_grid(grid, ss, width), kit.spacer(0.25)]
     return out
+
+
+NO_GENERATION_BLOCK = "Generation not stated"
+
+
+def matrix_blocks(pop: pd.DataFrame) -> list[tuple[str, str]]:
+    """The matrix's blocks: Gen1 to Gen1, Gen1 to Gen2 — and, when the EOS
+    tracking sheet lists accounts with no generation, a block for those, so
+    every EOS account the report counts appears in the grid."""
+    blocks = [(segments.GEN_1, "Gen1 to Gen1"), (segments.GEN_2, "Gen1 to Gen2")]
+    if not pop.empty and "generation" in pop.columns and bool(
+            (pop["generation"] == segments.GEN_UNCLASSIFIED).any()):
+        blocks.append((segments.GEN_UNCLASSIFIED, NO_GENERATION_BLOCK))
+    return blocks
+
+
+def matrix_block_note(generation: str) -> str:
+    """Which accounts a block holds, in words."""
+    if generation in (segments.GEN_1, segments.GEN_2):
+        return f"tagged AVS Migration - {generation.replace('-', '')}"
+    return "with no generation stated in the tracking sheet or the tags"
 
 
 def _matrix_grid(grid: pd.DataFrame, ss, width: float) -> list:
@@ -1546,12 +1560,40 @@ def shows_programme(ctx, specs, sections: ReportSections) -> bool:
             and any(spec.key == "eos" for spec in specs))
 
 
+def programme_empty_note(report) -> str:
+    """Why the tracker section has nothing to count."""
+    total = int(report.tiles.get("sheet_accounts", 0))
+    if not total:
+        return "The tracking sheet has no rows with a TPID."
+    return (f"None of the tracking sheet's {fmt_int(total)} TPIDs is in the FDO "
+            "dataset, so there is no EOS account to report.")
+
+
+def programme_gap_note(report) -> str:
+    """The sheet's accounts the FDO dataset does not hold, named — they are not
+    counted, because there is no ACR, cores or wave to report for them."""
+    missing = report.not_in_fdo
+    if missing is None or missing.empty:
+        return ""
+    names = [f"{t} ({c})" if not nulls.is_blank(c) else str(t)
+             for t, c in zip(missing["tpid"], missing.get("customer_name",
+                                                       missing["tpid"]))]
+    shown = ", ".join(names[:12]) + (f" and {len(names) - 12} more"
+                                     if len(names) > 12 else "")
+    return (f"{fmt_int(len(missing))} of the sheet's "
+            f"{fmt_int(report.tiles.get('sheet_accounts', 0))} TPIDs "
+            f"{'has' if len(missing) == 1 else 'have'} no nomination in the FDO "
+            f"dataset, so {'it is' if len(missing) == 1 else 'they are'} not "
+            f"counted as EOS (there is no ACR, cores or waves to report): {shown}.")
+
+
 def programme_tiles(tiles: dict) -> list[tuple[str, str, str]]:
     """The headline row as (label, value, note), for both renderers."""
     pct = tiles.get("sddc_pct")
     return [
-        ("Accounts tracked", fmt_int(tiles["accounts"]), "TPIDs in the sheet"),
-        ("In FDO dataset", fmt_int(tiles["in_fdo"]), "with a nomination behind them"),
+        ("EOS accounts", fmt_int(tiles["accounts"]),
+         f"of {fmt_int(tiles.get('sheet_accounts', tiles['accounts']))} in the sheet"),
+        ("Not in FDO dataset", fmt_int(tiles.get("not_in_fdo", 0)), "not counted"),
         ("On Track", fmt_int(tiles["on_track"]), "per the sheet"),
         ("Blocked", fmt_int(tiles["blocked"]), "Current State Blocked"),
         ("Completed", fmt_int(tiles["completed"]), "per the sheet"),
@@ -1614,11 +1656,13 @@ def _programme_section(ctx, ss) -> list:
                        "period and the filters do not apply.", ss["Muted"]),
              kit.spacer(0.3)]
     if report.empty:
-        story.append(Paragraph("The tracking sheet has no rows with a TPID.",
-                               ss["Body2"]))
+        story.append(Paragraph(_esc(programme_empty_note(report)), ss["Body2"]))
         return story + [kit.page_break()]
     story += [kit.kpi_cards(programme_tiles(report.tiles), ss, per_row=4),
               kit.spacer(0.3)]
+    gap = programme_gap_note(report)
+    if gap:
+        story += [Paragraph(_esc(gap), ss["Muted"]), kit.spacer(0.3)]
 
     def grid_block(title: str, grid: pd.DataFrame, first: str, png: bytes | None):
         frame = eos_programme.grid_frame(grid, first)

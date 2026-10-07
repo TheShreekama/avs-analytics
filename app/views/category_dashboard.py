@@ -119,15 +119,7 @@ def render(category: str) -> None:
     _blocked_accounts(fact, waves, key)
     _detailed_data(fact, waves, start, end, key, shown)
 
-
 # --------------------------------------------------------------------------- #
-#: The matrix blocks: (generation tag, heading).  Every EOS account is refreshing
-#: away from ageing Gen-1 hardware, so the tag names the generation it lands ON
-#: and the "Gen1 to" half of each heading is the constant.
-_MATRIX_BLOCKS = ((segments.GEN_1, "Gen1 to Gen1"),
-                  (segments.GEN_2, "Gen1 to Gen2"))
-
-
 def _generation_matrix(ctx, fact: pd.DataFrame, key: str) -> None:
     """The programme's month-by-month grid, one block per target generation.
 
@@ -150,12 +142,12 @@ def _generation_matrix(ctx, fact: pd.DataFrame, key: str) -> None:
                "the latest wave completing. *Engagement end* is always the "
                "export's: a completed account, dated by its latest wave's "
                "Actual End Date — the All AVS rule.")
-    for generation, title in _MATRIX_BLOCKS:
+    for generation, title in exporter.matrix_blocks(fact):
         block = fact[fact["generation"] == generation]
         accounts = segments.tpid_key(block).nunique() if not block.empty else 0
         subheading(title)
-        st.caption(f"**{fmt_int(accounts)}** accounts tagged "
-                   f"**AVS Migration - {generation.replace('-', '')}** · "
+        st.caption(f"**{fmt_int(accounts)}** accounts "
+                   f"{exporter.matrix_block_note(generation)} · "
                    f"**{fmt_int(len(block))}** nomination waves.")
         months = kpi.matrix_month_span(block, start, ctx.as_of)
         grid = kpi.monthly_matrix(block, months, fy_start_month=FY_START_MONTH)
@@ -170,7 +162,9 @@ def _population_note(ctx, category: str, fact: pd.DataFrame) -> None:
     tpids = fmt_int(segments.tpid_key(fact).nunique()) if not fact.empty else "0"
     bits = [f"<b>{tpids}</b> TPIDs · <b>{fmt_int(len(fact))}</b> nomination waves"]
     if category in (segments.CAT_EOS_ALL, segments.CAT_EOS_GEN1, segments.CAT_EOS_GEN2):
-        bits.append("scope from the <b>AVS Migration - Gen1/Gen2</b> tag on any wave, "
+        bits.append("scope = every account in the <b>EOS tracking sheet</b>"
+                    if ctx.has_tracker else
+                    "scope from the <b>AVS Migration - Gen1/Gen2</b> tag on any wave, "
                     "or the <b>AV36/AV36P/AV52 - EOS</b> path when untagged")
     if category == segments.CAT_EOS_ALL and not fact.empty:
         split = (fact.drop_duplicates("tpid_key")["generation"]

@@ -5,11 +5,13 @@ PDF and HTML reports render too, so the page and the exports cannot disagree.
 """
 from __future__ import annotations
 
+import html
+
 import pandas as pd
 import streamlit as st
 
 from app import state
-from app.core import eos_programme as prog, glossary
+from app.core import eos_programme as prog, exporter, glossary
 from app.core.metrics import fmt_compact_currency, fmt_int
 from app.ui import charts, components
 from app.ui.theme import banner, page_header, section
@@ -29,25 +31,26 @@ def render() -> None:
         return
 
     report = prog.build(ctx.tracker, ctx.fact, ctx.as_of)
+    gap = exporter.programme_gap_note(report)
     if report.empty:
-        components.empty_state("The tracking sheet has no rows with a TPID.")
+        components.empty_state(exporter.programme_empty_note(report))
+        if gap:
+            banner("ℹ️ " + html.escape(gap), "warn")
         return
     t = report.tiles
-    missing = t["accounts"] - t["in_fdo"]
-    if missing:
-        banner(f"ℹ️ <b>{fmt_int(missing)}</b> of the sheet's {fmt_int(t['accounts'])} "
-               f"accounts have no nomination in the FDO dataset. They are "
-               f"reported here from the sheet alone, and appear in no "
-               f"FDO-based report until the nomination exists.")
+    missing = t.get("not_in_fdo", 0)
+    if gap:
+        banner("ℹ️ " + html.escape(gap), "warn")
     st.caption(f"{ctx.tracker_filename} · as-of {pd.Timestamp(ctx.as_of):%d %b %Y} · "
                "the reporting period and sidebar filters do not apply to this page.")
 
     pct = "–" if t["sddc_pct"] is None else f"{t['sddc_pct']:.0f}%"
     components.kpi_row([
-        {"label": "Accounts tracked", "value": fmt_int(t["accounts"]),
-         "help": "TPIDs in the tracking sheet."},
-        {"label": "In FDO dataset", "value": fmt_int(t["in_fdo"]),
-         "tone": "warn" if missing else "good"},
+        {"label": "EOS accounts", "value": fmt_int(t["accounts"]),
+         "sub": f"of {fmt_int(t.get('sheet_accounts', t['accounts']))} in the sheet",
+         "help": "TPIDs in the tracking sheet that the FDO dataset holds."},
+        {"label": "Not in FDO dataset", "value": fmt_int(missing),
+         "sub": "not counted", "tone": "warn" if missing else "good"},
         {"label": "On Track", "value": fmt_int(t["on_track"]), "tone": "good"},
         {"label": "Blocked", "value": fmt_int(t["blocked"]),
          "tone": "bad" if t["blocked"] else ""},
@@ -137,7 +140,7 @@ def render() -> None:
         st.dataframe(prog.account_table(report.attention, fmt_compact_currency),
                      width="stretch", hide_index=True)
 
-    section("Every tracked account", help=_help("Accounts tracked"))
+    section("Every tracked account", help=_help("EOS accounts"))
     rows = _filtered(report.accounts)
     table = prog.account_table(rows, fmt_compact_currency)
     st.dataframe(table, width="stretch", hide_index=True, height=420)

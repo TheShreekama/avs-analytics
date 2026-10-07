@@ -28,8 +28,9 @@ NOT_STATED = "Not stated"
 TITLE = "EOS Programme Tracker"
 BLURB = ("The manual EOS tracking sheet, account by account: where the programme "
          "says each migration is (Migration Status), how it is going (Current "
-         "State), and how many SDDCs are done. Read from the sheet itself, so "
-         "an account the FDO export does not hold yet is still here.")
+         "State), and how many SDDCs are done. Only accounts whose TPID is in "
+         "the FDO dataset are counted: one the export does not hold has no ACR, "
+         "cores or waves to report, and is listed apart.")
 
 #: Migration Status values in the order a migration moves through them.
 STATUS_ORDER: tuple[str, ...] = tuple(st.text for st in eos_tracker.TRACKER_STATUSES)
@@ -56,6 +57,9 @@ ACCOUNT_COLUMNS: tuple[tuple[str, str], ...] = (
 class Programme:
     """Everything the report shows, computed once."""
     accounts: pd.DataFrame
+    #: Sheet accounts with no (non-From-AVS) wave in the FDO dataset — not EOS
+    #: accounts, listed so nothing in the sheet disappears without a word.
+    not_in_fdo: pd.DataFrame = field(default_factory=pd.DataFrame)
     tiles: dict = field(default_factory=dict)
     by_status: pd.DataFrame = field(default_factory=pd.DataFrame)
     by_state: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -318,14 +322,33 @@ def tiles(acc: pd.DataFrame) -> dict:
     }
 
 
+def _with_sheet_counts(t: dict, listed: pd.DataFrame,
+                       missing: pd.DataFrame) -> dict:
+    return {**t, "sheet_accounts": int(len(listed)), "not_in_fdo": int(len(missing))}
+
+
 def build(tracker: pd.DataFrame | None, fact: pd.DataFrame | None,
           as_of=None) -> Programme:
-    """The whole report, computed once."""
-    acc = accounts(tracker, fact, as_of)
+    """The whole report, computed once.
+
+    Only the sheet's accounts the FDO dataset holds are counted — the same
+    accounts the EOS reports count.  The rest are kept in ``not_in_fdo``.
+    """
+    listed = accounts(tracker, fact, as_of)
+    if fact is None:
+        acc, missing = listed, listed.iloc[0:0]
+    else:
+        held = listed["in_fdo"].astype(bool) if not listed.empty else pd.Series(dtype=bool)
+        acc, missing = listed[held], listed[~held]
+    acc = acc.reset_index(drop=True)
+    missing = missing.reset_index(drop=True)
     if acc.empty:
-        return Programme(accounts=acc)
+        return Programme(accounts=acc, not_in_fdo=missing,
+                         tiles=_with_sheet_counts({}, listed, missing))
     return Programme(
-        accounts=acc, tiles=tiles(acc), by_status=by_status(acc),
+        accounts=acc, not_in_fdo=missing,
+        tiles=_with_sheet_counts(tiles(acc), listed, missing),
+        by_status=by_status(acc),
         by_state=by_state(acc), status_state=status_state(acc),
         sddcs=sddc_progress(acc), region_status=region_status(acc),
         monthly=monthly(acc), ageing=ageing(acc), durations=durations(acc),
