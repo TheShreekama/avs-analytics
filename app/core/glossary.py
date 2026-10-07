@@ -22,6 +22,20 @@ PROGRAMME_TRACKER = (
     "apply."
 )
 
+PROGRAMME_SUMMARY = (
+    "The sentence that closes the EOS report, over the whole programme (never "
+    "the reporting period).\n"
+    "• Customers = unique TPIDs in EOS Migrations (All).\n"
+    "• Completed = account state Completed.\n"
+    "• In progress = any wave at stage 4 Executing Migration (sheet: Executing "
+    "Migration or Sign-off Pending).\n"
+    "• In planning = any wave at stage 2 Executing Pre-requisites or 3 Finalize "
+    "Scope (sheet: Planning & Prerequisites or Ready for Migration).\n"
+    "• Gen1 to Azure Native = customers whose Primary Migration Path contains "
+    "(From AVS), first nominated on or after 1 July 2025.\n"
+    "Tick 'Include Azure Native customers' to add those to the totals."
+)
+
 NEW_ENGAGEMENTS = (
     "Unique customers (TPIDs) approved inside the reporting period.\n"
     "• Uses the Nom. Approval Date of the TPID's first wave (lowest Phase/Wave "
@@ -762,6 +776,28 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "generation and is left out of every EOS figure.",
             "That account stays inside All AVS Migrations and is listed on the "
             "Data Inconsistency review.",
+        )),
+        Definition("Programme summary", (
+            "Closes the EOS report, read over the whole programme, never the "
+            "reporting period.",
+            "Customers: each **TPID** in EOS Migrations (All), counted once.",
+            "Completed: the account state is Completed.",
+            "In progress: any wave's **Migration Status** is **4 - Executing "
+            "Migration**, or the sheet's **Executing Migration** or **Sign-off "
+            "Pending**.",
+            "In planning: any wave at **2 - Executing Pre-requisites** or **3 - "
+            "Finalize Scope**, or the sheet's **Planning & Prerequisites** or "
+            "**Ready for Migration**.",
+            "Each customer takes the first of those three that holds; "
+            "**Current State** plays no part, and stage 1, deferred, on hold "
+            "and cancelled accounts take none.",
+            "Gen1 to Gen1 and Gen1 to Gen2 count the customers by generation.",
+            "Gen1 to Azure Native counts customers whose **Primary Migration "
+            "Path** contains **(From AVS)** and whose first **Nom. Approval "
+            "Date**, else **Nom. Created Date**, is 1 July 2025 or later.",
+            "Ticking Include Azure Native customers adds those to every total, "
+            "each customer still counted once.",
+            "Unit: customer.",
         )),
     )),
     ("The manual EOS tracking sheet", (

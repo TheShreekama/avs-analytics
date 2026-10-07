@@ -95,9 +95,18 @@ def render() -> None:
              "Migration Status and Current State, SDDC progress, timeline and "
              "the accounts that need attention. Follows the EOS report; needs a "
              "tracking sheet loaded on Data & Upload.")
+    summary_native = st.checkbox(
+        f"{exporter.SUMMARY_TITLE}: {exporter.SUMMARY_NATIVE_LABEL.lower()}",
+        value=False, key="rep_summary_native",
+        help="The sentence that closes the EOS report — customers in "
+             "factory-driven migrations, completed, in progress and in planning. "
+             "Ticked, its totals add the AVS → Azure Native customers first "
+             "nominated from July 2025. The PDF prints it this way; the HTML "
+             "report opens this way and the reader can change it.")
     sections = exporter.ReportSections(blocked=include_blocked,
                                        insights=include_insights,
-                                       programme=include_programme)
+                                       programme=include_programme,
+                                       summary_native=summary_native)
 
     subheading("Appendix")
     appendices: list[str] = []
