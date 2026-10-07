@@ -139,9 +139,9 @@ under Streamlit's AppTest in both counting modes.
   the displayed months only.
 - **Two status vocabularies; rules read `status_class`, never the number.** The FDO export
   numbers 1-4 in flight, 5 Deferred, 6 Cancelled / Archived, 7 Completed; the EOS tracking
-  sheet numbers `1. Kick-Off Awaited`, `2. Planning & Prerequisites`, `3. Ready for
-  Migration`, `4. Executing Migration`, `5. Sign-off Pending` (all in flight), `6. Completed`,
-  `7. On Hold`, `8. Cancelled`. 6 means opposite things, so every row carries
+  sheet numbers `Kick-Off Awaited`, `Planning & Prerequisites`, `3. Ready for
+  Migration`, `Executing Migration`, `Sign-off Pending` (all in flight), `Completed`,
+  `On Hold`, `Cancelled`. 6 means opposite things, so every row carries
   `status_class` (`statuses.IN_FLIGHT/COMPLETED/DEFERRED/ON_HOLD/CANCELLED/UNKNOWN`) and
   `status_source` ("FDO export"/"EOS tracker"); `kpi.is_completed/in_flight/is_deferred/
   is_on_hold/is_cancelled`, the pipeline, `derive_eos_status` and the rollup all read the
@@ -164,7 +164,7 @@ under Streamlit's AppTest in both counting modes.
   "On Hold"). `kpi.on_track_wave` returns the latest wave for a sheet-on-track account with
   no export-on-track wave, and drops sheet-stopped ones. `kpi.migrations_completed` dates by
   `kpi.completion_dates` — the sheet's Actual Migration End Date, else the latest wave's.
-  Pipeline condition 4 excludes `7. On Hold` and `8. Cancelled` too
+  Pipeline condition 4 excludes `On Hold` and `Cancelled` too
   (`kpi.PIPELINE_EXCLUDED_STATUSES`).
 - **Account state** (`kpi.account_state`, read across **all** of an account's waves, first
   match wins): **On-Track** = ANY wave where `Nomination Status = "Approved"` **and** the

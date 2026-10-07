@@ -95,14 +95,14 @@ ACR_PIPELINE = (
     "The ACR carried by every ELIGIBLE WAVE — the approved, on-track work, and "
     "therefore the commercial value still to land.\n"
     "A wave is eligible when ALL FOUR hold, judged on the wave itself:\n"
-    "1. Factory Offering = 'AVS Migration Nominations' (the AVS and EOS "
-    "reports), or Primary Migration Path CONTAINS 'From AVS' (the AVS → Azure "
-    "Native report). They are different columns, and each motion is scoped by "
-    "the one that defines it.\n"
+    "1. AVS and EOS reports: Factory Offering = 'AVS Migration Nominations', "
+    "with no 'From AVS' in it or in the Primary Migration Path. AVS → Azure "
+    "Native report: Primary Migration Path CONTAINS 'From AVS' — the only "
+    "report a From AVS wave ever counts in.\n"
     "2. Nomination Status = 'Approved'.\n"
     "3. Current State = 'On Track' — and nothing else.\n"
     "4. Migration Status NOT IN ('5 - Deferred By Customer', '6 - Cancelled / "
-    "Archived').\n"
+    "Archived', and the tracking sheet's 'On Hold' and 'Cancelled').\n"
     "Any single failure drops the wave.\n"
     "It is read over the WHOLE DATASET, never the reporting period: work "
     "nominated before the window is still work still to do. Every other filter "
@@ -113,10 +113,12 @@ ACR_PIPELINE = (
 
 NODES_PLANNED = (
     "The deployment still to come: SUM(Total Cores) over the SAME eligible "
-    "waves the ACR Pipeline is built from — Factory Offering = 'AVS Migration "
-    "Nominations' (or a '(From AVS)' path), Nomination Status = 'Approved', "
-    "Current State = 'On Track', and Migration Status not '5 - Deferred By "
-    "Customer' or '6 - Cancelled / Archived'.\n"
+    "waves the EOS ACR Pipeline is built from — Factory Offering = 'AVS "
+    "Migration Nominations', Nomination Status = 'Approved', Current State = "
+    "'On Track', and Migration Status not '5 - Deferred By Customer', '6 - "
+    "Cancelled / Archived', 'On Hold' or 'Cancelled'.\n"
+    "A wave with 'From AVS' in its Primary Migration Path or Factory Offering "
+    "is NEVER counted: From AVS belongs to AVS → Azure Native only.\n"
     "Reported as NODES because that is what the AVS motions deploy, from the "
     "Total Cores column that records them. Read against Hosts Migrated, which "
     "is the deployment already delivered.\n"
@@ -526,7 +528,7 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Without a tracking sheet that means the latest wave's **Migration "
             "Status** is **7 - Completed** and no other wave is still on track.",
             "Where the EOS tracking sheet covers the account, its **Migration "
-            "Status** of **6. Completed** or **Current State** of **Completed** "
+            "Status** of **Completed** or **Current State** of **Completed** "
             "decides instead.",
             "Date it by the tracking sheet's **Actual Migration End Date** "
             "where there is one, otherwise the latest wave's **Actual End "
@@ -536,7 +538,7 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         )),
         Definition("Hosts Migrated (Cores Migrated on AVS to Azure Native)", (
             "Identify every wave whose **Migration Status** is **7 - "
-            "Completed**, or **6. Completed** where the EOS tracking sheet "
+            "Completed**, or **Completed** where the EOS tracking sheet "
             "supplied it.",
             "Use that wave's **Actual End Date** to decide the reporting period; "
             "a wave the sheet completed with none takes the sheet's **Actual "
@@ -555,14 +557,15 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Its **Nomination Status** is **Approved**.",
             "Its **Migration Status** is one of **1 - Validating Commitment & "
             "Initial Scope**, **2 - Executing Pre-Requisites**, **3 - Finalize "
-            "Scope** or **4 - Executing Migration** — or one of the tracking "
-            "sheet's stages **1. Kick-Off Awaited** to **5. Sign-off Pending**.",
+            "Scope** or **4 - Executing Migration** — or, from the tracking "
+            "sheet, **Kick-Off Awaited**, **Planning & Prerequisites**, **Ready "
+            "for Migration**, **Executing Migration** or **Sign-off Pending**.",
             "Its **Current State** is **On Track** and nothing else.",
             "Count unique **TPID**s with at least one such wave, whatever their "
             "latest wave says.",
             "An account the EOS tracking sheet covers is counted by the sheet "
             "instead: **Current State** of **On Track** with the migration "
-            "still in one of those five stages.",
+            "still at one of those five stages.",
             "A snapshot of where things stand now: no reporting period narrows "
             "it.",
             "Unit: customer.",
@@ -582,14 +585,15 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         )),
         Definition("ACR Pipeline", (
             "A wave qualifies when all four of these hold.",
-            "It belongs to this report's motion: **Factory Offering** is **AVS "
-            "Migration Nominations** for the AVS and EOS reports, or **Primary "
-            "Migration Path** contains **From AVS** for the AVS to Azure Native "
-            "report.",
+            "It belongs to this report's motion — AVS and EOS: **Factory "
+            "Offering** is **AVS Migration Nominations** and neither it nor "
+            "**Primary Migration Path** contains **From AVS**; AVS to Azure "
+            "Native: **Primary Migration Path** contains **From AVS**, the only "
+            "report From AVS ever counts in.",
             "Its **Nomination Status** is **Approved**.",
             "Its **Current State** is **On Track** and nothing else.",
             "Its **Migration Status** is none of **5 - Deferred By Customer**, "
-            "**6 - Cancelled / Archived**, **7. On Hold** or **8. Cancelled**.",
+            "**6 - Cancelled / Archived**, **On Hold** or **Cancelled**.",
             "For an account the EOS tracking sheet covers, the **Current State** "
             "and **Migration Status** tested are the sheet's.",
             "Add up **Total ACR** over those waves.",
@@ -601,7 +605,10 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Unit: currency.",
         )),
         Definition("Nodes Deployment Planned (EOS reports only)", (
-            "Use exactly the same four qualifying conditions as ACR Pipeline.",
+            "Use the four ACR Pipeline conditions as the AVS and EOS reports "
+            "apply them: **Factory Offering** is **AVS Migration Nominations**.",
+            "A wave whose **Primary Migration Path** or **Factory Offering** "
+            "contains **From AVS** is never counted.",
             "Add up **Total Cores** over those waves instead of **Total ACR**.",
             "Read over the whole dataset, not the reporting period.",
             "Unit: nodes.",
@@ -638,14 +645,14 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         Definition("The state of an account the EOS tracking sheet covers", (
             "Read from the sheet's **Migration Status** and **Current State**; "
             "the first of these to fit is the state.",
-            "**Cancelled** — **Migration Status** is **8. Cancelled**.",
-            "**On Hold** — **Migration Status** is **7. On Hold**.",
-            "**Completed** — **Migration Status** is **6. Completed**, or "
+            "**Cancelled** — **Migration Status** is **Cancelled**.",
+            "**On Hold** — **Migration Status** is **On Hold**.",
+            "**Completed** — **Migration Status** is **Completed**, or "
             "**Current State** is **Completed**.",
             "**Blocked** — **Current State** is **Blocked**.",
             "**On-Track** — **Current State** is **On Track**, with the "
-            "migration in stages **1. Kick-Off Awaited** to **5. Sign-off "
-            "Pending** or no stage stated.",
+            "migration still at one of the five stages before **Completed**, "
+            "or no stage stated.",
             "**Other** — a stage with no state.",
             "Where the sheet leaves both cells blank, or uses a value outside "
             "this list, the export decides as above.",
@@ -666,7 +673,7 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Label each one with why it stopped; the first reason that fits is "
             "the one shown.",
             "**Migration Status** of **6 - Cancelled / Archived** — cancelled.",
-            "**Migration Status** of **7. On Hold** in the EOS tracking sheet "
+            "**Migration Status** of **On Hold** in the EOS tracking sheet "
             "— on hold.",
             "**Migration Status** of **5 - Deferred By Customer** — deferred. "
             "The **Migration Status** wins over the **Current State**, because "
@@ -779,12 +786,12 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "A report built with no sheet loaded is unchanged.",
         )),
         Definition("Migration Status and Current State values", (
-            "**Migration Status** is read as one of **1. Kick-Off Awaited**, "
-            "**2. Planning & Prerequisites**, **3. Ready for Migration**, **4. "
-            "Executing Migration** or **5. Sign-off Pending**.",
-            "Or **6. Completed**, **7. On Hold** or **8. Cancelled**.",
+            "**Migration Status** is read as one of **Kick-Off Awaited**, "
+            "**Planning & Prerequisites**, **Ready for Migration**, "
+            "**Executing Migration** or **Sign-off Pending**.",
+            "Or **Completed**, **On Hold** or **Cancelled**.",
             "The wording decides, ignoring case, spacing and punctuation; a "
-            "bare number is read by its place in that list.",
+            "number is never read, alone or in front of the wording.",
             "**Current State** is read as **On Track**, **Completed** or "
             "**Blocked**; anything starting with Blocked is Blocked.",
             "Where one account has several rows, it is as far along as its "
@@ -817,8 +824,8 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Unit: customer.",
         )),
         Definition("Accounts by Migration Status", (
-            "Count accounts per **Migration Status**, in stage order from **1. "
-            "Kick-Off Awaited** to **8. Cancelled**.",
+            "Count accounts per **Migration Status**, in stage order from "
+            "**Kick-Off Awaited** through to **Cancelled**.",
             "Split by **Target SDDC Generation**; an account with none takes "
             "its tag's generation, or Not stated.",
             "Unit: customer.",
@@ -850,15 +857,15 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         Definition("Days in migration", (
             "Count from **Migration Start Date** to **Actual Migration End "
             "Date**, or to the as-of date when there is no end date.",
-            "The ageing buckets count accounts still in stages **1. Kick-Off "
-            "Awaited** to **5. Sign-off Pending** with no end date.",
-            "Completed durations count accounts at **6. Completed** with both "
+            "The ageing buckets count accounts still at one of the five stages "
+            "before **Completed**, with no end date.",
+            "Completed durations count accounts at **Completed** with both "
             "dates.",
             "Unit: days.",
         )),
         Definition("Needs attention", (
             "Every account whose **Current State** is **Blocked** or whose "
-            "**Migration Status** is **7. On Hold**.",
+            "**Migration Status** is **On Hold**.",
             "Longest in migration first.",
             "Unit: customer.",
         )),
@@ -902,11 +909,13 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Unit: customer.",
         )),
         Definition("Total number of engagement end (monthly)", (
-            "Use exactly the same test and the same date as migration end.",
-            "The export marks when a wave ended but has no separate closure "
-            "date for the engagement itself.",
-            "So the two rows carry identical values by construction, not by "
-            "coincidence.",
+            "For each **TPID**, identify the latest **Phase** / wave record.",
+            "The account's state must be Completed, by the rules above — the "
+            "same test All AVS Migrations uses.",
+            "Use that wave's **Actual End Date**, as the export records it — "
+            "never the tracking sheet's **Actual Migration End Date**.",
+            "With no tracking sheet, this row equals migration end.",
+            "Count the unique **TPID** in that date's month, once only.",
             "Unit: customer.",
         )),
         Definition("Number of hosts migrated (monthly)", (

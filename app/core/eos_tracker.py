@@ -13,8 +13,8 @@ three things the export either does not carry or carries less reliably:
   has to fall back on.
 * **Actual Migration End Date** — likewise, when the migration actually ended.
 * **Migration Status** and **Current State** — where the programme says each
-  account is, in its own vocabulary (``1. Kick-Off Awaited`` …
-  ``8. Cancelled``; ``On Track`` / ``Completed`` / ``Blocked``).  Wherever the
+  account is, in its own vocabulary (``Kick-Off Awaited`` …
+  ``Cancelled``; ``On Track`` / ``Completed`` / ``Blocked``).  Wherever the
   sheet states one it **replaces** the export's for that account
   (:func:`apply_status`), so every report reads the programme's answer.
 
@@ -222,16 +222,22 @@ def normalise_generation(value) -> str | None:
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class TrackerStatus:
-    """One of the eight Migration Statuses the programme's sheet uses."""
-    number: int
+    """One of the eight Migration Statuses the programme's sheet uses.
+
+    ``order`` is where the stage sits in the migration, used only to sort and
+    to find an account's least advanced stage.  It is **never read from the
+    sheet and never shown**: the sheet's values carry no numbers, and the reports
+    print the wording alone.
+    """
+    order: int
     name: str
     status_class: str
     aliases: tuple[str, ...] = ()
 
     @property
     def text(self) -> str:
-        """How the reports print it: ``"4. Executing Migration"``."""
-        return f"{self.number}. {self.name}"
+        """How the reports print it — the wording, exactly as the sheet holds it."""
+        return self.name
 
 
 #: The sheet's Migration Status values, in the order a migration moves through
@@ -255,7 +261,7 @@ TRACKER_STATUSES: tuple[TrackerStatus, ...] = (
     TrackerStatus(7, "On Hold", statuses.ON_HOLD, ("onhold",)),
     TrackerStatus(8, "Cancelled", statuses.CANCELLED, ("cancelled", "canceled")),
 )
-_STATUS_BY_NUMBER = {st.number: st for st in TRACKER_STATUSES}
+_STATUS_BY_ORDER = {st.order: st for st in TRACKER_STATUSES}
 _STATUS_BY_ALIAS = {alias: st for st in TRACKER_STATUSES
                     for alias in (re.sub(r"[^a-z]", "", st.name.lower()), *st.aliases)}
 
@@ -269,31 +275,30 @@ _STATE_BY_ALIAS = {"ontrack": STATE_ON_TRACK, "completed": STATE_COMPLETED,
                    "blocked": STATE_BLOCKED}
 
 
-def _status_key(value) -> tuple[int | None, str]:
-    """``("4 - Executing Migration")`` -> ``(4, "executingmigration")``."""
+def _status_key(value) -> str:
+    """``"Executing Migration"`` -> ``"executingmigration"``.
+
+    Letters only: case, spaces and punctuation never decide.  A number typed in
+    front of the wording is ignored rather than read — the sheet's values carry
+    none, and a number on its own names no status.
+    """
     text = str(value).strip().lower()
-    number = re.match(r"^\s*(\d+)\s*(?:[.)\-:]|\s|$)", text)
-    rest = text[number.end():] if number else text
-    rest = re.sub(r"\band\b", "", rest)
-    return (int(number.group(1)) if number else None,
-            re.sub(r"[^a-z]", "", rest))
+    text = re.sub(r"^\s*\d+\s*(?:[.)\-:]|\s|$)", "", text)
+    text = re.sub(r"\band\b", "", text)
+    return re.sub(r"[^a-z]", "", text)
 
 
 def parse_status(value) -> TrackerStatus | None:
     """The sheet's Migration Status for one cell, or None when it names none.
 
-    The wording decides; a bare number ("4") is read by its position in the
-    list.  A cell whose wording names no status is *not* read by its number —
-    "5 - Deferred By Customer" is the export's vocabulary, and reading it as the
-    sheet's "5. Sign-off Pending" would be wrong — so it comes back None and is
-    listed under the sheet's data checks instead.
+    The wording alone decides.  A cell whose wording names no status — the
+    export's "5 - Deferred By Customer", say, or a bare number — comes back None
+    and is listed under the sheet's data checks instead.
     """
     if is_blank(value):
         return None
-    number, key = _status_key(value)
-    if key:
-        return _STATUS_BY_ALIAS.get(key)
-    return _STATUS_BY_NUMBER.get(number) if number is not None else None
+    key = _status_key(value)
+    return _STATUS_BY_ALIAS.get(key) if key else None
 
 
 def parse_state(value) -> str | None:
@@ -304,7 +309,7 @@ def parse_state(value) -> str | None:
     """
     if is_blank(value):
         return None
-    _number, key = _status_key(value)
+    key = _status_key(value)
     if key.startswith("blocked"):
         return STATE_BLOCKED
     return _STATE_BY_ALIAS.get(key)
@@ -322,7 +327,7 @@ def _account_status(values) -> object:
     for cls in _CLASS_PRECEDENCE:
         hits = [st for st in found if st.status_class == cls]
         if hits:
-            return min(hits, key=lambda st: st.number)
+            return min(hits, key=lambda st: st.order)
     return None
 
 
@@ -549,8 +554,9 @@ def build_tracker(raw: pd.DataFrame,
     status = grouped["migration_status"].apply(lambda v: _account_status(list(v)))
     out["migration_status"] = status.map(
         lambda st: st.text if st is not None else pd.NA)
+    # The stage's place in the migration — for sorting only, never shown.
     out["status_number"] = status.map(
-        lambda st: st.number if st is not None else pd.NA).astype("Float64")
+        lambda st: st.order if st is not None else pd.NA).astype("Float64")
     out["status_class"] = status.map(
         lambda st: st.status_class if st is not None else pd.NA)
     out["current_state"] = grouped["current_state"].apply(
@@ -691,8 +697,8 @@ def apply_status(fact: pd.DataFrame) -> pd.DataFrame:
     always the sheet's.  A wave the export has closed keeps its status: a wave
     delivered last year stays delivered, and its cores stay migrated.
 
-    Written onto the row: ``migration_status`` (``"4. Executing Migration"``),
-    ``migration_status_code`` (the sheet's own number), ``migration_status_label``
+    Written onto the row: ``migration_status`` (``"Executing Migration"``),
+    ``migration_status_code`` (blank — the sheet's values carry no number), ``migration_status_label``
     (``"Executing Migration"``), ``status_class`` and ``current_state``;
     ``status_source`` becomes ``"EOS tracker"``.  The export's originals are kept
     as ``fdo_migration_status`` and ``fdo_current_state``.  A wave the sheet
@@ -706,6 +712,10 @@ def apply_status(fact: pd.DataFrame) -> pd.DataFrame:
     out = fact
     out["fdo_migration_status"] = out["migration_status"].astype("string")
     out["fdo_current_state"] = out["current_state"].astype("string")
+    # The export's own end date, before the sheet fills any in: engagement end
+    # is read from it alone (see :func:`app.core.kpi.engagement_end_dates`).
+    if "actual_end_date" in out.columns:
+        out["fdo_actual_end_date"] = out["actual_end_date"]
     out["status_source"] = statuses.SOURCE_FDO
     if out.empty or "eos_status_class" not in out.columns:
         return out
@@ -730,11 +740,12 @@ def apply_status(fact: pd.DataFrame) -> pd.DataFrame:
 
     s = target & has_status
     if s.any():
-        number = out.loc[s, "eos_status_number"]
+        order = out.loc[s, "eos_status_number"]
         out.loc[s, "migration_status"] = out.loc[s, "eos_tracker_status"].astype("string")
-        out.loc[s, "migration_status_code"] = number.to_numpy()
+        # No code: the sheet's statuses carry no number, so none is shown.
+        out.loc[s, "migration_status_code"] = float("nan")
         out.loc[s, "migration_status_label"] = [
-            _STATUS_BY_NUMBER[int(n)].name for n in number]
+            _STATUS_BY_ORDER[int(n)].name for n in order]
         out.loc[s, "status_class"] = out.loc[s, "eos_status_class"].astype(str).to_numpy()
     t = target & has_state
     if t.any():

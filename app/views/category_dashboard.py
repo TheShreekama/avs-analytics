@@ -147,8 +147,9 @@ def _generation_matrix(ctx, fact: pd.DataFrame, key: str) -> None:
                "wherever it covers an account, and otherwise from the export: "
                "start derived (earliest wave reading On Track or Done → Actual "
                "Start Date, else Planned Start, else Nom. Approval), end from "
-               "the latest wave completing. *Engagement end* repeats *migration "
-               "end*, the closest the export comes to it.")
+               "the latest wave completing. *Engagement end* is always the "
+               "export's: a completed account, dated by its latest wave's "
+               "Actual End Date — the All AVS rule.")
     for generation, title in _MATRIX_BLOCKS:
         block = fact[fact["generation"] == generation]
         accounts = segments.tpid_key(block).nunique() if not block.empty else 0
@@ -247,7 +248,7 @@ def _summary_row(fact: pd.DataFrame, waves: kpi.WaveIndex, start, end, key: str,
     hosts = kpi.hosts_migrated(fact, start, end)
     on_track = kpi.on_track_accounts(fact, lasts=waves.last)
     acr = kpi.acr_claimed(fact, start, end)
-    pipeline = kpi.acr_pipeline(fact)
+    pipeline = kpi.acr_pipeline(fact, exporter.pipeline_motion(category))
     planned = kpi.nodes_planned(fact)
 
     cores_help = (glossary.CORES_MIGRATED if category == segments.CAT_AVS_NATIVE

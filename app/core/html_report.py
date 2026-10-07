@@ -509,7 +509,8 @@ def _summary_row(doc: _Builder, spec, pop, waves, start, end,
     records under each — ``Metric.records`` is what the number was counted from,
     so the table can never disagree with the tile above it.
     """
-    head = exporter.headline(pop, waves, start, end, all_time)
+    head = exporter.headline(pop, waves, start, end, all_time,
+                             exporter.pipeline_motion(spec.category))
     noun = _unit_noun(spec)
     group = _slug("kpis", spec.key, slug)
     metrics_shown = [
@@ -870,7 +871,8 @@ def _eos_matrix(doc: _Builder, ctx, pop) -> None:
         "an account, and otherwise the export's: start derived (earliest wave "
         "reading On Track or Done → Actual Start Date, else Planned Start, else "
         "Nom. Approval), end from the latest wave completing. Engagement end "
-        "repeats migration end, the closest the export comes to it.",
+        "is always the export's: a completed account, dated by its latest "
+        "wave's Actual End Date.",
         "".join(blocks)))
 
 

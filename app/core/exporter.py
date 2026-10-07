@@ -166,8 +166,14 @@ def labelled(fact: pd.DataFrame, column: str) -> pd.DataFrame:
             .rename_axis("category").reset_index(name="count"))
 
 
+def pipeline_motion(category: str) -> str:
+    """The pipeline rule a report reads: From AVS for AVS → Azure Native only."""
+    return kpi.MOTION_NATIVE if category == segments.CAT_AVS_NATIVE else kpi.MOTION_AVS
+
+
 def headline(pop: pd.DataFrame, waves: kpi.WaveIndex, start, end,
-             all_time: pd.DataFrame | None = None) -> dict:
+             all_time: pd.DataFrame | None = None,
+             motion: str = kpi.MOTION_AVS) -> dict:
     """The dashboard tiles, computed exactly as the dashboard computes them.
 
     ``acr_pipeline`` and ``nodes_planned`` are the two forward-looking ones and
@@ -191,7 +197,7 @@ def headline(pop: pd.DataFrame, waves: kpi.WaveIndex, start, end,
         "hosts": kpi.hosts_migrated(pop, start, end),
         "on_track": kpi.on_track_accounts(pop, lasts=waves.last),
         "acr": kpi.acr_claimed(pop, start, end),
-        "acr_pipeline": kpi.acr_pipeline(ahead),
+        "acr_pipeline": kpi.acr_pipeline(ahead, motion),
         "nodes_planned": kpi.nodes_planned(ahead),
     }
 
@@ -630,7 +636,8 @@ def _summary_block(spec: ReportSpec, pop: pd.DataFrame, waves: kpi.WaveIndex,
                 Paragraph(_esc(fy_label), ss["H3"]),
                 kit.spacer(0.1),
                 _summary_cards(spec, headline(pop, waves, fy_window[0],
-                                              fy_window[1], all_time), ss),
+                                              fy_window[1], all_time,
+                                              pipeline_motion(spec.category)), ss),
                 kit.spacer(0.3),
                 Paragraph(_esc(period_label), ss["H3"]),
                 kit.spacer(0.1)]
@@ -642,7 +649,8 @@ def _summary_block(spec: ReportSpec, pop: pd.DataFrame, waves: kpi.WaveIndex,
                           "work still to do. No date window narrows any of the "
                           "three.", ss["Muted"]),
                 kit.spacer(0.2)]
-    out.append(_summary_cards(spec, headline(pop, waves, start, end, all_time), ss))
+    out.append(_summary_cards(spec, headline(pop, waves, start, end, all_time,
+                                             pipeline_motion(spec.category)), ss))
     return out
 
 
@@ -794,8 +802,9 @@ def _matrix_block(ctx, pop: pd.DataFrame, ss) -> list:
                      "EOS accounts are coming from Gen-1 hardware. Migration "
                      "start and migration end are the manual EOS tracking "
                      "sheet's own dates wherever it covers an account, and "
-                     "otherwise the export's. Engagement end repeats migration "
-                     "end, the closest the export comes to it.", ss["Muted"]),
+                     "otherwise the export's. Engagement end is always the "
+                     "export's: a completed account, dated by its latest wave's "
+                     "Actual End Date.", ss["Muted"]),
            kit.spacer(0.2)]
     width = kit.CONTENT_WIDTH[kit.PORTRAIT]
     for generation, title in ((segments.GEN_1, "Gen1 to Gen1"),

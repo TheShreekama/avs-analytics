@@ -239,7 +239,7 @@ def _dated_wave_of(ordered: pd.DataFrame, column: str) -> pd.DataFrame:
 
 def is_completed(df: pd.DataFrame) -> pd.Series:
     """Migration Status is completed: the export's "7 - Completed" or the
-    tracking sheet's "6. Completed" (read through ``status_class``)."""
+    tracking sheet's "Completed" (read through ``status_class``)."""
     return statuses.is_class(df, statuses.COMPLETED)
 
 
@@ -413,6 +413,37 @@ def migration_end_dates(fact: pd.DataFrame,
     tracked = _tracked_dates(fact, "eos_end_date", "migration_end_date",
                              "end_date_source", TRACKER_END_SOURCE)
     return _prefer(tracked, derived, "migration_end_date")
+
+
+def engagement_end_dates(fact: pd.DataFrame,
+                         lasts: pd.DataFrame | None = None) -> pd.DataFrame:
+    """One row per TPID: when its engagement ended, from the FDO export alone.
+
+    The same rule the All AVS report uses for a completed migration: the account
+    is **Completed** (:func:`account_state`) and is dated by its latest wave's
+    **Actual End Date** — as the export records it, never the tracking sheet's
+    Actual Migration End Date (that one dates *migration end*).  An account with
+    no Actual End Date in the export has no engagement end to report.
+    """
+    if fact.empty:
+        return fact
+    done = migrations_completed(fact, None, None, lasts).records
+    if done.empty:
+        return done
+    column = "fdo_actual_end_date" if "fdo_actual_end_date" in done.columns \
+        else "actual_end_date"
+    rows = done.assign(engagement_end_date=pd.to_datetime(done[column],
+                                                          errors="coerce"),
+                       end_date_source="Actual End Date (latest wave)")
+    return rows[rows["engagement_end_date"].notna()].reset_index(drop=True)
+
+
+def monthly_engagement_ends(fact: pd.DataFrame, start=None, end=None,
+                            lasts: pd.DataFrame | None = None
+                            ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Unique TPIDs per month by the export's engagement end (latest wave)."""
+    return _monthly_by_date(engagement_end_dates(fact, lasts), "engagement_end_date",
+                            "Engagements Ended", start, end)
 
 
 def _tracked_dates(fact: pd.DataFrame, column: str, date_name: str,
@@ -626,14 +657,12 @@ MATRIX_ROWS: tuple[str, ...] = (
     "Number of hosts migrated",
 )
 
-#: Rows the source export cannot answer on their own, and what stands in for
-#: them.  The file marks when a wave *ended* but not an engagement closure
-#: distinct from its last wave completing, so "engagement end" reports the same
-#: measure as "migration end" rather than staying blank: an account whose latest
-#: wave has completed is the closest the data comes to an engagement that ended.
-MATRIX_ROWS_MIRRORED: dict[str, str] = {
-    "Total number of engagement end": "Total number of migration end",
-}
+#: Rows that repeat another row.  None any more: *engagement end* used to
+#: repeat *migration end*, but migration end now takes the EOS tracking sheet's
+#: date where it has one, while engagement end is always the export's own —
+#: the latest wave's Actual End Date on a completed account
+#: (:func:`engagement_end_dates`).  With no sheet the two rows still agree.
+MATRIX_ROWS_MIRRORED: dict[str, str] = {}
 
 #: Rows with no answer at all — none, now that engagement end mirrors migration
 #: end and migration start is derived (see ``migration_start_dates``).
@@ -698,11 +727,13 @@ def monthly_matrix(fact: pd.DataFrame, months: list[pd.Period],
     engagements, _ = monthly_unique_tpids(fact, "approval_date", waves=waves)
     starts, _ = monthly_migration_starts(fact)
     ends, _ = monthly_migration_ends(fact, lasts=waves.last)
+    closed, _ = monthly_engagement_ends(fact, lasts=waves.last)
     hosts, _ = monthly_hosts(fact)
     by_row = {
         "Total number of new engagement": _by_period(engagements, "Nominations"),
         "Total number of migration start": _by_period(starts, "Migration Starts"),
         "Total number of migration end": _by_period(ends, "Migrations Completed"),
+        "Total number of engagement end": _by_period(closed, "Engagements Ended"),
         "Number of hosts migrated": _by_period(hosts, "Hosts"),
     }
 
@@ -929,7 +960,7 @@ def is_deferred(df: pd.DataFrame) -> pd.Series:
 
 
 def is_on_hold(df: pd.DataFrame) -> pd.Series:
-    """Migration Status is the tracking sheet's "7. On Hold"."""
+    """Migration Status is the tracking sheet's "On Hold"."""
     return statuses.is_class(df, statuses.ON_HOLD)
 
 
@@ -999,9 +1030,9 @@ def tracker_account_state(lasts: pd.DataFrame) -> pd.Series:
     Read from the sheet's **Migration Status** and **Current State**, the first
     of these to hold deciding:
 
-    1. **Cancelled** — Migration Status "8. Cancelled".
-    2. **On Hold** — Migration Status "7. On Hold".
-    3. **Completed** — Migration Status "6. Completed", or Current State
+    1. **Cancelled** — Migration Status "Cancelled".
+    2. **On Hold** — Migration Status "On Hold".
+    3. **Completed** — Migration Status "Completed", or Current State
        "Completed".
     4. **Blocked** — Current State "Blocked".
     5. **On-Track** — Current State "On Track" with the migration in flight
@@ -1103,21 +1134,15 @@ def stage_labels(df: pd.DataFrame) -> tuple[pd.Series, list[tuple[str, str]]]:
     code = pd.to_numeric(df.get("migration_status_code"), errors="coerce")
     full = (df.get("migration_status_label", pd.Series("", index=df.index))
             .astype("string").replace({"": pd.NA}).fillna("Unknown"))
-    # The two documents number their stages differently, so a stage the
-    # tracking sheet supplied is labelled "EOS 4" rather than "Stage 4": the
-    # same number would otherwise name two different stages on one axis.
-    source = (df["status_source"].astype("string")
-              if "status_source" in df.columns
-              else pd.Series(statuses.SOURCE_FDO, index=df.index, dtype="string"))
-    tracker = source.eq(statuses.SOURCE_TRACKER).fillna(False)
+    # A stage the tracking sheet supplied has no code (its values carry no
+    # number), so it keeps its own wording on the axis: "Executing Migration".
     short = pd.Series(
-        [(f"{'EOS' if t else 'Stage'} {int(c)}") if pd.notna(c) else f
-         for c, f, t in zip(code, full, tracker)],
+        [f"Stage {int(c)}" if pd.notna(c) else f for c, f in zip(code, full)],
         index=df.index, dtype="object")
     pairs = {}
-    for c, sh, fu, t in zip(code, short, full, tracker):
+    for c, sh, fu in zip(code, short, full):
         if pd.notna(c) and sh not in pairs:
-            pairs[sh] = ((int(bool(t)), int(c)), str(fu))
+            pairs[sh] = (int(c), str(fu))
     legend = [(sh, name) for sh, (_c, name) in
               sorted(pairs.items(), key=lambda kv: kv[1][0])]
     return short, legend
@@ -1279,8 +1304,8 @@ def blocked_state_label(rows: pd.DataFrame) -> pd.Series:
     """Why each stopped account is stopped, in one label, first match winning::
 
         "Cancelled / Archived"   ← Migration Status = "6 - Cancelled / Archived"
-                                   (or the tracking sheet's "8. Cancelled")
-        "On Hold"                ← the tracking sheet's "7. On Hold"
+                                   (or the tracking sheet's "Cancelled")
+        "On Hold"                ← the tracking sheet's "On Hold"
         "Deferred By Customer"   ← Migration Status = "5 - Deferred By Customer"
         one of BLOCKED_STATES    ← Current State says so, in its canonical spelling
         "Not approved"           ← Nomination Status is not "Approved"
@@ -1382,21 +1407,41 @@ PIPELINE_FROM_AVS = "from avs"
 
 #: Migration Statuses that take a wave out of the forward pipeline.
 PIPELINE_EXCLUDED_STATUSES = ("5 - Deferred By Customer", "6 - Cancelled / Archived",
-                              "7. On Hold", "8. Cancelled")
+                              "On Hold", "Cancelled")
 PIPELINE_EXCLUDED_CODES = (DEFERRED_CODE, CANCELLED_CODE)
 
 
-def in_pipeline_scope(fact: pd.DataFrame) -> pd.Series:
+#: Which motion a pipeline figure is read for.
+MOTION_AVS = "avs"          # All AVS Migrations and every EOS report
+MOTION_NATIVE = "native"    # AVS → Azure Native, and nothing else
+
+
+def mentions_from_avs(fact: pd.DataFrame) -> pd.Series:
+    """Waves whose Primary Migration Path **or** Factory Offering says "From AVS".
+
+    "From AVS" belongs to AVS → Azure Native and to nothing else, so wherever it
+    is written on a wave, the AVS and EOS figures leave that wave out.
+    """
+    if fact.empty:
+        return pd.Series(dtype=bool)
+    out = pd.Series(False, index=fact.index)
+    for column in ("migration_path", "factory_offering"):
+        if column in fact.columns:
+            out |= fact[column].astype("string").str.contains(
+                PIPELINE_FROM_AVS, case=False, na=False).fillna(False).astype(bool)
+    return out
+
+
+def in_pipeline_scope(fact: pd.DataFrame, motion: str | None = None) -> pd.Series:
     """Waves the pipeline is counted over, by motion::
 
-        Factory Offering       =        "AVS Migration Nominations"   -- AVS motions
-        Primary Migration Path CONTAINS "From AVS"                    -- AVS → Azure Native
+        AVS and EOS reports      Factory Offering = "AVS Migration Nominations"
+                                 and no "From AVS" in the path or the offering
+        AVS → Azure Native       Primary Migration Path contains "From AVS"
 
-    Either qualifies, which is what makes one rule serve both reports: an AVS
-    or EOS population holds no "(From AVS)" waves, so the test reduces to the
-    offering; the AVS → Azure Native population is nothing but those waves, so
-    it reduces to the path.  Run over a mixed frame it is the union — each
-    motion counted the way it is defined.
+    ``motion`` names the report (:data:`MOTION_AVS` / :data:`MOTION_NATIVE`);
+    left None, a mixed frame is read as the union of the two, each motion by its
+    own rule — which is what the insights, run over the whole file, want.
     """
     if fact.empty:
         return pd.Series(dtype=bool)
@@ -1406,9 +1451,15 @@ def in_pipeline_scope(fact: pd.DataFrame) -> pd.Series:
     path = (fact["migration_path"].astype("string")
             if "migration_path" in fact.columns
             else pd.Series(pd.NA, index=fact.index, dtype="string"))
-    is_avs_motion = offering.str.casefold().eq(PIPELINE_OFFERING.casefold())
-    leaves_avs = path.str.contains(PIPELINE_FROM_AVS, case=False, na=False)
-    return (is_avs_motion | leaves_avs).fillna(False)
+    leaving = mentions_from_avs(fact)
+    is_avs_motion = (offering.str.casefold().eq(PIPELINE_OFFERING.casefold())
+                     .fillna(False).astype(bool) & ~leaving)
+    native = path.str.contains(PIPELINE_FROM_AVS, case=False, na=False).fillna(False)
+    if motion == MOTION_AVS:
+        return is_avs_motion
+    if motion == MOTION_NATIVE:
+        return native.astype(bool)
+    return (is_avs_motion | native).astype(bool)
 
 
 def is_nomination_approved(df: pd.DataFrame) -> pd.Series:
@@ -1426,7 +1477,7 @@ def is_nomination_approved(df: pd.DataFrame) -> pd.Series:
     return status.str.casefold().eq("approved").fillna(False)
 
 
-def eligible_pipeline_waves(fact: pd.DataFrame) -> pd.Series:
+def eligible_pipeline_waves(fact: pd.DataFrame, motion: str | None = None) -> pd.Series:
     """The waves the forward pipeline is counted over.
 
     A wave counts when **all four** hold::
@@ -1437,7 +1488,7 @@ def eligible_pipeline_waves(fact: pd.DataFrame) -> pd.Series:
         3. Current State          =        "On Track"                    -- and nothing else
         4. Migration Status       NOT IN   ("5 - Deferred By Customer",
                                             "6 - Cancelled / Archived",
-                                            "7. On Hold", "8. Cancelled")
+                                            "On Hold", "Cancelled")
 
     For an account the EOS tracking sheet covers, the wave's Current State and
     Migration Status are the sheet's (see
@@ -1451,13 +1502,13 @@ def eligible_pipeline_waves(fact: pd.DataFrame) -> pd.Series:
     if fact.empty:
         return pd.Series(dtype=bool)
     excluded = statuses.is_class(fact, *statuses.STOPPED) | is_cancelled(fact)
-    return (in_pipeline_scope(fact)
+    return (in_pipeline_scope(fact, motion)
             & is_nomination_approved(fact)
             & _is_state(fact, ON_TRACK_STATE)
             & ~excluded).fillna(False)
 
 
-def acr_pipeline(fact: pd.DataFrame) -> Metric:
+def acr_pipeline(fact: pd.DataFrame, motion: str | None = None) -> Metric:
     """ACR carried by every eligible wave — the commercial value still to land.
 
     Wave-level by construction (see :func:`eligible_pipeline_waves`), and not
@@ -1466,7 +1517,7 @@ def acr_pipeline(fact: pd.DataFrame) -> Metric:
     """
     if fact.empty:
         return Metric(0.0, "ACR")
-    rows = _dedupe_records(fact[eligible_pipeline_waves(fact)])
+    rows = _dedupe_records(fact[eligible_pipeline_waves(fact, motion)])
     total = float(pd.to_numeric(rows.get("total_acr"), errors="coerce").sum())
     return Metric(total, "ACR", rows)
 
@@ -1480,7 +1531,9 @@ def nodes_planned(fact: pd.DataFrame) -> Metric:
     """
     if fact.empty:
         return Metric(0, "nodes")
-    rows = _dedupe_records(fact[eligible_pipeline_waves(fact)])
+    # An EOS figure: read as the AVS motion always, so no "From AVS" wave —
+    # whatever population it is handed — can deploy a node here.
+    rows = _dedupe_records(fact[eligible_pipeline_waves(fact, MOTION_AVS)])
     total = float(pd.to_numeric(rows.get("total_cores"), errors="coerce").sum())
     return Metric(total, "nodes", rows)
 
