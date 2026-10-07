@@ -760,6 +760,121 @@ def apply_status(fact: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+SHEET_ONLY_FLAG = "eos_sheet_only"
+SHEET_ONLY_SOURCE = "EOS tracking sheet"
+
+
+def add_sheet_only_accounts(fact: pd.DataFrame, tracker: pd.DataFrame | None,
+                            as_of=None) -> tuple[pd.DataFrame, list[str]]:
+    """One row for every sheet account the export gives no EOS-eligible wave.
+
+    **With the tracking sheet loaded, every account in it is an EOS account** —
+    50 accounts in the sheet are 50 accounts in the EOS reports.  An account the
+    export holds is counted through its own waves.  One it does not hold — its
+    TPID is not in the export, or its only waves are From AVS (which belong to
+    AVS → Azure Native alone), or the reporting floor dropped them — would
+    otherwise vanish, so it is given a single row built from the sheet:
+    its customer, region, generation, Migration Status, Current State and dates,
+    with no offering, wave, ACR or cores, because the sheet states none.
+
+    Such rows carry ``eos_sheet_only`` (and ``source_file`` "EOS tracking
+    sheet"), so they can always be told apart.  Idempotent: an account that
+    already has a row of its own is never given a second.  Returns
+    ``(fact, tpids_added)``.
+    """
+    out = fact
+    if SHEET_ONLY_FLAG not in out.columns:
+        out = out.assign(**{SHEET_ONLY_FLAG: False})
+    if tracker is None or tracker.empty:
+        return out, []
+    keys = out["tpid_key"] if "tpid_key" in out.columns else segments.tpid_key(out)
+    leaving = (out["is_from_avs"].astype(bool) if "is_from_avs" in out.columns
+               else pd.Series(False, index=out.index))
+    present = set(keys[~leaving.to_numpy()])
+    missing = tracker[~tracker["tpid_key"].isin(present)]
+    if missing.empty:
+        return out, []
+
+    n = len(missing)
+    extra = pd.DataFrame(index=range(n))
+    for column in out.columns:
+        dtype = out[column].dtype
+        if pd.api.types.is_bool_dtype(dtype):
+            extra[column] = False
+        elif pd.api.types.is_datetime64_any_dtype(dtype):
+            extra[column] = pd.Series(pd.NaT, index=extra.index, dtype=dtype)
+        elif pd.api.types.is_integer_dtype(dtype) and not pd.api.types.is_extension_array_dtype(dtype):
+            extra[column] = pd.Series(-1, index=extra.index, dtype=dtype)
+        else:
+            try:
+                extra[column] = pd.Series(pd.NA, index=extra.index).astype(dtype)
+            except (TypeError, ValueError):
+                extra[column] = pd.Series([None] * n, index=extra.index, dtype="object")
+
+    def put(column, values):
+        values = pd.Series(list(values), index=extra.index)
+        if column in out.columns:
+            try:
+                values = values.astype(out[column].dtype)
+            except (TypeError, ValueError):
+                pass
+        extra[column] = values
+
+    m = missing.reset_index(drop=True)
+    status = m["migration_status"]
+    cls = m["status_class"].astype("object").where(m["status_class"].notna(),
+                                                   statuses.UNKNOWN)
+    state = m["current_state"]
+    generation = m["target_generation"].astype("object").where(
+        m["target_generation"].notna(), segments.GEN_UNCLASSIFIED)
+    end = pd.to_datetime(m["migration_end_date"], errors="coerce")
+    completed = cls.eq(statuses.COMPLETED)
+    unknown = lambda col: col.astype("object").where(col.notna(), "Unknown")  # noqa: E731
+
+    put("tpid", m["tpid"].astype("string"))
+    put("tpid_key", m["tpid_key"])
+    put("customer_name", unknown(m["customer_name"]))
+    region = unknown(m["region"])
+    for column in ("ww_region", "region_geo"):
+        put(column, region)
+    for column in ("region", "area", "factory_offering", "migration_path",
+                   "nomination_status", "milestone_status", "customer_segment"):
+        if column in out.columns:
+            put(column, ["Unknown"] * n)
+    put("phase", [SHEET_ONLY_SOURCE] * n)
+    put("migration_status", unknown(status))
+    put("migration_status_label", unknown(status))
+    put("migration_status_code", [float("nan")] * n)
+    put("status_class", cls)
+    put("status_source", [statuses.SOURCE_TRACKER] * n)
+    put("current_state", unknown(state))
+    put("generation", generation)
+    put(GENERATION_SOURCE, [SOURCE_TRACKER if g in (segments.GEN_1, segments.GEN_2)
+                            else SOURCE_NONE for g in generation])
+    put("is_eos_population", [True] * n)
+    put(TRACKED_FLAG, [True] * n)
+    put(SHEET_ONLY_FLAG, [True] * n)
+    put("actual_end_date", end.where(completed))
+    put("source_file", [SHEET_ONLY_SOURCE] * n)
+    for key, column in OVERLAY_COLUMNS.items():
+        if key in m.columns:
+            put(column, m[key])
+    put("is_closed", completed)
+    put("is_cancelled", cls.eq(statuses.CANCELLED))
+    put("is_open", ~completed & ~cls.eq(statuses.CANCELLED))
+    if "dq_flags" in out.columns:
+        put("dq_flags", [""] * n)
+    if "migration_category" in out.columns:
+        put("migration_category", segments.category_label_series(extra))
+    if "eos_status" in out.columns:
+        from .cleaning import derive_eos_status
+        put("eos_status", derive_eos_status(extra, pd.Timestamp(as_of)
+                                            if as_of is not None
+                                            else pd.Timestamp.today().normalize()))
+    combined = pd.concat([out, extra[out.columns]], ignore_index=True)
+    return combined, [str(t) for t in m["tpid"]]
+
+
 def resolve_generation(fact: pd.DataFrame, tagged: pd.Series) -> tuple[pd.Series, pd.Series]:
     """The generation to report per row, and where each one came from.
 
@@ -837,8 +952,10 @@ def inconsistencies(fact: pd.DataFrame, tracker: pd.DataFrame | None,
         reported for them — no offering, no ACR, no waves — so they are absent
         from every report until the nomination exists.
     ``untracked_eos_accounts``
-        In EOS scope by tag or migration path, but not in the tracking sheet.
-        Their generation, start and end dates fall back to the export.
+        Marked EOS in the export (a Gen1/Gen2 tag or an EOS path) but not in the
+        tracking sheet.  With a sheet loaded the sheet is the list of EOS
+        accounts, so these are **not** reported as EOS — this is where to see
+        them, and to add them to the sheet if they belong there.
     ``generation_disagrees``
         The sheet says one generation and the account's own Gen-1/Gen-2 tag says
         the other. The sheet wins (that is the rule) — this is where to see
@@ -869,8 +986,13 @@ def inconsistencies(fact: pd.DataFrame, tracker: pd.DataFrame | None,
         cols = [c for c in ("tpid", "customer_name", "generation", "tags",
                             "migration_path", "factory_offering")
                 if c in accounts.columns]
-        in_scope = accounts[accounts["is_eos_population"].astype(bool)
-                            & ~accounts[TRACKED_FLAG].astype(bool)]
+        tag_gen = segments.generation_by_tpid(fact)
+        marked = (accounts["tpid_key"].map(tag_gen).isin((segments.GEN_1, segments.GEN_2))
+                  | accounts["tpid_key"].map(fact.groupby("tpid_key")["is_av36_eos"].any())
+                  .fillna(False).astype(bool))
+        in_scope = accounts[marked.to_numpy()
+                            & ~accounts[TRACKED_FLAG].astype(bool).to_numpy()
+                            & ~accounts["is_from_avs"].astype(bool).to_numpy()]
         if not in_scope.empty:
             out["untracked_eos_accounts"] = in_scope[cols].reset_index(drop=True)
 

@@ -523,7 +523,8 @@ def build_fact_frame(
     # An "AVS Migration - Gen1/Gen2" tag on ANY wave — or a Target SDDC
     # Generation in the tracking sheet — makes the whole account an EOS
     # Migration account, so membership follows the generation.
-    fact["is_eos_population"] = segments.eos_population(fact)
+    sheet_loaded = tracker is not None and not tracker.empty
+    fact["is_eos_population"] = segments.eos_population(fact, sheet=sheet_loaded)
     fact["migration_category"] = segments.category_label_series(fact)
     code, label = split_migration_status(fact["migration_status"])
     fact["migration_status_code"] = code
@@ -610,6 +611,10 @@ def build_fact_frame(
         dup = fact["task_id"].duplicated(keep=False) & fact["task_id"].notna()
         report["duplicate_task_ids"] = int(dup.sum())
 
+    # Every account the EOS tracking sheet lists is an EOS account — including
+    # one the export has no (non-From-AVS) wave for, which is given a row here.
+    fact, report["sheet_only_accounts"] = eos_tracker.add_sheet_only_accounts(
+        fact, tracker, as_of)
     return fact, report
 
 

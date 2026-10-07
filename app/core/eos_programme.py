@@ -99,6 +99,9 @@ def accounts(tracker: pd.DataFrame | None, fact: pd.DataFrame | None,
     if fact is not None and not fact.empty:
         onboarding = fact[~fact["is_from_avs"].astype(bool)] \
             if "is_from_avs" in fact.columns else fact
+        # A row the app built from the sheet is not the export holding the account.
+        if "eos_sheet_only" in onboarding.columns:
+            onboarding = onboarding[~onboarding["eos_sheet_only"].astype(bool)]
         if not onboarding.empty:
             lasts = kpi.latest_wave(onboarding).set_index("tpid_key")
             sums = onboarding.assign(

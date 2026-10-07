@@ -97,10 +97,14 @@ def eos_funnel(ctx, window: tuple | None = None) -> pd.DataFrame:
     rows: list[tuple[str, int, str]] = []
     if fact.empty:
         return pd.DataFrame(rows, columns=["Step", "Accounts", "What it means"])
-    acc = fact.drop_duplicates("tpid_key")
-    tagged = segments.generation_by_tpid(fact)
+    sheet_only = (fact["eos_sheet_only"].astype(bool) if "eos_sheet_only" in fact.columns
+                  else pd.Series(False, index=fact.index))
+    fdo = fact[~sheet_only.to_numpy()]
+    acc = fdo.drop_duplicates("tpid_key")
+    tagged = segments.generation_by_tpid(fdo) if not fdo.empty else pd.Series(dtype=object)
     by_tag = tagged.isin((segments.GEN_1, segments.GEN_2))
-    path = fact.groupby("tpid_key")["is_av36_eos"].any()
+    path = (fdo.groupby("tpid_key")["is_av36_eos"].any() if not fdo.empty
+            else pd.Series(dtype=bool))
     scope = ctx.report.get("scope") or {}
     rows.append(("FDO accounts nominated before the floor (dropped)",
                  int(scope.get("excluded_accounts", 0)),
@@ -120,16 +124,24 @@ def eos_funnel(ctx, window: tuple | None = None) -> pd.DataFrame:
                      "Unique TPIDs in the sheet"))
         rows.append(("…whose TPID is in the FDO dataset",
                      int(overlay.get("matched_accounts", 0)),
-                     "Only these can reach the FDO-based reports"))
-        stated = tracked["eos_target_generation"].isin((segments.GEN_1, segments.GEN_2))
+                     "Reported with their FDO waves, ACR and cores"))
+        added = fact.loc[sheet_only.to_numpy(), "tpid_key"].nunique()
+        rows.append(("…reported from the sheet alone", int(added),
+                     "Not in the FDO dataset, or only From AVS / pre-floor waves "
+                     "there: counted as EOS with no ACR or cores"))
+        stated = (ctx.tracker["target_generation"]
+                  .isin((segments.GEN_1, segments.GEN_2)))
         rows.append(("…with a readable Target SDDC Generation",
-                     int(stated.sum()), "Gen1 / Gen2 recognised in the cell"))
-    gen = acc["generation"].isin((segments.GEN_1, segments.GEN_2))
-    rows.append(("Accounts with a generation (sheet, else tag)", int(gen.sum()),
-                 "What puts an account in EOS scope"))
-    leaving = acc["is_from_avs"].astype(bool)
-    rows.append(("…of those, (From AVS) moves — never EOS", int((gen & leaving).sum()),
-                 "Primary Migration Path contains From AVS"))
+                     int(stated.sum()), "Gen1 / Gen2; the rest are EOS with "
+                                        "the generation not stated"))
+    else:
+        gen = acc["generation"].isin((segments.GEN_1, segments.GEN_2))
+        rows.append(("Accounts with a generation tag", int(gen.sum()),
+                     "What puts an account in EOS scope without a sheet"))
+        leaving = acc["is_from_avs"].astype(bool)
+        rows.append(("…of those, (From AVS) moves — never EOS",
+                     int((gen & leaving).sum()),
+                     "Primary Migration Path contains From AVS"))
     eos = segments.population(fact, segments.CAT_EOS_ALL)
     rows.append(("EOS Migrations (All) — accounts", int(eos["tpid_key"].nunique())
                  if not eos.empty else 0, "What the EOS report counts, all time"))
@@ -252,15 +264,22 @@ def verdicts(ctx, last_failure: dict | None = None,
             out.append("The tracking sheet is loaded but no row has a TPID.")
         elif not matched:
             out.append(f"None of the sheet's {accounts:,} TPIDs is in the FDO "
-                       "dataset — compare the two TPID columns below.")
+                       "dataset — every EOS account is reported from the sheet "
+                       "alone (no ACR, cores or waves). Compare the two TPID "
+                       "columns below.")
         elif matched < accounts:
             out.append(f"{matched:,} of the sheet's {accounts:,} TPIDs are in the FDO "
-                       f"dataset; the other {accounts - matched:,} are reported only on "
-                       "the EOS Programme Tracker page.")
+                       f"dataset; the other {accounts - matched:,} are still EOS "
+                       "accounts, reported from the sheet alone.")
+        if accounts:
+            out.append(f"The sheet is the list of EOS accounts: all {accounts:,} of "
+                       "its TPIDs are reported as EOS, and an account the FDO "
+                       "export tags as EOS but the sheet omits is not.")
         if accounts and read.get("no_generation", 0) == accounts:
             out.append("The sheet's Target SDDC Generation could not be read for any "
                        "account (column: "
-                       f"{(read.get('mapping') or {}).get('target_generation') or 'NOT FOUND'}).")
+                       f"{(read.get('mapping') or {}).get('target_generation') or 'NOT FOUND'}"
+                       "), so none of them falls in the Gen-1 or Gen-2 blocks.")
     eos = segments.population(fact, segments.CAT_EOS_ALL)
     n_eos = int(eos["tpid_key"].nunique()) if not eos.empty else 0
     if n_eos:
@@ -430,7 +449,17 @@ def trace(ctx, tpid: str) -> dict:
               if raw_col and raw_col in ctx.raw.columns else 0)
     v = out["verdicts"]
 
-    if rows.empty:
+    sheet_only = (bool(rows["eos_sheet_only"].astype(bool).all())
+                  if not rows.empty and "eos_sheet_only" in rows.columns else False)
+    if sheet_only:
+        v.append("Not in the FDO dataset with any EOS-eligible wave — reported as an "
+                 "EOS account from the tracking sheet alone (no ACR, cores or waves)"
+                 + (f"; the FDO file has {int(in_raw)} row(s) for it (From AVS, or "
+                    "before the reporting floor)." if in_raw else "."))
+        rows = rows.iloc[0:0]
+    if rows.empty and sheet_only:
+        pass
+    elif rows.empty:
         if key in set(scope.get("excluded_tpids") or []):
             v.append(f"In the FDO file ({int(in_raw)} rows) but every wave was "
                      f"nominated before the {scope.get('floor_fy')} reporting "

@@ -846,16 +846,15 @@ def _eos_matrix(doc: _Builder, ctx, pop) -> None:
     """
     start = metrics.named_fiscal_year_start(EOS_MATRIX_START_FY, FY_START_MONTH)
     blocks = []
-    for generation, title in ((segments.GEN_1, "Gen1 to Gen1"),
-                              (segments.GEN_2, "Gen1 to Gen2")):
+    for generation, title in exporter.matrix_blocks(pop):
         block = pop[pop["generation"] == generation]
         months = kpi.matrix_month_span(block, start, ctx.as_of)
         grid = kpi.monthly_matrix(block, months, fy_start_month=FY_START_MONTH)
         accounts = segments.tpid_key(block).nunique() if not block.empty else 0
         blocks.append(
             f'<h4 class="sub">{esc(title)}</h4>'
-            f'<p class="note"><b>{fmt_int(accounts)}</b> accounts tagged '
-            f'<b>AVS Migration - {esc(generation.replace("-", ""))}</b> · '
+            f'<p class="note"><b>{fmt_int(accounts)}</b> accounts '
+            f'{esc(exporter.matrix_block_note(generation))} · '
             f'<b>{fmt_int(len(block))}</b> nomination waves.</p>'
             + _table(grid, _slug("mx", generation.lower().replace("-", "")),
                      numeric=set(grid.columns[1:]), row_head=True,

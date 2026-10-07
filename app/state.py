@@ -99,6 +99,11 @@ def _build_fact(signature: str, mapping_json: str, as_of_str: str, filename: str
     with loader.ingest_stage("floor", filename, _raw, mp):
         fact, report["scope"] = cleaning.apply_reporting_floor(
             fact, REPORTING_FLOOR_FY, FY_START_MONTH)
+        # A sheet account whose every wave the floor dropped is still an EOS
+        # account: it gets its sheet-only row now (a no-op for everyone else).
+        fact, added = trackermod.add_sheet_only_accounts(fact, _tracker,
+                                                         report["as_of"])
+        report["sheet_only_accounts"] = (report.get("sheet_only_accounts") or []) + added
     with loader.ingest_stage("rollup", filename, _raw, mp):
         customer = rollupmod.build_customer_rollup(fact, report["as_of"])
         report["rollup"] = rollupmod.rollup_summary(customer)

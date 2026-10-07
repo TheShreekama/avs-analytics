@@ -235,18 +235,12 @@ def tracker_scope_note(ctx) -> str:
     accounts = int(read.get("accounts", 0))
     matched = int(overlay.get("matched_accounts", 0))
     if accounts and not matched:
-        sheet = ", ".join(str(t) for t in ctx.tracker["tpid"].head(3))
-        fdo = ", ".join(str(t) for t in ctx.fact["tpid_key"].drop_duplicates()
-                        .head(3)) if not ctx.fact.empty else ""
         return (f"None of the {accounts} TPIDs in the EOS tracking sheet matches "
-                f"a TPID in the FDO dataset (the sheet has {sheet}…; the dataset "
-                f"has {fdo}…), so the sheet brings no account into EOS scope. "
-                f"The EOS Programme Tracker reports the sheet on its own.")
-    stated = accounts - int(read.get("no_generation", 0))
-    if accounts and not stated:
-        return ("The EOS tracking sheet states no Target SDDC Generation that "
-                "could be read (Gen1 or Gen2), so it brings no account into EOS "
-                "scope. Data & Upload shows which column was read.")
+                f"a TPID in the FDO dataset, so every EOS account is reported from "
+                f"the sheet alone — no ACR, cores or waves.")
+    if not accounts:
+        return ("The EOS tracking sheet is loaded but holds no row with a TPID, "
+                "so there is no EOS account to report.")
     return ""
 
 
@@ -807,8 +801,7 @@ def _matrix_block(ctx, pop: pd.DataFrame, ss) -> list:
                      "Actual End Date.", ss["Muted"]),
            kit.spacer(0.2)]
     width = kit.CONTENT_WIDTH[kit.PORTRAIT]
-    for generation, title in ((segments.GEN_1, "Gen1 to Gen1"),
-                              (segments.GEN_2, "Gen1 to Gen2")):
+    for generation, title in matrix_blocks(pop):
         block = pop[pop["generation"] == generation] if not pop.empty else pop
         accounts = segments.tpid_key(block).nunique() if not block.empty else 0
         months = kpi.matrix_month_span(block, start, ctx.as_of)
@@ -820,6 +813,27 @@ def _matrix_block(ctx, pop: pd.DataFrame, ss) -> list:
                 kit.spacer(0.1),
                 *_matrix_grid(grid, ss, width), kit.spacer(0.25)]
     return out
+
+
+NO_GENERATION_BLOCK = "Generation not stated"
+
+
+def matrix_blocks(pop: pd.DataFrame) -> list[tuple[str, str]]:
+    """The matrix's blocks: Gen1 to Gen1, Gen1 to Gen2 — and, when the EOS
+    tracking sheet lists accounts with no generation, a block for those, so
+    every EOS account the report counts appears in the grid."""
+    blocks = [(segments.GEN_1, "Gen1 to Gen1"), (segments.GEN_2, "Gen1 to Gen2")]
+    if not pop.empty and "generation" in pop.columns and bool(
+            (pop["generation"] == segments.GEN_UNCLASSIFIED).any()):
+        blocks.append((segments.GEN_UNCLASSIFIED, NO_GENERATION_BLOCK))
+    return blocks
+
+
+def matrix_block_note(generation: str) -> str:
+    """Which accounts a block holds, in words."""
+    if generation in (segments.GEN_1, segments.GEN_2):
+        return f"tagged AVS Migration - {generation.replace('-', '')}"
+    return "with no generation stated in the tracking sheet or the tags"
 
 
 def _matrix_grid(grid: pd.DataFrame, ss, width: float) -> list:

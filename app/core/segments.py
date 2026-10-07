@@ -219,8 +219,13 @@ def tpid_key(fact: pd.DataFrame) -> pd.Series:
 # --------------------------------------------------------------------------- #
 # EOS population
 # --------------------------------------------------------------------------- #
-def eos_population(fact: pd.DataFrame) -> pd.Series:
+def eos_population(fact: pd.DataFrame, sheet: bool = False) -> pd.Series:
     """Per-row membership of the EOS Migration population, decided per account.
+
+    **With the EOS tracking sheet loaded (``sheet``), the sheet is the list**:
+    an account is EOS exactly when its TPID is in the sheet (``eos_tracked``),
+    whatever its tags or paths say — so a sheet of 50 accounts is an EOS report
+    of 50 accounts.  Without one, the export decides, as below.
 
     1. **Tag** — ANY wave carrying "AVS Migration - Gen1" or "AVS Migration - Gen2"
        brings the whole account in, with that generation.
@@ -233,6 +238,12 @@ def eos_population(fact: pd.DataFrame) -> pd.Series:
     """
     if fact.empty:
         return pd.Series(dtype=bool)
+    if sheet and "eos_tracked" in fact.columns:
+        # From AVS still never counts as EOS: those waves belong to AVS → Azure
+        # Native alone.  An account the sheet lists whose only waves are From
+        # AVS is carried by a sheet-only row instead (see eos_tracker).
+        return as_bool_mask(fact["eos_tracked"].astype(bool)
+                            & ~fact["is_from_avs"].astype(bool), fact.index)
     if "generation" in fact.columns:
         tagged = as_bool_mask(fact["generation"].isin((GEN_1, GEN_2)), fact.index)
     else:
@@ -285,19 +296,27 @@ def population(fact: pd.DataFrame, category: str) -> pd.DataFrame:
     if category == CAT_EOS_GEN2:
         return onboarding[(onboarding["generation"] == GEN_2)
                           & onboarding["is_eos_population"].astype(bool)]
+    tracked = (onboarding["eos_tracked"].astype(bool)
+               if "eos_tracked" in onboarding.columns
+               else pd.Series(False, index=onboarding.index))
     if category == CAT_EOS_UNCLASSIFIED:
         # In scope through the offering fallback rather than a tag, so there is no
         # generation to report — kept visible, never folded into Gen-1 or Gen-2.
+        # An account the tracking sheet lists is never here: the sheet makes it
+        # EOS, generation or not, and it is counted in EOS Migrations (All).
         return onboarding[onboarding["is_eos_population"].astype(bool)
-                          & (onboarding["generation"] == GEN_UNCLASSIFIED)]
+                          & (onboarding["generation"] == GEN_UNCLASSIFIED)
+                          & ~tracked]
     # CAT_EOS_ALL — Gen-1 and Gen-2 only.  An account in EOS scope by migration
     # path with no generation tag on any wave is deliberately **not** here: EOS
     # is reported by generation, so an ungenerationed account would inflate the
     # combined total past the sum of its two blocks and land in neither.  It
     # keeps its place in All AVS Migrations and is listed under Data
     # Inconsistency; see ``UNCLASSIFIED_LABEL``.
+    # Every account the EOS tracking sheet lists is counted here too, with or
+    # without a generation: the sheet is the programme's list of EOS accounts.
     return onboarding[onboarding["is_eos_population"].astype(bool)
-                      & onboarding["generation"].isin((GEN_1, GEN_2))]
+                      & (onboarding["generation"].isin((GEN_1, GEN_2)) | tracked)]
 
 
 def category_summary(fact: pd.DataFrame) -> pd.DataFrame:
@@ -328,6 +347,10 @@ def category_label_series(fact: pd.DataFrame) -> pd.Series:
     eos = fact["is_eos_population"].astype(bool)
     out[eos] = fact.loc[eos, "generation"].map(
         lambda g: gen_label.get(g, UNCLASSIFIED_LABEL))
+    if "eos_tracked" in fact.columns:
+        sheet_no_gen = (eos & fact["eos_tracked"].astype(bool)
+                        & ~fact["generation"].isin((GEN_1, GEN_2)))
+        out[sheet_no_gen] = CATEGORY_LABELS[CAT_EOS_ALL]
     out[fact["is_from_avs"].astype(bool)] = CATEGORY_LABELS[CAT_AVS_NATIVE]
     return out
 

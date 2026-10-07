@@ -104,6 +104,18 @@ under Streamlit's AppTest in both counting modes.
   every EOS report** — EOS is reported by generation, and an ungenerationed account would
   make the combined total disagree with the sum of its blocks — but it stays in `all_avs`
   and is listed on Data Inconsistency. There is only ever **one dataset**.
+  **With the EOS tracking sheet loaded, the sheet IS the list of EOS accounts**
+  (`segments.eos_population(fact, sheet=True)` = `eos_tracked` and not From AVS): N TPIDs
+  in the sheet are N EOS accounts, an export-tagged account the sheet omits is not EOS
+  (listed on Data Inconsistency as "Marked EOS in the export, not in the sheet"), and a
+  sheet account with no generation still counts in `eos_all` (neither Gen block; the
+  matrix gains a "Generation not stated" block via `exporter.matrix_blocks`). A sheet
+  account the export cannot place — TPID absent, only From AVS waves, or every wave
+  pre-floor — gets one **sheet-only row** (`eos_tracker.add_sheet_only_accounts`, flag
+  `eos_sheet_only`, source_file "EOS tracking sheet", no ACR/cores/waves), added at the
+  end of `build_fact_frame` and again after the floor in `state._build_fact`
+  (idempotent). FDO-facing counts (Debug funnel, programme `in_fdo`) exclude those rows.
+  Without a sheet, the rules below decide exactly as before.
   **The manual EOS tracking sheet decides an account's generation wherever it states
   one** (`Target SDDC Generation` = Gen1/Gen2); failing that, **an account is EOS when ANY
   of its waves carries an "AVS Migration - Gen1/Gen2" tag** (that tag sets both scope and
@@ -257,8 +269,8 @@ under Streamlit's AppTest in both counting modes.
   never stacked with it — stacking would put rows with no offering, wave or ACR into every
   count. Every other detail (PM, SA, region, offering, ACR, waves) is looked up in the FDO
   dataset by TPID; a sheet TPID the dataset does not hold is reported as unmatched on Data
-  & Upload and Data Inconsistency, never invented into the FDO-based reports (the EOS
-  Programme Tracker, which reports the sheet itself, does list it). `state.build_dataset(files,
+  & Upload and Data Inconsistency **and** still counted as an EOS account through its
+  sheet-only row (see Migration categories). `state.build_dataset(files,
   tracker_files=…)`; overlay columns arrive prefixed `eos_` plus `eos_tracked` and
   `generation_source`, and the `customer` rollup carries them. With no sheet loaded every
   EOS figure is exactly what it was before the sheet existed — that is the test.
