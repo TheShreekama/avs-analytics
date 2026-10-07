@@ -37,7 +37,7 @@ from reportlab.platypus import KeepTogether, PageBreak, Paragraph
 from ..config import EOS_MATRIX_START_FY, FY_START_MONTH
 from ..ui import pdf_charts as pc
 from . import (analytics, eos_programme, glossary, insights as insights_mod, kpi,
-               metrics,
+               metrics, nulls,
                pdf_kit as kit, segments)
 from .metrics import fmt_currency, fmt_int
 
@@ -236,8 +236,8 @@ def tracker_scope_note(ctx) -> str:
     matched = int(overlay.get("matched_accounts", 0))
     if accounts and not matched:
         return (f"None of the {accounts} TPIDs in the EOS tracking sheet matches "
-                f"a TPID in the FDO dataset, so every EOS account is reported from "
-                f"the sheet alone — no ACR, cores or waves.")
+                f"a TPID in the FDO dataset, so there is no EOS account to report: "
+                f"an account counts only when the FDO dataset holds it.")
     if not accounts:
         return ("The EOS tracking sheet is loaded but holds no row with a TPID, "
                 "so there is no EOS account to report.")
@@ -1560,12 +1560,40 @@ def shows_programme(ctx, specs, sections: ReportSections) -> bool:
             and any(spec.key == "eos" for spec in specs))
 
 
+def programme_empty_note(report) -> str:
+    """Why the tracker section has nothing to count."""
+    total = int(report.tiles.get("sheet_accounts", 0))
+    if not total:
+        return "The tracking sheet has no rows with a TPID."
+    return (f"None of the tracking sheet's {fmt_int(total)} TPIDs is in the FDO "
+            "dataset, so there is no EOS account to report.")
+
+
+def programme_gap_note(report) -> str:
+    """The sheet's accounts the FDO dataset does not hold, named — they are not
+    counted, because there is no ACR, cores or wave to report for them."""
+    missing = report.not_in_fdo
+    if missing is None or missing.empty:
+        return ""
+    names = [f"{t} ({c})" if not nulls.is_blank(c) else str(t)
+             for t, c in zip(missing["tpid"], missing.get("customer_name",
+                                                       missing["tpid"]))]
+    shown = ", ".join(names[:12]) + (f" and {len(names) - 12} more"
+                                     if len(names) > 12 else "")
+    return (f"{fmt_int(len(missing))} of the sheet's "
+            f"{fmt_int(report.tiles.get('sheet_accounts', 0))} TPIDs "
+            f"{'has' if len(missing) == 1 else 'have'} no nomination in the FDO "
+            f"dataset, so {'it is' if len(missing) == 1 else 'they are'} not "
+            f"counted as EOS (there is no ACR, cores or waves to report): {shown}.")
+
+
 def programme_tiles(tiles: dict) -> list[tuple[str, str, str]]:
     """The headline row as (label, value, note), for both renderers."""
     pct = tiles.get("sddc_pct")
     return [
-        ("Accounts tracked", fmt_int(tiles["accounts"]), "TPIDs in the sheet"),
-        ("In FDO dataset", fmt_int(tiles["in_fdo"]), "with a nomination behind them"),
+        ("EOS accounts", fmt_int(tiles["accounts"]),
+         f"of {fmt_int(tiles.get('sheet_accounts', tiles['accounts']))} in the sheet"),
+        ("Not in FDO dataset", fmt_int(tiles.get("not_in_fdo", 0)), "not counted"),
         ("On Track", fmt_int(tiles["on_track"]), "per the sheet"),
         ("Blocked", fmt_int(tiles["blocked"]), "Current State Blocked"),
         ("Completed", fmt_int(tiles["completed"]), "per the sheet"),
@@ -1628,11 +1656,13 @@ def _programme_section(ctx, ss) -> list:
                        "period and the filters do not apply.", ss["Muted"]),
              kit.spacer(0.3)]
     if report.empty:
-        story.append(Paragraph("The tracking sheet has no rows with a TPID.",
-                               ss["Body2"]))
+        story.append(Paragraph(_esc(programme_empty_note(report)), ss["Body2"]))
         return story + [kit.page_break()]
     story += [kit.kpi_cards(programme_tiles(report.tiles), ss, per_row=4),
               kit.spacer(0.3)]
+    gap = programme_gap_note(report)
+    if gap:
+        story += [Paragraph(_esc(gap), ss["Muted"]), kit.spacer(0.3)]
 
     def grid_block(title: str, grid: pd.DataFrame, first: str, png: bytes | None):
         frame = eos_programme.grid_frame(grid, first)

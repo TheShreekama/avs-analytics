@@ -224,8 +224,10 @@ def eos_population(fact: pd.DataFrame, sheet: bool = False) -> pd.Series:
 
     **With the EOS tracking sheet loaded (``sheet``), the sheet is the list**:
     an account is EOS exactly when its TPID is in the sheet (``eos_tracked``),
-    whatever its tags or paths say — so a sheet of 50 accounts is an EOS report
-    of 50 accounts.  Without one, the export decides, as below.
+    whatever its tags or paths say.  Only accounts the export holds have rows,
+    so a sheet TPID missing from the FDO dataset is not counted — there is no
+    ACR, cores or wave to report for it.  Without a sheet, the export decides,
+    as below.
 
     1. **Tag** — ANY wave carrying "AVS Migration - Gen1" or "AVS Migration - Gen2"
        brings the whole account in, with that generation.
@@ -240,8 +242,8 @@ def eos_population(fact: pd.DataFrame, sheet: bool = False) -> pd.Series:
         return pd.Series(dtype=bool)
     if sheet and "eos_tracked" in fact.columns:
         # From AVS still never counts as EOS: those waves belong to AVS → Azure
-        # Native alone.  An account the sheet lists whose only waves are From
-        # AVS is carried by a sheet-only row instead (see eos_tracker).
+        # Native alone.  A sheet TPID the export does not hold (or holds only
+        # From AVS waves for) has no row here, so it is not counted at all.
         return as_bool_mask(fact["eos_tracked"].astype(bool)
                             & ~fact["is_from_avs"].astype(bool), fact.index)
     if "generation" in fact.columns:

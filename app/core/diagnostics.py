@@ -97,14 +97,10 @@ def eos_funnel(ctx, window: tuple | None = None) -> pd.DataFrame:
     rows: list[tuple[str, int, str]] = []
     if fact.empty:
         return pd.DataFrame(rows, columns=["Step", "Accounts", "What it means"])
-    sheet_only = (fact["eos_sheet_only"].astype(bool) if "eos_sheet_only" in fact.columns
-                  else pd.Series(False, index=fact.index))
-    fdo = fact[~sheet_only.to_numpy()]
-    acc = fdo.drop_duplicates("tpid_key")
-    tagged = segments.generation_by_tpid(fdo) if not fdo.empty else pd.Series(dtype=object)
+    acc = fact.drop_duplicates("tpid_key")
+    tagged = segments.generation_by_tpid(fact)
     by_tag = tagged.isin((segments.GEN_1, segments.GEN_2))
-    path = (fdo.groupby("tpid_key")["is_av36_eos"].any() if not fdo.empty
-            else pd.Series(dtype=bool))
+    path = fact.groupby("tpid_key")["is_av36_eos"].any()
     scope = ctx.report.get("scope") or {}
     rows.append(("FDO accounts nominated before the floor (dropped)",
                  int(scope.get("excluded_accounts", 0)),
@@ -125,10 +121,12 @@ def eos_funnel(ctx, window: tuple | None = None) -> pd.DataFrame:
         rows.append(("…whose TPID is in the FDO dataset",
                      int(overlay.get("matched_accounts", 0)),
                      "Reported with their FDO waves, ACR and cores"))
-        added = fact.loc[sheet_only.to_numpy(), "tpid_key"].nunique()
-        rows.append(("…reported from the sheet alone", int(added),
+        counted = set(fact.loc[segments.eos_population(fact, sheet=True).to_numpy(),
+                               "tpid_key"])
+        dropped = int((~ctx.tracker["tpid_key"].isin(counted)).sum())
+        rows.append(("…not counted as EOS", dropped,
                      "Not in the FDO dataset, or only From AVS / pre-floor waves "
-                     "there: counted as EOS with no ACR or cores"))
+                     "there: no ACR, cores or waves to report"))
         stated = (ctx.tracker["target_generation"]
                   .isin((segments.GEN_1, segments.GEN_2)))
         rows.append(("…with a readable Target SDDC Generation",
@@ -264,17 +262,17 @@ def verdicts(ctx, last_failure: dict | None = None,
             out.append("The tracking sheet is loaded but no row has a TPID.")
         elif not matched:
             out.append(f"None of the sheet's {accounts:,} TPIDs is in the FDO "
-                       "dataset — every EOS account is reported from the sheet "
-                       "alone (no ACR, cores or waves). Compare the two TPID "
-                       "columns below.")
+                       "dataset, so there is no EOS account to report — compare "
+                       "the two TPID columns below.")
         elif matched < accounts:
             out.append(f"{matched:,} of the sheet's {accounts:,} TPIDs are in the FDO "
-                       f"dataset; the other {accounts - matched:,} are still EOS "
-                       "accounts, reported from the sheet alone.")
+                       f"dataset; the other {accounts - matched:,} are NOT counted as "
+                       "EOS (no ACR, cores or waves to report) and are listed on "
+                       "Data Inconsistency.")
         if accounts:
-            out.append(f"The sheet is the list of EOS accounts: all {accounts:,} of "
-                       "its TPIDs are reported as EOS, and an account the FDO "
-                       "export tags as EOS but the sheet omits is not.")
+            out.append("The sheet is the list of EOS accounts: its TPIDs that the "
+                       "FDO dataset holds are reported as EOS, and an account the "
+                       "FDO export tags as EOS but the sheet omits is not.")
         if accounts and read.get("no_generation", 0) == accounts:
             out.append("The sheet's Target SDDC Generation could not be read for any "
                        "account (column: "
@@ -449,17 +447,7 @@ def trace(ctx, tpid: str) -> dict:
               if raw_col and raw_col in ctx.raw.columns else 0)
     v = out["verdicts"]
 
-    sheet_only = (bool(rows["eos_sheet_only"].astype(bool).all())
-                  if not rows.empty and "eos_sheet_only" in rows.columns else False)
-    if sheet_only:
-        v.append("Not in the FDO dataset with any EOS-eligible wave — reported as an "
-                 "EOS account from the tracking sheet alone (no ACR, cores or waves)"
-                 + (f"; the FDO file has {int(in_raw)} row(s) for it (From AVS, or "
-                    "before the reporting floor)." if in_raw else "."))
-        rows = rows.iloc[0:0]
-    if rows.empty and sheet_only:
-        pass
-    elif rows.empty:
+    if rows.empty:
         if key in set(scope.get("excluded_tpids") or []):
             v.append(f"In the FDO file ({int(in_raw)} rows) but every wave was "
                      f"nominated before the {scope.get('floor_fy')} reporting "
@@ -469,6 +457,10 @@ def trace(ctx, tpid: str) -> dict:
                      "the reports read — see the floor line above.")
         else:
             v.append("NOT in the FDO dataset at all.")
+        if ctx.has_tracker and key in set(ctx.tracker["tpid_key"]):
+            v.append("It is in the tracking sheet, but NOT counted as an EOS "
+                     "account: with no FDO wave there is no ACR, cores or waves "
+                     "to report.")
     else:
         v.append(f"In the FDO dataset: {len(rows)} wave(s).")
         waves = pd.DataFrame({label: rows[col].astype("string") if col in rows.columns

@@ -111,8 +111,6 @@ def build_customer_rollup(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFra
             out[column] = last[column]
     if "eos_tracked" in df.columns:
         out["eos_tracked"] = g["eos_tracked"].any()
-    if "eos_sheet_only" in df.columns:
-        out["eos_sheet_only"] = g["eos_sheet_only"].all()
     if "eos_start_date" in df.columns:
         out["eos_start_date"] = g["eos_start_date"].min()
     if "eos_end_date" in df.columns:

@@ -15,7 +15,7 @@ from . import segments
 # --------------------------------------------------------------------------- #
 PROGRAMME_TRACKER = (
     "The manual EOS tracking sheet reported on its own: one row per TPID in "
-    "the sheet, including accounts the FDO export does not hold yet. Migration "
+    "the sheet that the FDO export holds — the rest are named, not counted. Migration "
     "Status, Current State, Target SDDC Generation, the SDDC counts and the two "
     "dates are the sheet's; name, WW Region, Factory PM and ACR are looked up "
     "in the FDO export by TPID. The reporting period and sidebar filters do not "
@@ -323,10 +323,11 @@ GENERATION_RULE = (
 )
 
 EOS_POPULATION = (
-    "With the EOS tracking sheet loaded, the sheet is the list: every TPID in it "
-    "is an EOS account — matched to the FDO export by TPID, or reported from "
-    "the sheet alone when the export has no EOS wave for it — and no other "
-    "account is.\n"
+    "With the EOS tracking sheet loaded, the sheet is the list: a TPID in it "
+    "is an EOS account when the FDO export holds it (matched by TPID), and no "
+    "other account is. A sheet TPID the export does not hold is not counted — "
+    "there is no ACR, cores or waves for it — and is listed on Data "
+    "Inconsistency.\n"
     "Without a sheet, an account is an EOS Migration account when either:\n"
     "1. ANY of its waves carries an 'AVS Migration - Gen1' or 'AVS Migration - "
     "Gen2' tag — that tag also sets the account's generation; or\n"
@@ -729,8 +730,9 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         Definition("EOS Migration", (
             "Include accounts refreshing ageing AVS hardware, reported by the "
             "generation they are moving on to.",
-            "With the EOS tracking sheet loaded, the sheet is the list: every "
-            "**TPID** in it is an EOS account, and no other account is.",
+            "With the EOS tracking sheet loaded, the sheet is the list: a "
+            "**TPID** in it that the export holds is an EOS account, and no "
+            "other account is.",
             "Without a sheet, an account is in scope when a wave's **Tags** "
             "carry a generation, or its **Primary Migration Path**, **Factory "
             "Offering** or **Linked Offering Name** reads **AV36/AV36P/AV52 - "
@@ -773,12 +775,12 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Region**, **Factory Offering**, **Total ACR** and the waves are "
             "all looked up in the nominations export by that **TPID**.",
             "So the sheet never has to repeat or contradict them.",
-            "A **TPID** the export has never heard of is still an EOS account: "
-            "it is reported from the sheet alone, with no **Total ACR**, "
-            "**Total Cores** or waves, and named on the Data Inconsistency "
-            "review.",
-            "So is one whose only waves are **From AVS**: those waves stay in "
-            "AVS to Azure Native, and the account counts in EOS from the sheet.",
+            "A **TPID** the export does not hold is not counted as EOS: there "
+            "is no **Total ACR**, **Total Cores** or wave to report for it.",
+            "Nor is one whose only waves are **From AVS**: those stay in AVS to "
+            "Azure Native.",
+            "Both are named on the Data Inconsistency review and the EOS "
+            "Programme Tracker, so nothing in the sheet disappears unremarked.",
         )),
         Definition("What it decides", (
             "**Target SDDC Generation** decides the account's generation.",
@@ -824,11 +826,13 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
     )),
     ("The EOS Programme Tracker", (
         "A report of the tracking sheet itself, one row per account in it. It "
-        "includes accounts the nominations export does not hold yet, and "
-        "ignores the reporting period and the filters.",
-        Definition("Accounts tracked", (
+        "counts the same accounts the EOS reports do, and ignores the "
+        "reporting period and the filters.",
+        Definition("EOS accounts", (
             "Count each **TPID** in the tracking sheet once.",
-            "In FDO says whether the export holds a nomination for it.",
+            "Keep it only when the nominations export holds a wave for it that "
+            "is not **From AVS**.",
+            "The rest are shown as Not in FDO dataset, named, and not counted.",
             "Customer name, **WW Region**, **Assigned To (Factory PM)** and "
             "**Total ACR** come from the export where it holds the account.",
             "Otherwise the sheet's own **Customer** and **Region** are shown.",

@@ -882,8 +882,10 @@ def test_only_the_tpid_is_read_from_the_sheet_everything_else_is_looked_up(raw_f
     assert report["tracker"]["matched_accounts"] == 1
 
 
-def test_every_account_in_the_sheet_is_an_eos_account(raw_frame):
-    """With a sheet loaded, the sheet is the list: N accounts in it, N EOS accounts."""
+def test_the_sheets_accounts_the_export_holds_are_the_eos_accounts(raw_frame):
+    """With a sheet loaded, the sheet is the list — of the accounts the FDO
+    dataset holds.  A sheet TPID with no (non-From-AVS) wave in the export has
+    no ACR, cores or waves to report, so it is not counted, only named."""
     built, tracker, report = _tracked_fact(raw_frame, [
         # In the export, tagged Gen-1.
         ("100", "Alpha", "Americas", "", "", "Gen1", "1", "0", "", "", ""),
@@ -897,16 +899,12 @@ def test_every_account_in_the_sheet_is_an_eos_account(raw_frame):
          "1", "0", "", "", ""),
     ])
     eos = segments.population(built, segments.CAT_EOS_ALL)
-    assert sorted(set(eos["tpid"].astype(str))) == ["100", "500", "600", "999999"]
+    assert sorted(set(eos["tpid"].astype(str))) == ["100", "500"]
     # The export's own EOS accounts the sheet omits (200 and 300 are tagged) are not.
     assert not {"200", "300"} & set(eos["tpid"].astype(str))
-    # The two the export cannot place get a row of their own, built from the sheet.
-    sheet_only = built[built[eos_tracker.SHEET_ONLY_FLAG].astype(bool)]
-    assert sorted(sheet_only["tpid"].astype(str)) == ["600", "999999"]
-    ghost = sheet_only.set_index("tpid").loc["999999"]
-    assert ghost["customer_name"] == "Ghost Ltd"
-    assert ghost["migration_status"] == "Kick-Off Awaited"
-    assert pd.isna(ghost["total_acr"])
+    # Nothing is invented for the TPID the export lacks.
+    assert "999999" not in set(built["tpid"].astype(str))
+    assert "eos_sheet_only" not in built.columns
     # From AVS rows themselves stay in AVS → Azure Native.
     assert not segments.population(built, segments.CAT_AVS_NATIVE).empty
     # And the unmatched TPID is still named for whoever keeps the sheet.
@@ -914,6 +912,13 @@ def test_every_account_in_the_sheet_is_an_eos_account(raw_frame):
     issues = eos_tracker.inconsistencies(built, tracker, report["tracker"])
     assert list(issues["unmatched_tpids"]["tpid"]) == ["999999"]
     assert sorted(issues["untracked_eos_accounts"]["tpid"].astype(str)) == ["200", "300", "400"]
+    # The Programme Tracker counts the same two, and names the other two.
+    from app.core import eos_programme
+    prog = eos_programme.build(tracker, built)
+    assert sorted(prog.accounts["tpid"].astype(str)) == ["100", "500"]
+    assert sorted(prog.not_in_fdo["tpid"].astype(str)) == ["600", "999999"]
+    assert prog.tiles["accounts"] == 2 and prog.tiles["sheet_accounts"] == 4
+    assert prog.tiles["not_in_fdo"] == 2
 
 
 def test_with_no_sheet_the_export_still_decides_eos(fact):
@@ -1257,7 +1262,7 @@ def test_the_workbook_sheet_with_a_tpid_column_is_the_one_read():
 # --------------------------------------------------------------------------- #
 # The EOS Programme Tracker
 # --------------------------------------------------------------------------- #
-def test_the_programme_tracker_reports_the_sheet_including_unmatched_accounts(raw_frame):
+def test_the_programme_tracker_counts_matched_accounts_and_names_the_rest(raw_frame):
     from app.core import eos_programme
     built, tracker, _report = _status_sheet(raw_frame, [
         ("200", "Executing Migration", "On Track", "Gen1", ""),
@@ -1266,14 +1271,15 @@ def test_the_programme_tracker_reports_the_sheet_including_unmatched_accounts(ra
     ])
     report = eos_programme.build(tracker, built, pd.Timestamp("2026-09-30"))
     acc = report.accounts.set_index("tpid")
-    assert len(acc) == 3
-    assert not bool(acc.loc["999999", "in_fdo"])          # reported all the same
+    assert sorted(acc.index) == ["200", "300"]
+    assert list(report.not_in_fdo["tpid"]) == ["999999"]     # named, not counted
+    assert "999999" in _exp().programme_gap_note(report)
     assert acc.loc["200", "customer"] == "Bravo"          # the export's name
-    assert report.tiles["on_track"] == 1 and report.tiles["blocked"] == 1
+    assert report.tiles["on_track"] == 1 and report.tiles["blocked"] == 0
     assert report.tiles["completed"] == 1
     assert report.by_status.loc["Executing Migration", "Total"] == 1
-    assert report.status_state.loc["Kick-Off Awaited", "Blocked"] == 1
-    assert list(report.attention["tpid"]) == ["999999"]
+    assert "Kick-Off Awaited" not in report.status_state.index
+    assert report.attention.empty                 # the blocked one is not counted
 
 
 # --------------------------------------------------------------------------- #
@@ -3224,7 +3230,7 @@ def test_both_reports_carry_the_programme_tracker():
         ctx, reports=["eos"], sections=off).decode())
 
 
-def test_a_sheet_that_matches_nothing_is_still_the_eos_report():
+def test_a_sheet_that_matches_nothing_leaves_the_eos_report_empty_and_says_why():
     from app import state as state_mod
     from app.core import html_report
     data = state_mod.SAMPLE_DATA.read_bytes()
@@ -3234,12 +3240,12 @@ def test_a_sheet_that_matches_nothing_is_still_the_eos_report():
     ctx = state_mod.build_dataset([(state_mod.SAMPLE_DATA.name, data)],
                                   tracker_files=[("t.csv", sheet)],
                                   tracker_dayfirst=None)
-    assert "None of the 2 TPIDs" in _exp().tracker_scope_note(ctx)
+    note = _exp().tracker_scope_note(ctx)
+    assert "None of the 2 TPIDs" in note
     eos = segments.population(ctx.fact, segments.CAT_EOS_ALL)
-    assert eos["tpid_key"].nunique() == 2
+    assert eos.empty                              # nothing invented from the sheet
     html = _main(html_report.build_html_report(ctx, reports=["eos"]).decode())
-    assert "No nominations fall into" not in html
-    assert "Ghost One" in html
+    assert esc(note) in html
 
 
 # --------------------------------------------------------------------------- #
@@ -3257,8 +3263,8 @@ def test_the_debug_trace_explains_an_account_end_to_end():
     from app.core import diagnostics
     ctx = _sample_with_sheet()
     funnel = diagnostics.eos_funnel(ctx).set_index("Step")
-    assert funnel.loc["EOS Migrations (All) — accounts", "Accounts"] == 6
-    assert funnel.loc["…reported from the sheet alone", "Accounts"] == 1
+    assert funnel.loc["EOS Migrations (All) — accounts", "Accounts"] == 5
+    assert funnel.loc["…not counted as EOS", "Accounts"] == 1
     assert funnel.loc["…whose TPID is in the FDO dataset", "Accounts"] == 5
     traced = diagnostics.trace(ctx, "672,112")              # matched as digits
     text = " ".join(traced["verdicts"])
@@ -3267,7 +3273,7 @@ def test_the_debug_trace_explains_an_account_end_to_end():
     # Every date shown as written beside what it was read as.
     assert "05-18-2026 → 18 May 2026" in set(
         traced["waves"]["Nom. Created Date (written → read)"])
-    assert "from the tracking sheet alone" in " ".join(
+    assert "NOT counted as an EOS account" in " ".join(
         diagnostics.trace(ctx, "88888888")["verdicts"])
     summary = diagnostics.summary_text(ctx, traced=traced)
     assert "== EOS FUNNEL ==" in summary and "== TRACE 672112 ==" in summary
@@ -3365,11 +3371,14 @@ def test_nodes_deployment_planned_never_counts_from_avs():
 def test_a_sheet_account_with_no_generation_is_still_counted_and_shown():
     from app import state as state_mod
     data = state_mod.SAMPLE_DATA.read_bytes()
-    sheet = (state_mod.SAMPLE_EOS_TRACKER.read_text()
-             + "77777777,NO GEN LTD,EMEA,Executing Migration,On Track,,1,0,02-02-2026,,\n")
+    sheet = state_mod.SAMPLE_EOS_TRACKER.read_text()
+    assert sheet.count("On Hold,Blocked,Gen1,") == 1
+    sheet = sheet.replace("On Hold,Blocked,Gen1,", "On Hold,Blocked,,")
     ctx = state_mod.build_dataset([(state_mod.SAMPLE_DATA.name, data)],
                                   tracker_files=[("t.csv", sheet.encode())],
                                   tracker_dayfirst=None)
     eos = segments.population(ctx.fact, segments.CAT_EOS_ALL)
-    assert eos["tpid_key"].nunique() == len(ctx.tracker) == 7
+    # Every sheet account the FDO dataset holds (88888888 is not in it).
+    assert eos["tpid_key"].nunique() == len(ctx.tracker) - 1 == 5
+    assert "645306" in set(eos["tpid_key"])
     assert (segments.GEN_UNCLASSIFIED, _exp().NO_GENERATION_BLOCK) in _exp().matrix_blocks(eos)

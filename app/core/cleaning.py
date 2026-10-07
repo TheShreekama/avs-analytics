@@ -611,10 +611,6 @@ def build_fact_frame(
         dup = fact["task_id"].duplicated(keep=False) & fact["task_id"].notna()
         report["duplicate_task_ids"] = int(dup.sum())
 
-    # Every account the EOS tracking sheet lists is an EOS account — including
-    # one the export has no (non-From-AVS) wave for, which is given a row here.
-    fact, report["sheet_only_accounts"] = eos_tracker.add_sheet_only_accounts(
-        fact, tracker, as_of)
     return fact, report
 
 

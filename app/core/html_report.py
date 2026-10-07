@@ -1174,20 +1174,23 @@ def _programme(doc: _Builder, ctx) -> None:
     line = ""
     if not report.empty:
         t = report.tiles
-        line = (f'<p class="pop"><b>{fmt_int(t["accounts"])}</b> accounts in the '
-                f'sheet · <b>{fmt_int(t["in_fdo"])}</b> with a nomination in the '
-                "FDO dataset · the reporting period and filters do not apply</p>")
+        line = (f'<p class="pop"><b>{fmt_int(t["accounts"])}</b> EOS accounts of '
+                f'<b>{fmt_int(t.get("sheet_accounts", t["accounts"]))}</b> in the '
+                "sheet · the reporting period and filters do not apply</p>")
     doc.write(f'<section class="report" id="{anchor}">'
               f'<div class="report-head"><h2>{esc(prog.TITLE)}</h2>'
               f"<p>{esc(prog.BLURB)}</p>{line}</div>")
     if report.empty:
-        doc.write('<div class="card"><p class="empty">The tracking sheet has no '
-                  "rows with a TPID.</p></div></section>")
+        doc.write(f'<div class="card"><p class="empty">'
+                  f"{esc(exporter.programme_empty_note(report))}</p></div></section>")
         return
 
     tiles = [_Tile(label, value, note)
              for label, value, note in exporter.programme_tiles(report.tiles)]
     doc.write(_card("", "", _kpi_tiles(tiles)))
+    gap = exporter.programme_gap_note(report)
+    if gap:
+        doc.write(f'<p class="note">{esc(gap)}</p>')
     acc = report.accounts
     table = prog.account_table(acc, metrics.fmt_compact_currency)
     no_total = lambda g: g.drop(columns="Total", errors="ignore")  # noqa: E731
