@@ -20,6 +20,8 @@ from __future__ import annotations
 import html
 import json
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 import pandas as pd
@@ -77,8 +79,15 @@ def rich(text) -> str:
     return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", esc(text))
 
 
+#: The reporting-period view being written (see :func:`_period_view`); every
+#: id inside it carries the view's key so two periods never share an id.
+_ID_PREFIX: ContextVar[str] = ContextVar("html_report_id_prefix", default="")
+
+
 def _slug(*parts: str) -> str:
-    return "-".join(str(p) for p in parts if p)
+    base = "-".join(str(p) for p in parts if p)
+    prefix = _ID_PREFIX.get()
+    return f"{prefix}-{base}" if prefix else base
 
 
 #: Canonical key -> the header a reader should see.  The schema already names
@@ -178,7 +187,12 @@ class _Builder:
             # written the way the tiles write it ($1.25M), from customdata —
             # because a tooltip is where a reader actually reads the number,
             # and "1250000" there is the raw figure the report never shows.
-            fig.update_yaxes(tickprefix="$", tickformat="~s")
+            # On the value axis only: a horizontal bar (Top 10 accounts by
+            # ACR) carries the account names on y, and "$CONTOSO" is wrong.
+            horizontal = any(getattr(t, "orientation", None) == "h"
+                             for t in fig.data)
+            (fig.update_xaxes if horizontal else fig.update_yaxes)(
+                tickprefix="$", tickformat="~s")
         else:
             _integer_ticks(fig)
         payload = json.loads(pio.to_json(fig))
@@ -253,7 +267,7 @@ def _kpi_tiles(tiles: list["_Tile"], group: str = "") -> str:
 
 def _table(frame: pd.DataFrame, table_id: str, *, numeric: set[str] | None = None,
            row_head: bool = False, highlight: str = "",
-           buckets: pd.Series | None = None) -> str:
+           buckets: pd.Series | None = None, sticky_first: bool = False) -> str:
     """A DataFrame as a sortable table.  Values are already display strings.
 
     ``buckets`` tags each row with the chart point it belongs to, so a click on
@@ -291,7 +305,8 @@ def _table(frame: pd.DataFrame, table_id: str, *, numeric: set[str] | None = Non
                 css = css[:-1] + ' blank"'
             cells.append(f"<td{css}>{value}</td>")
         rows.append(f"<tr{tags[position]}>{''.join(cells)}</tr>")
-    return (f'<div class="table-wrap"><table class="data" id="{table_id}">'
+    css = "data sticky-first" if sticky_first else "data"
+    return (f'<div class="table-wrap"><table class="{css}" id="{table_id}">'
             f"<thead><tr>{head}</tr></thead>"
             f"<tbody>{''.join(rows)}</tbody></table></div>")
 
@@ -653,7 +668,7 @@ def _top_accounts(doc: _Builder, spec, pop, waves) -> None:
     summary, rows = exporter.top_accounts(pop, waves)
     title = exporter.top_accounts_title()
     if summary.empty:
-        doc.write(_card(title, exporter.TOP_ACCOUNTS_NOTE,
+        doc.write(_card(title, exporter.TOP_ACCOUNTS_NOTE.replace("**", ""),
                         '<p class="empty">No account in this category carries '
                         'any ACR.</p>'))
         return
@@ -674,7 +689,7 @@ def _top_accounts(doc: _Builder, spec, pop, waves) -> None:
                numeric={"Total ACR", "Waves"}, row_head=True),
         badge=f"{fmt_int(len(summary))} accounts")
     doc.write(_card(title,
-                    exporter.TOP_ACCOUNTS_NOTE + " "
+                    exporter.TOP_ACCOUNTS_NOTE.replace("**", "") + " "
                     + exporter.top_accounts_line(summary, pop)
                     + " Click a bar to open the account behind it.", body))
 
@@ -858,7 +873,7 @@ def _eos_matrix(doc: _Builder, ctx, pop) -> None:
             f'<b>{fmt_int(len(block))}</b> nomination waves.</p>'
             + _table(grid, _slug("mx", generation.lower().replace("-", "")),
                      numeric=set(grid.columns[1:]), row_head=True,
-                     highlight="Total"))
+                     highlight="Total", sticky_first=True))
     doc.write(_card(
         "Monthly programme matrix",
         f"From {start:%b %Y} to {ctx.as_of:%b %Y}, every month included, each "
@@ -1065,19 +1080,49 @@ def _this_fy(ctx, start, end) -> tuple[tuple | None, str]:
     return exporter.this_fiscal_year(ctx.as_of, start, end)
 
 
+@contextmanager
+def _period_view(doc: _Builder, view: "exporter.ReportView"):
+    """Markup for one reporting period, shown only while that period is picked.
+
+    Every id written inside carries the view's key (see :func:`_slug`), so the
+    same chart or table rendered for two periods never shares an id — a click
+    on one period's chart filters that period's accounts and nobody else's.
+    """
+    token = _ID_PREFIX.set(view.key)
+    doc.write(f'<div class="pv" data-pv="{view.key}">')
+    try:
+        yield
+    finally:
+        doc.write("</div>")
+        _ID_PREFIX.reset(token)
+
+
 def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec,
-            start, end, period_label: str, sections: "exporter.ReportSections",
-            fy_window=None, fy_label: str = "") -> None:
-    pop = segments.population(fact, spec.category)
+            views: list, sections: "exporter.ReportSections") -> None:
+    """One report, with every period-dependent section written once per view.
+
+    ``all_time`` is the sidebar filters with no period.  Like the dashboards,
+    the dated headline tiles and the trends read the whole category and window
+    it by their own dates; the pipeline, regional, generation, insight and
+    stopped-account sections read the accounts nominated in the period
+    (:func:`app.core.exporter.period_population`).  The programme summary,
+    the matrix, the fiscal-year view and the top accounts never change with
+    the period.
+    """
+    whole = segments.population(all_time, spec.category)
     anchor = f"rpt-{spec.key}"
     doc.anchor(anchor, spec.title)
     doc.write(f'<section class="report" id="{anchor}">'
               f'<div class="report-head"><h2>{esc(spec.title)}</h2>'
-              f"<p>{esc(spec.blurb)}</p>"
-              f"{_population_line(spec, pop)}</div>")
-    if pop.empty:
+              f"<p>{esc(spec.blurb)}</p>")
+    pops = {v.key: exporter.period_population(whole, v.start, v.end) for v in views}
+    for view in views:
+        with _period_view(doc, view):
+            doc.write(_population_line(spec, pops[view.key]))
+    doc.write("</div>")
+    if whole.empty:
         why = ""
-        untagged = exporter.eos_untagged_accounts(fact) if spec.key == "eos" else 0
+        untagged = exporter.eos_untagged_accounts(all_time) if spec.key == "eos" else 0
         if untagged:
             why = (f'<p class="note"><b>{fmt_int(untagged)}</b> account(s) are in '
                    "EOS scope through their migration path but carry no "
@@ -1091,44 +1136,55 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec
         doc.write('<div class="card"><p class="empty">No nominations fall into '
                   f"this report for the current filters.</p>{why}</div>")
         if spec.breakdown:
-            _generations(doc, fact, spec, start, end)
+            for view in views:
+                with _period_view(doc, view):
+                    _generations(doc, all_time, spec, view.start, view.end)
         doc.write("</section>")
         return
 
-    waves = kpi.wave_index(pop)
-    # The forward-looking tiles are read over the whole programme: ``all_time``
-    # is the same filters with the reporting period dropped.
-    _summary(doc, spec, pop, waves, start, end, period_label, fy_window, fy_label,
-             all_time=segments.population(all_time, spec.category))
+    whole_waves = kpi.wave_index(whole)
     if spec.key == "eos":
-        # The matrix is the programme's own grid, so it is drawn from rows the
-        # reporting period never touched — see :func:`_eos_matrix`.
-        _eos_matrix(doc, ctx, segments.population(all_time, spec.category))
-    _trends(doc, spec, pop, waves, start, end)
-    # The whole-dataset population, for everything a reporting period must not
-    # narrow: a year-on-year comparison cut to one month has nothing to compare,
-    # and "where is the money" is a question about the category, not the window.
-    whole = segments.population(all_time, spec.category)
-    whole_waves = kpi.wave_index(whole) if not whole.empty else waves
-    _fiscal_years(doc, spec, whole if not whole.empty else pop, whole_waves)
-    if exporter.shows_top_accounts(spec):
-        _top_accounts(doc, spec, whole if not whole.empty else pop, whole_waves)
-    _pipeline(doc, spec, pop, waves)
-    if spec.key == "native":
-        _offerings(doc, spec, pop)
-    _regional(doc, spec, waves)
-    if spec.breakdown:
-        _generations(doc, fact, spec, start, end, pop, waves)
-    if sections.insights:
-        _insights(doc, spec, pop)
-    # Last, and hidden until asked for: the accounts none of the above counts.
-    if sections.blocked:
-        _blocked(doc, spec, pop, waves)
-    if spec.key == "eos":
+        # Opens the EOS report: the programme in one sentence, all time.
         _programme_summary(doc, exporter.programme_summary(
-            whole if not whole.empty else pop,
-            segments.population(all_time, segments.CAT_AVS_NATIVE)),
-            sections.summary_native)
+            whole, segments.population(all_time, segments.CAT_AVS_NATIVE)))
+    for view in views:
+        with _period_view(doc, view):
+            fy_window, fy_label = _this_fy(ctx, view.start, view.end)
+            _summary(doc, spec, whole, whole_waves, view.start, view.end,
+                     view.label, fy_window, fy_label, all_time=whole)
+    if spec.key == "eos":
+        # The matrix is the programme's own grid: July 2025 to today, whatever
+        # period is picked — see :func:`_eos_matrix`.
+        _eos_matrix(doc, ctx, whole)
+    for view in views:
+        with _period_view(doc, view):
+            _trends(doc, spec, whole, whole_waves, view.start, view.end)
+    # A year-on-year comparison cut to one month has nothing to compare, and
+    # "where is the money" is a question about the category, not the window.
+    _fiscal_years(doc, spec, whole, whole_waves)
+    if exporter.shows_top_accounts(spec):
+        _top_accounts(doc, spec, whole, whole_waves)
+    for view in views:
+        with _period_view(doc, view):
+            pop = pops[view.key]
+            if pop.empty:
+                doc.write('<div class="card"><p class="empty">No account in this '
+                          "report was nominated in this period, so the pipeline, "
+                          "regional and account sections have nothing to show."
+                          "</p></div>")
+                continue
+            waves = kpi.wave_index(pop)
+            _pipeline(doc, spec, pop, waves)
+            if spec.key == "native":
+                _offerings(doc, spec, pop)
+            _regional(doc, spec, waves)
+            if spec.breakdown:
+                _generations(doc, all_time, spec, view.start, view.end, pop, waves)
+            if sections.insights:
+                _insights(doc, spec, pop)
+            # Last, and hidden until asked for: the accounts none of the above counts.
+            if sections.blocked:
+                _blocked(doc, spec, pop, waves)
     # No account list closes the report: every chart above already opens the
     # accounts it was drawn from, so a final table of all of them was the same
     # rows once more — and the bulk of the file.
@@ -1136,12 +1192,12 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec
               "</section>")
 
 
-def _programme_summary(doc: _Builder, summary, include_native: bool) -> None:
-    """The sentence that closes the EOS report, with its own checkbox.
+def _programme_summary(doc: _Builder, summary) -> None:
+    """The sentence that opens the EOS report, with its own checkbox.
 
     Both readings are written out and a CSS sibling rule shows the one the box
-    asks for — no script, so it works in a file opened offline.  The box starts
-    as the Reports page set it.
+    asks for — no script, so it works in a file opened offline.  The box is the
+    reader's: it starts unticked (EOS customers only).
     """
     def sentence(flag: bool, cls: str) -> str:
         return (f'<p class="sum-text {cls}">'
@@ -1151,10 +1207,9 @@ def _programme_summary(doc: _Builder, summary, include_native: bool) -> None:
         return f'<p class="note sum-note {cls}">{esc(exporter.summary_note(flag))}</p>'
 
     lines = "".join(f"<li>{esc(line)}</li>" for line in exporter.summary_lines(summary))
-    checked = " checked" if include_native else ""
     doc.write(f'<div class="card prog-summary">'
               f'<h3 class="block">{esc(exporter.SUMMARY_TITLE)}</h3>'
-              f'<input type="checkbox" class="sum-toggle" id="sum-native"{checked}>'
+              f'<input type="checkbox" class="sum-toggle" id="sum-native">'
               f'<label class="sum-label" for="sum-native">'
               f"{esc(exporter.SUMMARY_NATIVE_LABEL)}</label>"
               + sentence(False, "sum-eos") + sentence(True, "sum-all")
@@ -1400,26 +1455,24 @@ def build_html_report(ctx, where: str = "", scope_label: str = "All data",
     PDF are two renderings of one report rather than two reports.
 
     ``all_time_where`` is the same filter clause with the reporting-period
-    condition dropped.  Only the programme matrix reads it — that grid spans the
-    whole programme by definition, so a period narrows every other number in the
-    report but never it.  Defaults to ``where``, which is right when the caller
-    has no period filter to drop.
+    condition dropped; defaults to ``where``.  The report is built from it and
+    carries its own **period switch** (:func:`app.core.exporter.report_views`):
+    Current FY and All reporting period always, plus the period chosen here
+    when it is neither — and opens on the one matching ``date_window``.
     """
     specs = [exporter._BY_KEY[k]
              for k in (reports if reports is not None else exporter.REPORT_KEYS)
              if k in exporter._BY_KEY]
     chosen = [a for a in (appendices or []) if a in dict(exporter.APPENDIX_LIBRARY)]
     sections = sections or exporter.ReportSections()
-    start, end = date_window or (None, None)
-    fy_window, fy_label = _this_fy(ctx, start, end)
+    views, default = exporter.report_views(ctx.as_of, date_window, period_label)
     fact = analytics.select_all(ctx.con, where, table="fact")
     all_time = (fact if all_time_where is None or all_time_where == where
                 else analytics.select_all(ctx.con, all_time_where, table="fact"))
 
     doc = _Builder(body=[], scripts=[], toc=[])
     for spec in specs:
-        _report(doc, ctx, fact, all_time, spec, start, end, period_label,
-                sections, fy_window, fy_label)
+        _report(doc, ctx, fact, all_time, spec, views, sections)
         if spec.key == "eos" and exporter.shows_programme(ctx, specs, sections):
             _programme(doc, ctx)
     if specs:
@@ -1430,19 +1483,43 @@ def build_html_report(ctx, where: str = "", scope_label: str = "All data",
         doc.write('<div class="card"><p class="empty">No reports were '
                   "selected.</p></div>")
 
-    # One pill only: the reporting period. Scope, as-of, dataset, account count
-    # and generation time all appear elsewhere in the report or in the file name.
-    chips = [f"Period: <b>{esc(period_label)}</b>"]
-    return _document(title, subtitle, chips, doc).encode("utf-8")
+    # One pill only: the reporting period, kept in step with the switch.
+    # Scope, as-of, dataset, account count and generation time all appear
+    # elsewhere in the report or in the file name.
+    shown = next(v for v in views if v.key == default)
+    chips = [f'Period: <b data-period-chip>{esc(shown.label)}</b>']
+    switch = _period_switch(views, default) if specs else ""
+    return _document(title, subtitle, chips, doc, switch, default).encode("utf-8")
 
 
-def _document(title: str, subtitle: str, chips: list[str], doc: _Builder) -> str:
+def _period_switch(views: list, default: str) -> str:
+    """The reporting-period buttons, top of the side panel.
+
+    The page opens on the default with no script at all (the other views are
+    hidden by a CSS rule keyed on ``<body data-period>``); the buttons only
+    change that attribute.
+    """
+    buttons = "".join(
+        f'<button class="btn period-btn" type="button" data-period="{v.key}" '
+        f'data-period-label="{esc(v.label)}" '
+        f'aria-pressed="{"true" if v.key == default else "false"}">'
+        f"{esc(v.label)}</button>" for v in views)
+    return (f'<div class="period-switch" role="group" aria-label="Reporting period">'
+            f'<h2>Reporting period</h2>{buttons}'
+            f'<p class="period-note">Changes every figure in the report except '
+            f"the programme summary, the monthly programme matrix, the fiscal "
+            f"years side by side and the top accounts, which always cover the "
+            f"whole programme.</p></div>")
+
+
+def _document(title: str, subtitle: str, chips: list[str], doc: _Builder,
+              switch: str = "", period: str = "") -> str:
     """Wrap the assembled body in the page shell, inlining everything it needs."""
     toc = "".join(
         '<li><a href="#{}"{}>{}</a></li>'.format(
             anchor, ' class="sub"' if sub else "", esc(label))
         for anchor, label, sub in doc.toc)
-    nav = (f'<nav class="toc"><h2>Contents</h2><ol>{toc}</ol>'
+    nav = (f'<nav class="toc">{switch}<h2>Contents</h2><ol>{toc}</ol>'
            '<div class="toc-tools">'
            '<button class="btn" id="expand-all" type="button">Expand all</button>'
            '<button class="btn" id="collapse-all" type="button">Collapse all</button>'
@@ -1456,7 +1533,7 @@ def _document(title: str, subtitle: str, chips: list[str], doc: _Builder) -> str
 <title>{esc(title)} — {esc(subtitle)}</title>
 <style>{html_style.stylesheet()}</style>
 </head>
-<body>
+<body data-period="{esc(period)}">
 <a id="top"></a>
 <header class="cover"><div class="cover-inner">
   <h1>{esc(title)}</h1>

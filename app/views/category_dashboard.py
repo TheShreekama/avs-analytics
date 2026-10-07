@@ -105,6 +105,8 @@ def render(category: str) -> None:
     # One wave sort for the whole page: every metric below reuses it.
     waves = kpi.wave_index(fact)
     unit_label = _unit(category)
+    if category == segments.CAT_EOS_ALL:
+        _programme_summary(ctx, fact, key)
     _executive_summary(ctx, fact, waves, start, end, key, unit_label, category,
                        shown, preset)
     if category == segments.CAT_EOS_ALL:
@@ -118,12 +120,10 @@ def render(category: str) -> None:
         _regional_breakdown(fact, waves, key)
     _blocked_accounts(fact, waves, key)
     _detailed_data(fact, waves, start, end, key, shown)
-    if category == segments.CAT_EOS_ALL:
-        _programme_summary(ctx, fact, key)
 
 
 def _programme_summary(ctx, fact: pd.DataFrame, key: str) -> None:
-    """The sentence that closes the EOS report, over the whole programme."""
+    """The sentence that opens the EOS report, over the whole programme."""
     section(exporter.SUMMARY_TITLE, help=glossary.PROGRAMME_SUMMARY)
     summary = exporter.programme_summary(
         fact, segments.population(ctx.fact, segments.CAT_AVS_NATIVE))

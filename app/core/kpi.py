@@ -196,7 +196,24 @@ def _last_of(ordered: pd.DataFrame) -> pd.DataFrame:
     """
     if ordered.empty:
         return ordered
-    return ordered.groupby("tpid_key", as_index=False, sort=False).last()
+    out = ordered.groupby("tpid_key", as_index=False, sort=False).last()
+    # …except the Migration Status, which is one fact told in several columns
+    # and must come whole from the latest wave itself.  Filled column by
+    # column, a tracking-sheet stage (which carries no number) picked up an
+    # earlier export wave's code, and "Executing Migration" was labelled Stage 7.
+    status = [c for c in _STATUS_COLUMNS if c in ordered.columns]
+    if status:
+        tails = (ordered.groupby("tpid_key", sort=False).tail(1)
+                 .set_index("tpid_key")[status])
+        keys = out["tpid_key"]
+        for column in status:
+            out[column] = keys.map(tails[column]).to_numpy()
+    return out
+
+
+#: The columns that together state a wave's Migration Status.
+_STATUS_COLUMNS = ("migration_status", "migration_status_code",
+                   "migration_status_label", "status_class", "status_source")
 
 
 def dated_wave(fact: pd.DataFrame, column: str = "approval_date") -> pd.DataFrame:
@@ -308,16 +325,18 @@ def migrations_completed(fact: pd.DataFrame, start=None, end=None,
 
 
 def completion_dates(lasts: pd.DataFrame) -> pd.Series:
-    """When each completed account finished.
+    """When each completed account finished: its latest wave's **Actual End
+    Date** as the FDO export records it.
 
-    The tracking sheet's **Actual Migration End Date** where it gives one —
-    the programme's own record — else the latest wave's **Actual End Date**.
+    Never the tracking sheet's Actual Migration End Date (that dates the
+    matrix's *migration end* row), and never a date the sheet filled into a
+    blank wave (``fdo_actual_end_date`` is saved before it does).  So
+    Migrations Completed and the matrix's *engagement end* are one rule and
+    always reconcile over the same months.
     """
-    end = pd.to_datetime(lasts.get("actual_end_date"), errors="coerce")
-    if "eos_end_date" in lasts.columns:
-        stated = pd.to_datetime(lasts["eos_end_date"], errors="coerce")
-        end = stated.where(stated.notna(), end)
-    return end
+    column = ("fdo_actual_end_date" if "fdo_actual_end_date" in lasts.columns
+              else "actual_end_date")
+    return pd.to_datetime(lasts.get(column), errors="coerce")
 
 
 def migration_starts(fact: pd.DataFrame, start=None, end=None) -> Metric:
@@ -430,10 +449,8 @@ def engagement_end_dates(fact: pd.DataFrame,
     done = migrations_completed(fact, None, None, lasts).records
     if done.empty:
         return done
-    column = "fdo_actual_end_date" if "fdo_actual_end_date" in done.columns \
-        else "actual_end_date"
-    rows = done.assign(engagement_end_date=pd.to_datetime(done[column],
-                                                          errors="coerce"),
+    # The very date Migrations Completed is counted by, so the two reconcile.
+    rows = done.assign(engagement_end_date=done["completion_date"],
                        end_date_source="Actual End Date (latest wave)")
     return rows[rows["engagement_end_date"].notna()].reset_index(drop=True)
 

@@ -23,7 +23,7 @@ PROGRAMME_TRACKER = (
 )
 
 PROGRAMME_SUMMARY = (
-    "The sentence that closes the EOS report, over the whole programme (never "
+    "The sentence that opens the EOS report, over the whole programme (never "
     "the reporting period).\n"
     "• Customers = unique TPIDs in EOS Migrations (All).\n"
     "• Completed = account state Completed.\n"
@@ -549,9 +549,10 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Where the EOS tracking sheet covers the account, its **Migration "
             "Status** of **Completed** or **Current State** of **Completed** "
             "decides instead.",
-            "Date it by the tracking sheet's **Actual Migration End Date** "
-            "where there is one, otherwise the latest wave's **Actual End "
-            "Date**.",
+            "Date it by the latest wave's **Actual End Date** as the export "
+            "records it — the same date as engagement end in the EOS matrix.",
+            "An account with no **Actual End Date** in the export is not "
+            "counted, even where the sheet gives one.",
             "Count each qualifying **TPID** once.",
             "Unit: customer.",
         )),
@@ -778,7 +779,7 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Data Inconsistency review.",
         )),
         Definition("Programme summary", (
-            "Closes the EOS report, read over the whole programme, never the "
+            "Opens the EOS report, read over the whole programme, never the "
             "reporting period.",
             "Customers: each **TPID** in EOS Migrations (All), counted once.",
             "Completed: the account state is Completed.",
@@ -826,8 +827,8 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "A wave the export already shows as **7 - Completed** or **6 - "
             "Cancelled / Archived** keeps its own status.",
             "**Migration Start Date** and **Actual Migration End Date** supply "
-            "the two date rows of the monthly programme matrix, and date "
-            "Migrations Completed.",
+            "the migration start and migration end rows of the monthly "
+            "programme matrix, and nothing else.",
             "**Total SDDCs in Scope for Migration** and **Number of SDDCs "
             "Migrated** feed the EOS Programme Tracker only.",
             "Where the sheet is silent, the export answers exactly as it did "
@@ -1063,11 +1064,17 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         )),
         Definition("The reporting period, and the This FY row", (
             "The period narrows New Engagements, Migrations Completed, Hosts "
-            "Migrated, ACR Claimed and the monthly trends.",
-            "It does not narrow On-Track Accounts, the current pipeline, the "
-            "regional cut, the stopped accounts, ACR Pipeline, Nodes Deployment "
-            "Planned, the programme matrix or the fiscal-year comparison.",
-            "Each of those says so under its own title.",
+            "Migrated, ACR Claimed and the monthly trends, each by its own date, "
+            "over the whole programme.",
+            "It never narrows On-Track Accounts, ACR Pipeline, Nodes Deployment "
+            "Planned, the programme summary, the programme matrix, the "
+            "fiscal-year comparison or the top accounts.",
+            "In the PDF and HTML reports, the pipeline, regional, generation and "
+            "stopped-account sections cover the accounts with a wave whose "
+            "**Nom. Created Date** is in the period, each with all its waves.",
+            "On screen, those sections always cover the whole programme.",
+            "The HTML report switches between Current FY and All reporting "
+            "period (July 2025 to the as-of date) from its side panel.",
             "Selecting any period other than the current fiscal year adds a "
             "**This FY** row of tiles above the selected one, so a month's "
             "numbers keep the year they sit in.",

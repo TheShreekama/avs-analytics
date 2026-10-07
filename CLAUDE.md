@@ -177,7 +177,10 @@ under Streamlit's AppTest in both counting modes.
   Other. **On Hold** is a new state in `EXCLUDED_STATES` (stopped-accounts section, label
   "On Hold"). `kpi.on_track_wave` returns the latest wave for a sheet-on-track account with
   no export-on-track wave, and drops sheet-stopped ones. `kpi.migrations_completed` dates by
-  `kpi.completion_dates` — the sheet's Actual Migration End Date, else the latest wave's.
+  `kpi.completion_dates` — the latest wave's **FDO** Actual End Date (`fdo_actual_end_date`,
+  never the sheet's date, never one the sheet filled in), which is exactly the matrix's
+  *engagement end* (`engagement_end_dates` reuses `completion_date`), so the Migrations
+  Completed tile and the engagement-end row always reconcile over the same months.
   Pipeline condition 4 excludes `On Hold` and `Cancelled` too
   (`kpi.PIPELINE_EXCLUDED_STATUSES`).
 - **Account state** (`kpi.account_state`, read across **all** of an account's waves, first
@@ -192,7 +195,8 @@ under Streamlit's AppTest in both counting modes.
   account resolves to exactly one state, so `by_state` (the reported cut) and
   `excluded_accounts` (`EXCLUDED_STATES`) partition the population — nothing double-counted,
   nothing lost. `on_track_by_stage` groups by the stage of the **on-track wave itself**.
-- **Programme summary** (closes the EOS report — dashboard EOS (All) page, PDF and HTML;
+- **Programme summary** (opens the EOS report, before the executive summary — dashboard
+  EOS (All) page, PDF and HTML;
   `exporter.programme_summary` → `ProgrammeSummary`, text via `summary_sentence` /
   `summary_lines` / `summary_note`): "To date, X customers … Y completed, Z in progress, U
   in planning" + Gen1→Gen1 / Gen1→Gen2 / Gen1→Azure Native lines. Per account
@@ -202,10 +206,31 @@ under Streamlit's AppTest in both counting modes.
   Current State plays no part. X = every EOS (All) account, so X ≥ Y+Z+U. Azure Native =
   `avs_native` accounts whose first `cleaning.nomination_date` ≥ 1 Jul 2025
   (`kpi.nominated_since`, `exporter.summary_native_start` = `EOS_MATRIX_START_FY`).
-  "Include Azure Native customers" adds them (unique TPIDs) to every total: a
-  `st.checkbox` on the page, a CSS-only `.sum-toggle` in the HTML (both readings written
-  out), and `ReportSections.summary_native` (Reports page) for the PDF, which prints the
-  other reading underneath. All time, never the period.
+  "Include Azure Native customers" adds them (unique TPIDs) to every total — each customer
+  classified within its own motion, EOS phase winning (`exporter._totals`): a
+  `st.checkbox` on the page and a CSS-only `.sum-toggle` in the HTML (both readings written
+  out, always unticked — a reader's choice, never a generation option). The PDF prints the
+  EOS reading and the with-native one underneath. All time, never the period.
+- **Report periods in the exports** (`exporter.period_population`, `report_views`): both
+  renderers build every report from `all_time_where` (filters minus the period). Dated
+  headline tiles and trends read the **whole** category windowed by their own dates (as
+  the dashboards do), so a wave is never cut before latest-wave/state rules run (cutting
+  first used to make an account with a newer open wave look Completed). The pipeline,
+  regional, generation, insights and stopped-account sections read
+  `period_population` — accounts with a wave whose Nom. Created Date is in the period,
+  **all** their waves kept. **The HTML report carries a period switch** at the top of the
+  side panel: Current FY and All reporting period (Jul 2025 → as-of) always, plus the
+  Reports page's period as "Selected · …" when it is neither; it opens on the matching
+  view (All when none). Period-bound sections are written once per view inside
+  `<div class="pv" data-pv=…>` via `html_report._period_view`, which sets `_ID_PREFIX`
+  so every `_slug` id is view-prefixed (`all-optx-eos`, `fy-kpis-eos`); CSS on
+  `<body data-period>` hides the others with no script. The programme summary, matrix,
+  fiscal-year view and top accounts are written once and never change. The matrix
+  table's first column is sticky (`_table(..., sticky_first=True)`).
+- **Latest wave** (`kpi._last_of`): column-wise `GroupBy.last()` (a blank cell takes the
+  account's most recent answer) **except** `_STATUS_COLUMNS`, taken whole from the real
+  latest row — else a sheet stage (no code) borrowed an earlier wave's code ("Stage 7 =
+  Executing Migration").
 - **Where every account sits** (`exporter.reconciliation`, under the pipeline on every
   dashboard and in both exports): each account state, its account count and ACR, and
   **where that state is reported** — On-Track and Completed are charted, everything else is
