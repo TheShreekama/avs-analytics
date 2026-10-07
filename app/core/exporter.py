@@ -855,7 +855,8 @@ def _matrix_block(ctx, pop: pd.DataFrame, ss) -> list:
         block = matrix_block_rows(pop, generation)
         accounts = segments.tpid_key(block).nunique() if not block.empty else 0
         months = kpi.matrix_month_span(block, start, ctx.as_of)
-        grid = kpi.monthly_matrix(block, months, fy_start_month=FY_START_MONTH)
+        grid = kpi.monthly_matrix(block, months, fy_start_month=FY_START_MONTH,
+                                  as_of=ctx.as_of)
         # A month per column runs off a portrait page long before the matrix
         # does, so the grid prints on its own landscape spread.
         out += [Paragraph(f"{_esc(title)} — {fmt_int(accounts)} account(s), "
@@ -893,6 +894,9 @@ class ProgrammeSummary:
     gen2: int = 0
     no_generation: int = 0
     native: int = 0
+    #: Customers on an EOS line *and* the Azure Native line — counted once in
+    #: the total, so the lines add up to more than it by exactly this many.
+    overlap: int = 0
 
     def totals(self, include_native: bool) -> SummaryTotals:
         return self.with_native if include_native else self.eos
@@ -939,7 +943,9 @@ def programme_summary(eos: pd.DataFrame, native: pd.DataFrame) -> ProgrammeSumma
         gen1=int(gens.eq(segments.GEN_1).sum()),
         gen2=int(gens.eq(segments.GEN_2).sum()),
         no_generation=int((~gens.isin((segments.GEN_1, segments.GEN_2))).sum()),
-        native=int(native["tpid_key"].nunique()) if not native.empty else 0)
+        native=int(native["tpid_key"].nunique()) if not native.empty else 0,
+        overlap=(len(set(eos["tpid_key"]) & set(native["tpid_key"]))
+                 if not eos.empty and not native.empty else 0))
 
 
 def _customers(n: int) -> str:
@@ -964,6 +970,17 @@ def summary_lines(s: ProgrammeSummary, include_native: bool = False) -> list[str
     if include_native:
         lines.append(f"{_customers(s.native)} from Gen1 to Azure Native")
     return lines
+
+
+def summary_overlap_note(s: ProgrammeSummary) -> str:
+    """Why the lines can add up to more than the total, when they do."""
+    if not s.overlap:
+        return ""
+    lines = s.gen1 + s.gen2 + s.no_generation + s.native
+    return (f"The lines add up to {fmt_int(lines)}: {_customers(s.overlap)} "
+            f"{'is' if s.overlap == 1 else 'are'} on an EOS line and on the Azure "
+            f"Native line — moving to Gen1/Gen2 and also has From AVS waves — and "
+            f"counted once in the total of {fmt_int(s.with_native.customers)}.")
 
 
 #: Shown whenever the Azure Native customers are added to the summary.
@@ -1026,7 +1043,9 @@ def matrix_note(start, as_of) -> str:
     return (
         f"From {pd.Timestamp(start):%b %Y} to {pd.Timestamp(as_of):%b %Y}, every "
         "month shown, each fiscal year closing with its own total column — the "
-        "whole programme, never narrowed by the reporting period. Each block is "
+        "whole programme, never narrowed by the reporting period, and counted up "
+        "to the as-of date (a date after it is not counted until it arrives), so "
+        "a headline tile set to the same months reads the same. Each block is "
         "the generation the account is moving on to (every EOS account starts on "
         "Gen1 hardware); the last block adds them together. Migration start: the "
         "EOS tracking sheet's Migration Start Date; for an account the sheet does "
@@ -1494,6 +1513,8 @@ def _programme_summary_block(summary: ProgrammeSummary, ss) -> list:
         Paragraph(_esc(summary_note(False)), ss["Muted"]),
         kit.spacer(0.1),
         Paragraph(_esc(other_line), ss["Muted"]),
+        *([Paragraph(_esc(summary_overlap_note(summary)), ss["Muted"])]
+          if summary_overlap_note(summary) else []),
         Paragraph(_esc(NATIVE_CAVEAT), ss["Muted"]),
     ])]
 

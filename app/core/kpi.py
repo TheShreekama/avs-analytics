@@ -596,9 +596,10 @@ def hosts_migrated(fact: pd.DataFrame, start=None, end=None) -> Metric:
     """
     if fact.empty:
         return Metric(0, "hosts")
-    rows = _with_end_dates(fact[is_completed(fact)])
+    # Duplicates go first, then the window — the order monthly_hosts uses, so
+    # the tile and the months always add up to the same thing.
+    rows = _dedupe_records(_with_end_dates(fact[is_completed(fact)]))
     rows = rows[in_window(rows["reported_end_date"], start, end)]
-    rows = _dedupe_records(rows)
     total = float(pd.to_numeric(rows.get("total_cores"), errors="coerce").sum())
     return Metric(total, "hosts", rows)
 
@@ -613,8 +614,8 @@ def acr_claimed(fact: pd.DataFrame, start=None, end=None) -> Metric:
     """
     if fact.empty:
         return Metric(0.0, "ACR")
-    rows = _with_end_dates(fact)
-    rows = _dedupe_records(rows[in_window(rows["reported_end_date"], start, end)])
+    rows = _dedupe_records(_with_end_dates(fact))
+    rows = rows[in_window(rows["reported_end_date"], start, end)]
     total = float(pd.to_numeric(rows.get("total_acr"), errors="coerce").sum())
     return Metric(total, "ACR", rows)
 
@@ -770,26 +771,49 @@ def month_span(start, end) -> list[pd.Period]:
 
 
 def matrix_month_span(fact: pd.DataFrame, start, as_of=None) -> list[pd.Period]:
-    """The months a matrix over *fact* should cover: *start* → the last of use.
+    """The months a matrix covers: *start* → the as-of month, every one.
 
-    Runs to whichever is later, the as-of month or the latest month any of the
-    matrix's own dates reaches, so the grid never stops before today and never
-    hides a completion dated ahead of it.
+    It stops at the as-of date, as the counts in it do (see
+    :func:`monthly_matrix`): a date after it is not counted until it arrives,
+    so the grid and a tile read over the same window always agree.
     """
     end = pd.Period(pd.Timestamp(as_of if as_of is not None else pd.Timestamp.today()),
                     freq="M")
-    for col in ("approval_date", "actual_end_date", "eos_end_date",
-                "eos_start_date"):
-        if col in fact.columns:
-            months = _month(fact[col]).dropna()
-            if not months.empty and months.max() > end:
-                end = months.max()
     return month_span(start, end.to_timestamp())
+
+
+def _matrix_sources(fact: pd.DataFrame, waves: "WaveIndex", as_of=None
+                    ) -> dict[str, tuple[pd.DataFrame, pd.DataFrame]]:
+    """Each matrix row's (monthly summary, records), counted **up to the as-of
+    date** — the same window a headline tile set to "July 2025 to today" reads,
+    so the grid and the tiles count the same things.  A date after the as-of
+    date (a fallback Planned End Date, or one typed ahead) is not counted until
+    it arrives."""
+    end = None if as_of is None else pd.Timestamp(as_of)
+    return {
+        "Total number of new engagement":
+            monthly_unique_tpids(fact, "approval_date", None, end, waves=waves),
+        "Total number of migration start": monthly_migration_starts(fact, None, end),
+        "Total number of migration end":
+            monthly_migration_ends(fact, None, end, lasts=waves.last),
+        "Total number of engagement end":
+            monthly_engagement_ends(fact, None, end, lasts=waves.last),
+        "Number of hosts migrated": monthly_hosts(fact, None, end),
+    }
+
+
+_MATRIX_VALUE_LABELS = {
+    "Total number of new engagement": "Nominations",
+    "Total number of migration start": "Migration Starts",
+    "Total number of migration end": "Migrations Completed",
+    "Total number of engagement end": "Engagements Ended",
+    "Number of hosts migrated": "Hosts",
+}
 
 
 def monthly_matrix(fact: pd.DataFrame, months: list[pd.Period],
                    waves: "WaveIndex | None" = None,
-                   fy_start_month: int = 7) -> pd.DataFrame:
+                   fy_start_month: int = 7, as_of=None) -> pd.DataFrame:
     """The five programme measures as rows, one column per month plus FY totals.
 
     Every number comes from the same functions the dashboards and trends use —
@@ -807,19 +831,8 @@ def monthly_matrix(fact: pd.DataFrame, months: list[pd.Period],
     """
     if waves is None:
         waves = wave_index(fact)
-
-    engagements, _ = monthly_unique_tpids(fact, "approval_date", waves=waves)
-    starts, _ = monthly_migration_starts(fact)
-    ends, _ = monthly_migration_ends(fact, lasts=waves.last)
-    closed, _ = monthly_engagement_ends(fact, lasts=waves.last)
-    hosts, _ = monthly_hosts(fact)
-    by_row = {
-        "Total number of new engagement": _by_period(engagements, "Nominations"),
-        "Total number of migration start": _by_period(starts, "Migration Starts"),
-        "Total number of migration end": _by_period(ends, "Migrations Completed"),
-        "Total number of engagement end": _by_period(closed, "Engagements Ended"),
-        "Number of hosts migrated": _by_period(hosts, "Hosts"),
-    }
+    by_row = {label: _by_period(summary, _MATRIX_VALUE_LABELS[label])
+              for label, (summary, _rows) in _matrix_sources(fact, waves, as_of).items()}
 
     data = {}
     for label in MATRIX_ROWS:
@@ -848,7 +861,7 @@ MATRIX_DRILL_COLUMNS = ["matrix_measure", "matrix_month", "tpid", "customer_name
 
 def matrix_records(fact: pd.DataFrame, months: list[pd.Period],
                    waves: "WaveIndex | None" = None,
-                   fy_start_month: int = 7) -> pd.DataFrame:
+                   fy_start_month: int = 7, as_of=None) -> pd.DataFrame:
     """The records behind every cell of :func:`monthly_matrix`, one row per
     record per measure — the same rows each count was made from.
 
@@ -861,16 +874,8 @@ def matrix_records(fact: pd.DataFrame, months: list[pd.Period],
         return pd.DataFrame(columns=MATRIX_DRILL_COLUMNS + ["matrix_fy"])
     if waves is None:
         waves = wave_index(fact)
-    sources = {
-        "Total number of new engagement":
-            monthly_unique_tpids(fact, "approval_date", waves=waves)[1],
-        "Total number of migration start": monthly_migration_starts(fact)[1],
-        "Total number of migration end":
-            monthly_migration_ends(fact, lasts=waves.last)[1],
-        "Total number of engagement end":
-            monthly_engagement_ends(fact, lasts=waves.last)[1],
-        "Number of hosts migrated": monthly_hosts(fact)[1],
-    }
+    sources = {label: rows for label, (_summary, rows)
+               in _matrix_sources(fact, waves, as_of).items()}
     shown = {str(m) for m in months}
     parts = []
     for label, rows in sources.items():

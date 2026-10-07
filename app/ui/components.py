@@ -375,6 +375,22 @@ def period_kpi_row(dates: pd.Series, as_of, verb: str = "") -> None:
 # --------------------------------------------------------------------------- #
 # Date range: one global window, overridable per report
 # --------------------------------------------------------------------------- #
+#: The custom-range pickers accept any date — the window is the reader's
+#: choice, not the span the file happens to cover.
+PICKER_MIN = pd.Timestamp("2000-01-01").date()
+PICKER_MAX = pd.Timestamp("2100-12-31").date()
+
+
+def _custom_range_default(ctx: DataContext) -> tuple:
+    """Where a custom range starts out: the data's first nomination to the
+    as-of date (or the data's last date, when that is later)."""
+    lo, hi = analytics.date_bounds(ctx.con, "created_date")
+    as_of = pd.Timestamp(ctx.as_of).date()
+    lo = pd.Timestamp(lo).date() if lo is not None else as_of
+    hi = max(pd.Timestamp(hi).date(), as_of) if hi is not None else as_of
+    return max(lo, PICKER_MIN), min(hi, PICKER_MAX)
+
+
 GLOBAL_DATE_KEY = "global_date_preset"
 GLOBAL_CUSTOM_KEY = "global_date_custom"
 USE_GLOBAL = "Global range"
@@ -392,11 +408,9 @@ def global_date_controls(ctx: DataContext) -> None:
         index=GLOBAL_DATE_PRESETS.index(DEFAULT_DATE_PRESET), key=GLOBAL_DATE_KEY,
         help="Applies to every report. Individual reports can override it.")
     if preset == "Custom":
-        lo, hi = analytics.date_bounds(ctx.con, "created_date")
-        if lo is not None and hi is not None:
-            lo, hi = pd.Timestamp(lo).date(), pd.Timestamp(hi).date()
-            st.sidebar.date_input("Custom range", value=(lo, hi), min_value=lo, max_value=hi,
-                                  key=GLOBAL_CUSTOM_KEY)
+        st.sidebar.date_input("Custom range", value=_custom_range_default(ctx),
+                              min_value=PICKER_MIN, max_value=PICKER_MAX,
+                              key=GLOBAL_CUSTOM_KEY)
     start, end = resolve_range(ctx, preset, st.session_state.get(GLOBAL_CUSTOM_KEY))
     if start is not None:
         st.sidebar.caption(f"{start:%d %b %Y} → {end:%d %b %Y}")
@@ -442,11 +456,9 @@ def report_date_range(ctx: DataContext, key_prefix: str, label: str = "Reporting
         preset = choice
         custom = None
         if choice == "Custom":
-            lo, hi = analytics.date_bounds(ctx.con, "created_date")
-            if lo is not None and hi is not None:
-                lo, hi = pd.Timestamp(lo).date(), pd.Timestamp(hi).date()
-                custom = st.date_input("Custom range", value=(lo, hi), min_value=lo,
-                                       max_value=hi, key=f"{key_prefix}_custom")
+            custom = st.date_input("Custom range", value=_custom_range_default(ctx),
+                                   min_value=PICKER_MIN, max_value=PICKER_MAX,
+                                   key=f"{key_prefix}_custom")
         start, end = resolve_range(ctx, choice, custom)
         shown = choice
     window = (f"{start:%d %b %Y} → {end:%d %b %Y}" if start is not None

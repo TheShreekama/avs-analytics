@@ -135,6 +135,9 @@ def _programme_summary(ctx, fact: pd.DataFrame, key: str) -> None:
     st.markdown("\n".join(f"- {line}"
                           for line in exporter.summary_lines(summary, include)))
     if include:
+        overlap = exporter.summary_overlap_note(summary)
+        if overlap:
+            st.caption(overlap)
         st.caption("⚠︎ " + exporter.NATIVE_CAVEAT)
     st.caption(exporter.summary_note(include))
 
@@ -159,7 +162,8 @@ def _generation_matrix(ctx, fact: pd.DataFrame, key: str) -> None:
                    f"{exporter.matrix_block_note(generation)} · "
                    f"**{fmt_int(len(block))}** nomination waves.")
         months = kpi.matrix_month_span(block, start, ctx.as_of)
-        grid = kpi.monthly_matrix(block, months, fy_start_month=FY_START_MONTH)
+        grid = kpi.monthly_matrix(block, months, fy_start_month=FY_START_MONTH,
+                                  as_of=ctx.as_of)
         components.show_table(grid)
         st.download_button(
             f"⬇️ Export {title} to CSV", grid.to_csv(index=False).encode("utf-8"),
