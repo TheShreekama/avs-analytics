@@ -154,6 +154,18 @@ h4.sub {{ font-size: .95rem; margin: 1rem 0 .4rem; color: var(--ink); }}
 .opt-toggle:focus-visible + .opt-label {{ outline: 2px solid var(--primary);
                                           outline-offset: 3px; border-radius: 4px; }}
 
+/* The EOS programme summary: one checkbox, two pre-written sentences. */
+.prog-summary .sum-toggle {{
+  width: 1rem; height: 1rem; margin: 0 .55rem 0 0; vertical-align: -2px;
+  accent-color: var(--primary); cursor: pointer;
+}}
+.prog-summary .sum-label {{ font-size: .88rem; font-weight: 600; cursor: pointer;
+                            user-select: none; }}
+.prog-summary .sum-text {{ font-size: 1.02rem; line-height: 1.5; margin: .8rem 0 .3rem; }}
+.prog-summary .sum-lines {{ margin: .4rem 0 .8rem 1.2rem; }}
+.sum-toggle:checked ~ .sum-eos {{ display: none; }}
+.sum-toggle:not(:checked) ~ .sum-all {{ display: none; }}
+
 .grid2 {{ display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 1rem; }}
 @media (max-width: 820px) {{ .grid2 {{ grid-template-columns: 1fr; }} }}
 

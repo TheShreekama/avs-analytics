@@ -1124,11 +1124,42 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec
     # Last, and hidden until asked for: the accounts none of the above counts.
     if sections.blocked:
         _blocked(doc, spec, pop, waves)
+    if spec.key == "eos":
+        _programme_summary(doc, exporter.programme_summary(
+            whole if not whole.empty else pop,
+            segments.population(all_time, segments.CAT_AVS_NATIVE)),
+            sections.summary_native)
     # No account list closes the report: every chart above already opens the
     # accounts it was drawn from, so a final table of all of them was the same
     # rows once more — and the bulk of the file.
     doc.write('<p class="toplink"><a href="#top">↑ Back to contents</a></p>'
               "</section>")
+
+
+def _programme_summary(doc: _Builder, summary, include_native: bool) -> None:
+    """The sentence that closes the EOS report, with its own checkbox.
+
+    Both readings are written out and a CSS sibling rule shows the one the box
+    asks for — no script, so it works in a file opened offline.  The box starts
+    as the Reports page set it.
+    """
+    def sentence(flag: bool, cls: str) -> str:
+        return (f'<p class="sum-text {cls}">'
+                f"{esc(exporter.summary_sentence(summary.totals(flag)))}</p>")
+
+    def note(flag: bool, cls: str) -> str:
+        return f'<p class="note sum-note {cls}">{esc(exporter.summary_note(flag))}</p>'
+
+    lines = "".join(f"<li>{esc(line)}</li>" for line in exporter.summary_lines(summary))
+    checked = " checked" if include_native else ""
+    doc.write(f'<div class="card prog-summary">'
+              f'<h3 class="block">{esc(exporter.SUMMARY_TITLE)}</h3>'
+              f'<input type="checkbox" class="sum-toggle" id="sum-native"{checked}>'
+              f'<label class="sum-label" for="sum-native">'
+              f"{esc(exporter.SUMMARY_NATIVE_LABEL)}</label>"
+              + sentence(False, "sum-eos") + sentence(True, "sum-all")
+              + f'<ul class="sum-lines">{lines}</ul>'
+              + note(False, "sum-eos") + note(True, "sum-all") + "</div>")
 
 
 # --------------------------------------------------------------------------- #

@@ -192,6 +192,20 @@ under Streamlit's AppTest in both counting modes.
   account resolves to exactly one state, so `by_state` (the reported cut) and
   `excluded_accounts` (`EXCLUDED_STATES`) partition the population — nothing double-counted,
   nothing lost. `on_track_by_stage` groups by the stage of the **on-track wave itself**.
+- **Programme summary** (closes the EOS report — dashboard EOS (All) page, PDF and HTML;
+  `exporter.programme_summary` → `ProgrammeSummary`, text via `summary_sentence` /
+  `summary_lines` / `summary_note`): "To date, X customers … Y completed, Z in progress, U
+  in planning" + Gen1→Gen1 / Gen1→Gen2 / Gen1→Azure Native lines. Per account
+  (`kpi.account_phase`, first match): Completed = `account_state` Completed; In progress =
+  any in-flight wave at stage 4 (sheet: Executing Migration / Sign-off Pending); In
+  planning = stage 2 or 3 (sheet: Planning & Prerequisites / Ready for Migration);
+  Current State plays no part. X = every EOS (All) account, so X ≥ Y+Z+U. Azure Native =
+  `avs_native` accounts whose first `cleaning.nomination_date` ≥ 1 Jul 2025
+  (`kpi.nominated_since`, `exporter.summary_native_start` = `EOS_MATRIX_START_FY`).
+  "Include Azure Native customers" adds them (unique TPIDs) to every total: a
+  `st.checkbox` on the page, a CSS-only `.sum-toggle` in the HTML (both readings written
+  out), and `ReportSections.summary_native` (Reports page) for the PDF, which prints the
+  other reading underneath. All time, never the period.
 - **Where every account sits** (`exporter.reconciliation`, under the pipeline on every
   dashboard and in both exports): each account state, its account count and ACR, and
   **where that state is reported** — On-Track and Completed are charted, everything else is

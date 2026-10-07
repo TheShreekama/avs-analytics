@@ -118,6 +118,20 @@ def render(category: str) -> None:
         _regional_breakdown(fact, waves, key)
     _blocked_accounts(fact, waves, key)
     _detailed_data(fact, waves, start, end, key, shown)
+    if category == segments.CAT_EOS_ALL:
+        _programme_summary(ctx, fact, key)
+
+
+def _programme_summary(ctx, fact: pd.DataFrame, key: str) -> None:
+    """The sentence that closes the EOS report, over the whole programme."""
+    section(exporter.SUMMARY_TITLE, help=glossary.PROGRAMME_SUMMARY)
+    summary = exporter.programme_summary(
+        fact, segments.population(ctx.fact, segments.CAT_AVS_NATIVE))
+    include = st.checkbox(exporter.SUMMARY_NATIVE_LABEL, value=False,
+                          key=f"{key}_summary_native")
+    st.markdown(f"**{exporter.summary_sentence(summary.totals(include))}**")
+    st.markdown("\n".join(f"- {line}" for line in exporter.summary_lines(summary)))
+    st.caption(exporter.summary_note(include))
 
 # --------------------------------------------------------------------------- #
 def _generation_matrix(ctx, fact: pd.DataFrame, key: str) -> None:

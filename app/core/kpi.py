@@ -1605,3 +1605,94 @@ def drilldown_frame(records: pd.DataFrame,
         return pd.DataFrame(columns=columns)
     cols = [c for c in columns if c in records.columns]
     return records[cols].reset_index(drop=True)
+
+
+# --------------------------------------------------------------------------- #
+# Programme summary — where each account's migration has got to
+# --------------------------------------------------------------------------- #
+PHASE_COMPLETED = "Completed"
+PHASE_IN_PROGRESS = "In progress"
+PHASE_PLANNING = "In planning"
+
+#: FDO Migration Status codes, by phase: stage 4 "Executing Migration" is in
+#: progress; stage 2 "Executing Pre-requisites" and stage 3 "Finalize Scope" are
+#: planning.  Stage 1 is neither.
+IN_PROGRESS_CODES = (4,)
+PLANNING_CODES = (2, 3)
+#: The EOS tracking sheet's own statuses, by the same phases.  Its stages carry
+#: no number, so they are read by name: "Executing Migration" is the export's
+#: stage 4 and "Sign-off Pending" follows it (the move is done, the sign-off is
+#: not); "Planning & Prerequisites" and "Ready for Migration" come before it.
+IN_PROGRESS_SHEET_STATUSES = ("Executing Migration", "Sign-off Pending")
+PLANNING_SHEET_STATUSES = ("Planning & Prerequisites", "Ready for Migration")
+
+
+def wave_phase(df: pd.DataFrame) -> pd.Series:
+    """Per wave: In progress, In planning, or NA — read from its Migration Status.
+
+    An export stage by its number, a tracking-sheet stage by its name.  Only a
+    wave still in flight has a phase; a completed, deferred, cancelled or
+    on-hold wave has none.
+    """
+    out = pd.Series(pd.NA, index=df.index, dtype="object")
+    if df.empty:
+        return out
+    code = pd.to_numeric(df.get("migration_status_code"), errors="coerce")
+    label = df.get("migration_status_label",
+                   pd.Series(pd.NA, index=df.index)).astype("string")
+    sheet = (df["status_source"].eq(statuses.SOURCE_TRACKER).fillna(False)
+             if "status_source" in df.columns
+             else pd.Series(False, index=df.index)).astype(bool) & code.isna()
+    moving = statuses.is_class(df, statuses.IN_FLIGHT).to_numpy()
+    planning = (code.isin(PLANNING_CODES)
+                | (sheet & label.isin(PLANNING_SHEET_STATUSES).fillna(False)))
+    progress = (code.isin(IN_PROGRESS_CODES)
+                | (sheet & label.isin(IN_PROGRESS_SHEET_STATUSES).fillna(False)))
+    out[planning.to_numpy() & moving] = PHASE_PLANNING
+    out[progress.to_numpy() & moving] = PHASE_IN_PROGRESS
+    return out
+
+
+def account_phase(fact: pd.DataFrame) -> pd.Series:
+    """Per account (indexed by ``tpid_key``): Completed, In progress, In planning
+    or NA, the first of these to hold:
+
+    1. **Completed** — the account state is Completed (:func:`account_state`).
+    2. **In progress** — any wave is at stage 4 (or the sheet's "Executing
+       Migration" / "Sign-off Pending").
+    3. **In planning** — any wave is at stage 2 or 3 (or the sheet's
+       "Planning & Prerequisites" / "Ready for Migration").
+
+    Current State plays no part: a Blocked wave at stage 4 is still in progress.
+    Everything else (stage 1, deferred, on hold, cancelled) has no phase.
+    """
+    if fact.empty:
+        return pd.Series(dtype="object")
+    keys = _keys(fact)
+    lasts = latest_wave(fact)
+    out = pd.Series(pd.NA, index=pd.Index(_keys(lasts).unique(), name="tpid_key"),
+                    dtype="object")
+    phase = wave_phase(fact)
+    planning = set(keys[phase.eq(PHASE_PLANNING).fillna(False).to_numpy()])
+    progress = set(keys[phase.eq(PHASE_IN_PROGRESS).fillna(False).to_numpy()])
+    state = pd.Series(account_state(fact, lasts).to_numpy(), index=_keys(lasts).to_numpy())
+    done = set(state.index[state.eq(STATE_COMPLETED).to_numpy()])
+    out[out.index.isin(planning)] = PHASE_PLANNING
+    out[out.index.isin(progress)] = PHASE_IN_PROGRESS
+    out[out.index.isin(done)] = PHASE_COMPLETED
+    return out
+
+
+def nominated_since(fact: pd.DataFrame, start) -> pd.DataFrame:
+    """The rows of every account whose **first** nomination is on or after *start*.
+
+    An account's nomination date is its earliest wave's **Nom. Approval Date**,
+    else its **Nom. Created Date** (:func:`app.core.cleaning.nomination_date`).
+    An account with neither date on any wave cannot be placed, and is left out.
+    """
+    if fact.empty:
+        return fact
+    from .cleaning import nomination_date
+    first = nomination_date(fact).groupby(_keys(fact)).min()
+    keep = set(first.index[(first >= pd.Timestamp(start)).fillna(False).to_numpy()])
+    return fact[_keys(fact).isin(keep).to_numpy()]

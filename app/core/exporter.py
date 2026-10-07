@@ -94,6 +94,10 @@ class ReportSections:
     #: The EOS Programme Tracker — the tracking sheet reported on its own —
     #: after the EOS report, whenever a sheet is loaded and EOS is chosen.
     programme: bool = True
+    #: Whether the EOS report's closing programme summary adds AVS → Azure
+    #: Native customers into its totals.  The HTML report's checkbox starts in
+    #: this position; the PDF, which cannot be clicked, prints it this way.
+    summary_native: bool = False
 
 
 #: What a report calls itself when the caller says nothing.  Deliberately about
@@ -818,6 +822,103 @@ def _matrix_block(ctx, pop: pd.DataFrame, ss) -> list:
 NO_GENERATION_BLOCK = "Generation not stated"
 
 
+# --------------------------------------------------------------------------- #
+# Programme summary — the sentence that closes the EOS report
+# --------------------------------------------------------------------------- #
+SUMMARY_TITLE = "Programme summary"
+SUMMARY_NATIVE_LABEL = "Include Azure Native customers"
+
+
+@dataclass(frozen=True)
+class SummaryTotals:
+    customers: int = 0
+    completed: int = 0
+    in_progress: int = 0
+    planning: int = 0
+
+
+@dataclass(frozen=True)
+class ProgrammeSummary:
+    """The EOS report's closing summary, both ways round."""
+    eos: SummaryTotals = SummaryTotals()
+    #: The same totals with the AVS → Azure Native customers added in.
+    with_native: SummaryTotals = SummaryTotals()
+    gen1: int = 0
+    gen2: int = 0
+    no_generation: int = 0
+    native: int = 0
+
+    def totals(self, include_native: bool) -> SummaryTotals:
+        return self.with_native if include_native else self.eos
+
+
+def summary_native_start() -> pd.Timestamp:
+    """AVS → Azure Native customers are counted from the EOS programme's first
+    month — July 2025, the start of FY26 (``config.EOS_MATRIX_START_FY``)."""
+    return metrics.named_fiscal_year_start(EOS_MATRIX_START_FY, FY_START_MONTH)
+
+
+def _totals(rows: pd.DataFrame) -> SummaryTotals:
+    if rows.empty:
+        return SummaryTotals()
+    phase = kpi.account_phase(rows)
+    return SummaryTotals(customers=int(len(phase)),
+                         completed=int(phase.eq(kpi.PHASE_COMPLETED).sum()),
+                         in_progress=int(phase.eq(kpi.PHASE_IN_PROGRESS).sum()),
+                         planning=int(phase.eq(kpi.PHASE_PLANNING).sum()))
+
+
+def programme_summary(eos: pd.DataFrame, native: pd.DataFrame) -> ProgrammeSummary:
+    """Counts for the summary, from the EOS report's population and the AVS →
+    Azure Native one — both over the whole dataset, never a reporting period.
+
+    The native customers are those whose first nomination falls on or after
+    :func:`summary_native_start`.  Customers are unique TPIDs, so one in both
+    motions is counted once in the combined totals.
+    """
+    native = kpi.nominated_since(native, summary_native_start())
+    gens = (eos.drop_duplicates("tpid_key")["generation"]
+            if not eos.empty else pd.Series(dtype="object"))
+    both = pd.concat([eos, native], ignore_index=True) if not native.empty else eos
+    return ProgrammeSummary(
+        eos=_totals(eos), with_native=_totals(both),
+        gen1=int(gens.eq(segments.GEN_1).sum()),
+        gen2=int(gens.eq(segments.GEN_2).sum()),
+        no_generation=int((~gens.isin((segments.GEN_1, segments.GEN_2))).sum()),
+        native=int(native["tpid_key"].nunique()) if not native.empty else 0)
+
+
+def _customers(n: int) -> str:
+    return f"{fmt_int(n)} customer{'' if n == 1 else 's'}"
+
+
+def summary_sentence(t: SummaryTotals) -> str:
+    verb = "is" if t.customers == 1 else "are"
+    return (f"To date, {_customers(t.customers)} {verb} participating in "
+            f"factory-driven migrations, including {fmt_int(t.completed)} completed "
+            f"migration{'' if t.completed == 1 else 's'}, {fmt_int(t.in_progress)} "
+            f"currently in progress and {fmt_int(t.planning)} in planning.")
+
+
+def summary_lines(s: ProgrammeSummary) -> list[str]:
+    lines = [f"{_customers(s.gen1)} from Gen1 to Gen1",
+             f"{_customers(s.gen2)} from Gen1 to Gen2",
+             f"{_customers(s.native)} from Gen1 to Azure Native"]
+    if s.no_generation:
+        lines.append(f"{_customers(s.no_generation)} with no generation stated")
+    return lines
+
+
+def summary_note(include_native: bool) -> str:
+    start = summary_native_start()
+    who = ("Totals include the AVS to Azure Native customers"
+           if include_native else "Totals cover the EOS customers only")
+    return (f"{who}. Azure Native = Primary Migration Path contains (From AVS), "
+            f"first nominated on or after {start:%d %b %Y}. In progress = stage 4 "
+            f"Executing Migration; in planning = stage 2 Executing Pre-requisites "
+            f"or stage 3 Finalize Scope. All time.")
+
+
 def matrix_blocks(pop: pd.DataFrame) -> list[tuple[str, str]]:
     """The matrix's blocks: Gen1 to Gen1, Gen1 to Gen2 — and, when the EOS
     tracking sheet lists accounts with no generation, a block for those, so
@@ -1253,8 +1354,33 @@ def _report_section(ctx, fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
     # Last, as in the HTML report: the accounts none of the above counts.
     if sections.blocked:
         story += [*_blocked_block(pop, waves, ss), kit.spacer(0.35)]
+    # The EOS report closes on the programme in one sentence.
+    if spec.key == "eos":
+        native = segments.population(fact if all_time is None else all_time,
+                                     segments.CAT_AVS_NATIVE)
+        story += _programme_summary_block(programme_summary(whole, native),
+                                          sections.summary_native, ss)
     story.append(kit.page_break())
     return story
+
+
+def _programme_summary_block(summary: ProgrammeSummary, include_native: bool,
+                             ss) -> list:
+    """The closing summary, printed the way the Reports page chose.  Paper has
+    no checkbox, so the other reading is given underneath in one line."""
+    other = summary.totals(not include_native)
+    other_line = (("Without" if include_native else "With")
+                  + " the Azure Native customers: " + summary_sentence(other)
+                  .replace("To date, ", "", 1))
+    return [KeepTogether([
+        Paragraph(SUMMARY_TITLE, ss["H2"]),
+        Paragraph(_esc(summary_sentence(summary.totals(include_native))), ss["Body2"]),
+        kit.spacer(0.1),
+        *[Paragraph(_esc(line), ss["Body2"]) for line in summary_lines(summary)],
+        kit.spacer(0.1),
+        Paragraph(_esc(other_line), ss["Muted"]),
+        Paragraph(_esc(summary_note(include_native)), ss["Muted"]),
+    ]), kit.spacer(0.35)]
 
 
 # --------------------------------------------------------------------------- #

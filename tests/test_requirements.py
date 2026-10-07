@@ -3382,3 +3382,91 @@ def test_a_sheet_account_with_no_generation_is_still_counted_and_shown():
     assert eos["tpid_key"].nunique() == len(ctx.tracker) - 1 == 5
     assert "645306" in set(eos["tpid_key"])
     assert (segments.GEN_UNCLASSIFIED, _exp().NO_GENERATION_BLOCK) in _exp().matrix_blocks(eos)
+
+
+# --------------------------------------------------------------------------- #
+# Programme summary — closes the EOS report
+# --------------------------------------------------------------------------- #
+def _phase_frame(rows):
+    """(tpid, wave, code, label, source, state, cls) per wave."""
+    return pd.DataFrame({
+        "tpid": [r[0] for r in rows], "tpid_key": [r[0] for r in rows],
+        "wave_num": [r[1] for r in rows],
+        "migration_status_code": [r[2] for r in rows],
+        "migration_status_label": [r[3] for r in rows],
+        "migration_status": [r[3] if pd.isna(r[2]) else f"{r[2]} - {r[3]}" for r in rows],
+        "status_source": [r[4] for r in rows],
+        "current_state": [r[5] for r in rows],
+        "status_class": [r[6] for r in rows],
+        "nomination_status": ["Approved"] * len(rows),
+    })
+
+
+def test_each_account_takes_one_phase_by_its_waves_stages():
+    from app.core import statuses as st_
+    fdo, sheet = st_.SOURCE_FDO, st_.SOURCE_TRACKER
+    nan = float("nan")
+    frame = _phase_frame([
+        ("A", 1, 4, "Executing Migration", fdo, "On Track", st_.IN_FLIGHT),
+        ("B", 1, 4, "Executing Migration", fdo, "Blocked", st_.IN_FLIGHT),   # still stage 4
+        ("C", 1, 2, "Executing Pre-requisites", fdo, "On Track", st_.IN_FLIGHT),
+        ("D", 1, 3, "Finalize Scope", fdo, "On Track", st_.IN_FLIGHT),
+        ("E", 1, 1, "Validating Commitment & Initial Scope", fdo, "On Track", st_.IN_FLIGHT),
+        ("F", 1, 7, "Completed", fdo, "Done", st_.COMPLETED),
+        ("G", 1, 2, "Executing Pre-requisites", fdo, "On Track", st_.IN_FLIGHT),
+        ("G", 2, 4, "Executing Migration", fdo, "On Track", st_.IN_FLIGHT),  # 4 beats 2
+        ("H", 1, nan, "Sign-off Pending", sheet, "On Track", st_.IN_FLIGHT),
+        ("I", 1, nan, "Ready for Migration", sheet, "On Track", st_.IN_FLIGHT),
+        ("J", 1, nan, "Kick-Off Awaited", sheet, "On Track", st_.IN_FLIGHT),
+        ("K", 1, 5, "Deferred By Customer", fdo, "On Track", st_.DEFERRED),
+    ])
+    phase = kpi.account_phase(frame).to_dict()
+    assert phase["A"] == phase["B"] == phase["G"] == phase["H"] == kpi.PHASE_IN_PROGRESS
+    assert phase["C"] == phase["D"] == phase["I"] == kpi.PHASE_PLANNING
+    assert phase["F"] == kpi.PHASE_COMPLETED
+    assert pd.isna(phase["E"]) and pd.isna(phase["J"]) and pd.isna(phase["K"])
+
+
+def test_azure_native_customers_count_from_their_first_nomination_in_july_2025():
+    frame = pd.DataFrame({
+        "tpid_key": ["old", "old", "new", "none"],
+        "approval_date": pd.to_datetime(["2025-06-30", "2025-09-01", "2025-07-01", None]),
+        "created_date": pd.to_datetime([None, None, None, None]),
+    })
+    kept = kpi.nominated_since(frame, _exp().summary_native_start())
+    assert _exp().summary_native_start() == pd.Timestamp("2025-07-01")
+    assert set(kept["tpid_key"]) == {"new"}
+
+
+def test_the_eos_report_closes_on_the_programme_summary():
+    from app.core import html_report
+    ctx = _sample_with_sheet()
+    eos = segments.population(ctx.fact, segments.CAT_EOS_ALL)
+    native = segments.population(ctx.fact, segments.CAT_AVS_NATIVE)
+    s = _exp().programme_summary(eos, native)
+    assert (s.eos.customers, s.eos.completed, s.eos.in_progress, s.eos.planning) == (5, 1, 2, 1)
+    assert (s.gen1, s.gen2, s.native) == (3, 2, 5)
+    # Ticked, the native customers are added in — each customer once.
+    assert s.with_native.customers == 10
+    eos_line = _exp().summary_sentence(s.eos)
+    all_line = _exp().summary_sentence(s.with_native)
+    assert eos_line.startswith("To date, 5 customers are participating in "
+                               "factory-driven migrations, including 1 completed "
+                               "migration, 2 currently in progress and 1 in planning")
+    assert "5 customers from Gen1 to Azure Native" in _exp().summary_lines(s)
+
+    # The HTML report carries both readings behind one checkbox, unticked.
+    html = _main(html_report.build_html_report(ctx, reports=["eos"]).decode())
+    assert esc(eos_line) in html and esc(all_line) in html
+    assert 'id="sum-native">' in html
+    on = _exp().ReportSections(summary_native=True)
+    assert 'id="sum-native" checked>' in html_report.build_html_report(
+        ctx, reports=["eos"], sections=on).decode()
+    # The PDF prints the chosen reading, the other underneath.
+    pdf = _pdf_text(ctx, reports=["eos"], drilldown=False)
+    assert "Programme summary" in pdf and eos_line in pdf
+    assert "With the Azure Native customers:" in pdf
+    pdf_on = _pdf_text(ctx, reports=["eos"], drilldown=False, sections=on)
+    assert all_line in pdf_on and "Without the Azure Native customers:" in pdf_on
+    # Only the EOS report closes this way.
+    assert eos_line not in _pdf_text(ctx, reports=["avs"], drilldown=False)
