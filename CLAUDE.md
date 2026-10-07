@@ -38,7 +38,10 @@ under Streamlit's AppTest in both counting modes.
   combining, staged failure diagnostics, DuckDB), `nulls` (NA-safe blank/mask helpers),
   `cleaning` (parsing/derivations/DQ), `rollup` (wave dedup → `customer` table),
   `segments` (migration category, source/target platform, Gen-1/Gen-2, EOS population),
-  `eos_tracker` (the manual EOS tracking sheet — read, rolled up per TPID, joined on),
+  `statuses` (what a Migration Status *means* — `status_class` — in either vocabulary),
+  `eos_tracker` (the manual EOS tracking sheet — read, rolled up per TPID, joined on,
+  its status/state written over the export's), `eos_programme` (the EOS Programme
+  Tracker report, built once for the page and both exports),
   `kpi` (requirement-defined metrics in pandas, each returning its source records),
   `mapping`, `metrics` (periods, date presets, KPIs), `analytics` (**all SQL lives here**),
   `insights` (deterministic rules), `exporter` (ReportLab PDF),
@@ -50,7 +53,8 @@ under Streamlit's AppTest in both counting modes.
   contradicts itself on; `reports` assembles the PDF from chosen modules, period,
   categories and cover text), plus `category_dashboard` which renders the standard
   six-category dashboard (EOS combined + Gen-1/Gen-2/no-tag, All AVS, AVS → Azure Native) — one entry
-  point per category, wired into `st.navigation`.
+  point per category, wired into `st.navigation`; `eos_programme` is the EOS Programme
+  Tracker page (Status Report → EOS Programme Tracker).
 
 ## Key domain rules (read before editing reports)
 
@@ -133,6 +137,35 @@ under Streamlit's AppTest in both counting modes.
   records (never a TPID count, and deliberately wave-level — a completed wave deployed its
   nodes whatever the account's state is now); Cumulative is the final column and runs over
   the displayed months only.
+- **Two status vocabularies; rules read `status_class`, never the number.** The FDO export
+  numbers 1-4 in flight, 5 Deferred, 6 Cancelled / Archived, 7 Completed; the EOS tracking
+  sheet numbers `1. Kick-Off Awaited`, `2. Planning & Prerequisites`, `3. Ready for
+  Migration`, `4. Executing Migration`, `5. Sign-off Pending` (all in flight), `6. Completed`,
+  `7. On Hold`, `8. Cancelled`. 6 means opposite things, so every row carries
+  `status_class` (`statuses.IN_FLIGHT/COMPLETED/DEFERRED/ON_HOLD/CANCELLED/UNKNOWN`) and
+  `status_source` ("FDO export"/"EOS tracker"); `kpi.is_completed/in_flight/is_deferred/
+  is_on_hold/is_cancelled`, the pipeline, `derive_eos_status` and the rollup all read the
+  class. `kpi.stage_labels` labels a sheet stage **"EOS 4"**, an export stage "Stage 4".
+- **The sheet's Migration Status and Current State replace the export's**
+  (`eos_tracker.apply_status`, in `build_fact_frame` after the status split): on every wave
+  the export still has **open** (class not completed/cancelled), or on the latest wave when
+  all are closed — a closed wave keeps its status (and its cores stay migrated). Originals
+  kept as `fdo_migration_status`/`fdo_current_state`; a wave the sheet completes with no
+  Actual End Date takes the sheet's end date. Values are parsed by **wording**
+  (`eos_tracker.parse_status`/`parse_state`, case/punctuation-insensitive; a bare number is
+  read by position, but "5 - Deferred by Customer" is *not* the sheet's 5); unrecognised
+  values leave the export answering and are listed on Data & Upload. Several rows per
+  TPID: least advanced in-flight stage, then On Hold, Completed, Cancelled; state Blocked >
+  On Track > Completed.
+- **A tracked account's state is the sheet's** (`kpi.tracker_account_state`, applied at
+  the end of `kpi.account_state`): Cancelled (`8.`) → On Hold (`7.`) → Completed (`6.` or
+  state Completed) → Blocked (state) → On-Track (state On Track, stage 1-5 or blank) →
+  Other. **On Hold** is a new state in `EXCLUDED_STATES` (stopped-accounts section, label
+  "On Hold"). `kpi.on_track_wave` returns the latest wave for a sheet-on-track account with
+  no export-on-track wave, and drops sheet-stopped ones. `kpi.migrations_completed` dates by
+  `kpi.completion_dates` — the sheet's Actual Migration End Date, else the latest wave's.
+  Pipeline condition 4 excludes `7. On Hold` and `8. Cancelled` too
+  (`kpi.PIPELINE_EXCLUDED_STATUSES`).
 - **Account state** (`kpi.account_state`, read across **all** of an account's waves, first
   match wins): **On-Track** = ANY wave where `Nomination Status = "Approved"` **and** the
   status is in flight (1-4) **and** Current State is exactly `On Track`
@@ -216,10 +249,33 @@ under Streamlit's AppTest in both counting modes.
   never stacked with it — stacking would put rows with no offering, wave or ACR into every
   count. Every other detail (PM, SA, region, offering, ACR, waves) is looked up in the FDO
   dataset by TPID; a sheet TPID the dataset does not hold is reported as unmatched on Data
-  & Upload and Data Inconsistency, never invented. `state.build_dataset(files,
+  & Upload and Data Inconsistency, never invented into the FDO-based reports (the EOS
+  Programme Tracker, which reports the sheet itself, does list it). `state.build_dataset(files,
   tracker_files=…)`; overlay columns arrive prefixed `eos_` plus `eos_tracked` and
   `generation_source`, and the `customer` rollup carries them. With no sheet loaded every
   EOS figure is exactly what it was before the sheet existed — that is the test.
+- **Reading the sheet** (`eos_tracker.read_tracker_files`, used by `state._read_tracker`):
+  the header row is the first of 30 with a TPID header (a title above is fine); in a
+  workbook the first sheet with one. TPIDs join as digits (`segments.normalise_tpid`, used
+  by `tpid_key` too: `12,039,532` = `12039532.0` = `12039532`). `build_tracker(...,
+  dayfirst=)` — Data & Upload's "Dates in the tracking sheet are written" radio
+  (`state.tracker_date_order`, session key; folded into the fact cache key, never into
+  `ctx.tracker_signature`, which the upload page compares). `report["date_checks"]` holds
+  each date column's raw→parsed sample and unparsed values; Data & Upload renders them.
+- **`parse_date_series` never raises on a cell**: month-year ("Feb-26") is the 1st; a value
+  with no 4-digit year that no format matches ("1/2") stays blank rather than getting this
+  year; anything outside 1900-2200 is NaT (`cleaning._bounded` — "0001-02-03" used to crash
+  the whole upload with a pandas AssertionError).
+- **EOS Programme Tracker** (`eos_programme.build` → `Programme`): the **sheet itself**, one
+  row per TPID including ones the FDO lacks (`in_fdo`), with name/WW Region/PM/ACR (non
+  From-AVS waves) looked up by TPID. Tiles, by status × gen, by state × gen, status × state,
+  SDDC progress, monthly starts/ends, ageing buckets, completed durations, region × status,
+  needs attention (Blocked or On Hold), all accounts. Ignores the period and filters.
+  Rendered by `views/eos_programme.py`, `exporter._programme_section` and
+  `html_report._programme`, placed after the EOS report when
+  `exporter.shows_programme(ctx, specs, sections)` (`ReportSections.programme`, default on).
+  An empty EOS report states `exporter.tracker_scope_note(ctx)` — e.g. that none of the
+  sheet's TPIDs matched the FDO dataset.
 - **Uploads.** A dataset is **one or more files**: `loader.read_files` +
   `combine_raw` stack them on headers matched case/whitespace-insensitively (first
   spelling wins), a column a file lacks is blank for its rows, and every row keeps

@@ -25,8 +25,8 @@ def run() -> None:
     from app.version import build_stamp, version_line
     from app.ui.theme import inject_css
     from app.views import (category_dashboard, column_mapping, data_inconsistency,
-                           data_upload, insights_page, methodology, overview,
-                           reports, trend_analysis)
+                           data_upload, eos_programme, insights_page, methodology,
+                           overview, reports, trend_analysis)
 
     global _BOOT_LOGGED
     if not _BOOT_LOGGED:                    # once per server start, into the console
@@ -56,6 +56,10 @@ def run() -> None:
                     icon=":material/memory:", url_path="eos-gen1"),
             st.Page(category_dashboard.eos_gen2, title="EOS Migration — Gen-2",
                     icon=":material/developer_board:", url_path="eos-gen2"),
+            # The tracking sheet on its own terms — includes accounts the FDO
+            # export does not hold yet, which no page above can show.
+            st.Page(eos_programme.render, title="EOS Programme Tracker",
+                    icon=":material/fact_check:", url_path="eos-programme"),
             st.Page(category_dashboard.avs_native, title="AVS → Azure Native",
                     icon=":material/cloud_sync:", url_path="avs-native"),
         ],

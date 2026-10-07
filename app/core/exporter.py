@@ -36,7 +36,8 @@ from reportlab.platypus import KeepTogether, PageBreak, Paragraph
 
 from ..config import EOS_MATRIX_START_FY, FY_START_MONTH
 from ..ui import pdf_charts as pc
-from . import (analytics, glossary, insights as insights_mod, kpi, metrics,
+from . import (analytics, eos_programme, glossary, insights as insights_mod, kpi,
+               metrics,
                pdf_kit as kit, segments)
 from .metrics import fmt_currency, fmt_int
 
@@ -90,6 +91,9 @@ class ReportSections:
     """
     blocked: bool = True
     insights: bool = False
+    #: The EOS Programme Tracker — the tracking sheet reported on its own —
+    #: after the EOS report, whenever a sheet is loaded and EOS is chosen.
+    programme: bool = True
 
 
 #: What a report calls itself when the caller says nothing.  Deliberately about
@@ -209,6 +213,37 @@ def eos_untagged_accounts(fact: pd.DataFrame) -> int:
     return 0 if untagged.empty else int(segments.tpid_key(untagged).nunique())
 
 
+def tracker_scope_note(ctx) -> str:
+    """Why the tracking sheet is, or is not, putting accounts into EOS scope.
+
+    Said wherever an EOS report comes up empty: the sheet decides scope only for
+    TPIDs the FDO dataset also holds, so a sheet whose TPIDs match nothing adds
+    nothing — and a reader who loaded one deserves to be told that, rather than
+    left with "no nominations".  Plain text; empty when there is nothing to say.
+    """
+    if not getattr(ctx, "has_tracker", False):
+        return ("No EOS tracking sheet is loaded, so EOS scope comes from the "
+                "AVS Migration - Gen1/Gen2 tags in the FDO dataset alone.")
+    read = getattr(ctx, "tracker_report", None) or {}
+    overlay = (getattr(ctx, "report", None) or {}).get("tracker") or {}
+    accounts = int(read.get("accounts", 0))
+    matched = int(overlay.get("matched_accounts", 0))
+    if accounts and not matched:
+        sheet = ", ".join(str(t) for t in ctx.tracker["tpid"].head(3))
+        fdo = ", ".join(str(t) for t in ctx.fact["tpid_key"].drop_duplicates()
+                        .head(3)) if not ctx.fact.empty else ""
+        return (f"None of the {accounts} TPIDs in the EOS tracking sheet matches "
+                f"a TPID in the FDO dataset (the sheet has {sheet}…; the dataset "
+                f"has {fdo}…), so the sheet brings no account into EOS scope. "
+                f"The EOS Programme Tracker reports the sheet on its own.")
+    stated = accounts - int(read.get("no_generation", 0))
+    if accounts and not stated:
+        return ("The EOS tracking sheet states no Target SDDC Generation that "
+                "could be read (Gen1 or Gen2), so it brings no account into EOS "
+                "scope. Data & Upload shows which column was read.")
+    return ""
+
+
 #: What the blocked-accounts section is called, everywhere it appears.  Named
 #: for what the reader is looking at — accounts that have stopped moving — not
 #: for the reporting mechanism that leaves them out.
@@ -240,7 +275,7 @@ _STATE_HOME = {
 ALL_EOS_ROW = "All EOS"
 
 GENERATION_STATE_ORDER = (kpi.STATE_ON_TRACK, kpi.STATE_COMPLETED,
-                          kpi.STATE_BLOCKED, kpi.STATE_DEFERRED,
+                          kpi.STATE_BLOCKED, kpi.STATE_ON_HOLD, kpi.STATE_DEFERRED,
                           kpi.STATE_CANCELLED, kpi.STATE_OTHER)
 
 
@@ -295,7 +330,8 @@ def reconciliation(pop: pd.DataFrame, waves: kpi.WaveIndex) -> tuple[pd.DataFram
 
     rows = []
     order = (kpi.STATE_ON_TRACK, kpi.STATE_COMPLETED, kpi.STATE_BLOCKED,
-             kpi.STATE_OTHER, kpi.STATE_DEFERRED, kpi.STATE_CANCELLED)
+             kpi.STATE_OTHER, kpi.STATE_ON_HOLD, kpi.STATE_DEFERRED,
+             kpi.STATE_CANCELLED)
     for state in order:
         part = frame[frame["_state"] == state]
         if part.empty:
@@ -1142,6 +1178,9 @@ def _report_section(ctx, fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
     if pop.empty:
         story.append(Paragraph("No nominations fall into this report for the "
                                "current filters.", ss["Body2"]))
+        note = tracker_scope_note(ctx) if spec.key == "eos" else ""
+        if note:
+            story += [kit.spacer(0.15), Paragraph(_esc(note), ss["Body2"])]
         untagged = eos_untagged_accounts(fact) if spec.key == "eos" else 0
         if untagged:
             story += [kit.spacer(0.15), Paragraph(
@@ -1485,6 +1524,176 @@ def _part(key: str, title: str, blurb: str, ss,
     return out
 
 
+# --------------------------------------------------------------------------- #
+# EOS Programme Tracker
+# --------------------------------------------------------------------------- #
+PROGRAMME_TITLE = eos_programme.TITLE
+
+
+def shows_programme(ctx, specs, sections: ReportSections) -> bool:
+    """The tracker section is carried when asked for, a sheet is loaded and the
+    EOS report is one of those chosen — it is the EOS programme's own view."""
+    return (bool(sections.programme) and bool(getattr(ctx, "has_tracker", False))
+            and any(spec.key == "eos" for spec in specs))
+
+
+def programme_tiles(tiles: dict) -> list[tuple[str, str, str]]:
+    """The headline row as (label, value, note), for both renderers."""
+    pct = tiles.get("sddc_pct")
+    return [
+        ("Accounts tracked", fmt_int(tiles["accounts"]), "TPIDs in the sheet"),
+        ("In FDO dataset", fmt_int(tiles["in_fdo"]), "with a nomination behind them"),
+        ("On Track", fmt_int(tiles["on_track"]), "per the sheet"),
+        ("Blocked", fmt_int(tiles["blocked"]), "Current State Blocked"),
+        ("Completed", fmt_int(tiles["completed"]), "per the sheet"),
+        ("On Hold / Cancelled",
+         f"{fmt_int(tiles['on_hold'])} / {fmt_int(tiles['cancelled'])}",
+         "Migration Status"),
+        ("SDDCs migrated", f"{fmt_int(tiles['sddcs_migrated'])} of "
+                           f"{fmt_int(tiles['sddcs_in_scope'])}",
+         "–" if pct is None else f"{pct:.0f}% complete"),
+    ]
+
+
+def programme_sddc_table(sddcs: pd.DataFrame) -> pd.DataFrame:
+    if sddcs.empty:
+        return sddcs
+    return pd.DataFrame({
+        "Generation": sddcs["generation"].astype(str),
+        "Accounts": sddcs["accounts"].map(fmt_int),
+        "In scope": sddcs["in_scope"].map(fmt_int),
+        "Migrated": sddcs["migrated"].map(fmt_int),
+        "Outstanding": sddcs["outstanding"].map(fmt_int),
+        "Complete": sddcs["complete_pct"].map(
+            lambda v: "–" if pd.isna(v) else f"{v:.0f}%"),
+    })
+
+
+def programme_duration_table(durations: pd.DataFrame) -> pd.DataFrame:
+    if durations.empty:
+        return durations
+    return pd.DataFrame({
+        "Generation": durations["generation"].astype(str),
+        "Accounts": durations["accounts"].map(fmt_int),
+        "Median days": durations["median_days"].map(fmt_int),
+        "Average days": durations["average_days"].map(fmt_int),
+        "Longest days": durations["longest_days"].map(fmt_int),
+    })
+
+
+def programme_ageing_table(ageing: pd.DataFrame) -> pd.DataFrame:
+    if ageing.empty:
+        return ageing
+    return pd.DataFrame({"Days in migration": ageing["bucket"],
+                         "Accounts": ageing["accounts"].map(fmt_int)})
+
+
+#: The account columns the printed tracker carries — the screen has room for all.
+PROGRAMME_PDF_COLUMNS = ("TPID", "Customer", "Target Gen", "Migration Status",
+                         "Current State", "SDDCs in scope", "SDDCs migrated",
+                         "Migration Start", "Days", "In FDO")
+
+
+def _programme_section(ctx, ss) -> list:
+    """The EOS Programme Tracker, printed — the same sections the HTML carries."""
+    report = eos_programme.build(ctx.tracker, ctx.fact, ctx.as_of)
+    story = [kit.Anchor("rpt_programme", PROGRAMME_TITLE, level=1),
+             kit.nav_bar(ss, PROGRAMME_TITLE, [("Contents", "toc")]),
+             kit.spacer(0.15),
+             Paragraph(_esc(eos_programme.BLURB), ss["Body2"]),
+             Paragraph("Read from the tracking sheet as uploaded: the reporting "
+                       "period and the filters do not apply.", ss["Muted"]),
+             kit.spacer(0.3)]
+    if report.empty:
+        story.append(Paragraph("The tracking sheet has no rows with a TPID.",
+                               ss["Body2"]))
+        return story + [kit.page_break()]
+    story += [kit.kpi_cards(programme_tiles(report.tiles), ss, per_row=4),
+              kit.spacer(0.3)]
+
+    def grid_block(title: str, grid: pd.DataFrame, first: str, png: bytes | None):
+        frame = eos_programme.grid_frame(grid, first)
+        if frame.empty:
+            return []
+        block = [Paragraph(title, ss["H2"])]
+        if png is not None:
+            block.append(kit.image(png, width_cm=16.6))
+        others = len(frame.columns) - 1
+        width = kit.CONTENT_WIDTH[kit.PORTRAIT]
+        firstw = min(6 * cm, width * 0.36)
+        rest = min((width - firstw) / max(others, 1), 3 * cm)
+        block.append(kit.df_table(frame.astype(str), ss,
+                                  col_widths=[firstw] + [rest] * others,
+                                  align_right=list(range(1, others + 1)),
+                                  font_size=7.5))
+        return [KeepTogether(block), kit.spacer(0.3)]
+
+    no_total = lambda g: g.drop(columns="Total", errors="ignore")  # noqa: E731
+    story += grid_block("Accounts by Migration Status", report.by_status,
+                        "Migration Status",
+                        pc.stacked_bar_png(no_total(report.by_status), height_px=300))
+    story += grid_block("Accounts by Current State", report.by_state,
+                        "Current State",
+                        pc.stacked_bar_png(no_total(report.by_state), height_px=260))
+    story += grid_block("Migration Status against Current State",
+                        report.status_state, "Migration Status",
+                        pc.heatmap_png(report.status_state,
+                                       height_px=90 + 34 * len(report.status_state)))
+    if not report.checks.empty:
+        checks = report.checks.rename(columns={
+            "tpid": "TPID", "customer_name": "Customer",
+            "migration_status": "Migration Status", "current_state": "Current State",
+            "issue": "Issue"}).astype(str)
+        story += [Paragraph("Status and state that contradict each other",
+                            ss["H3"]),
+                  kit.df_table(checks, ss, font_size=7.5), kit.spacer(0.3)]
+
+    sddcs = programme_sddc_table(report.sddcs)
+    if not sddcs.empty:
+        plot = report.sddcs[report.sddcs["generation"] != "All EOS"].rename(
+            columns={"in_scope": "In scope", "migrated": "Migrated",
+                     "outstanding": "Outstanding"})
+        story += [KeepTogether([
+            Paragraph("SDDC progress", ss["H2"]),
+            kit.image(pc.grouped_bar_png(plot, "generation",
+                                         ["In scope", "Migrated", "Outstanding"],
+                                         height_px=260), width_cm=16.6),
+            kit.df_table(sddcs, ss, align_right=[1, 2, 3, 4, 5], font_size=7.5)]),
+            kit.spacer(0.3)]
+
+    timeline = [Paragraph("Timeline", ss["H2"])]
+    if not report.monthly.empty:
+        timeline.append(kit.image(pc.grouped_bar_png(
+            report.monthly, "month", ["Started", "Ended"], height_px=260),
+            width_cm=16.6))
+    timeline += [Paragraph("In flight, by days since Migration Start Date", ss["H3"]),
+                 kit.df_table(programme_ageing_table(report.ageing), ss,
+                              col_widths=[8 * cm, 3 * cm], align_right=[1],
+                              font_size=7.5)]
+    if not report.durations.empty:
+        timeline += [Paragraph("Completed migrations, start to end", ss["H3"]),
+                     kit.df_table(programme_duration_table(report.durations), ss,
+                                  align_right=[1, 2, 3, 4], font_size=7.5)]
+    story += [KeepTogether(timeline), kit.spacer(0.3)]
+
+    story += grid_block("By WW Region", report.region_status, "WW Region",
+                        pc.heatmap_png(report.region_status,
+                                       height_px=110 + 34 * len(report.region_status)))
+
+    def accounts_block(title: str, rows: pd.DataFrame, note: str) -> list:
+        table = eos_programme.account_table(rows, fmt_currency)
+        if table.empty:
+            return [Paragraph(title, ss["H2"]), Paragraph(note, ss["Muted"])]
+        keep = [c for c in (("Why",) + PROGRAMME_PDF_COLUMNS) if c in table.columns]
+        return [Paragraph(title, ss["H2"]),
+                kit.df_table(table[keep], ss, font_size=6.8), kit.spacer(0.3)]
+
+    story += accounts_block("Needs attention", report.attention,
+                            "No account is Blocked or On Hold.")
+    story += accounts_block("Every tracked account", report.accounts, "")
+    return story + [kit.page_break()]
+
+
 def build_story(ctx, where: str = "", scope_label: str = "All data",
                 reports: list[str] | None = None, *,
                 title: str = DEFAULT_TITLE,
@@ -1526,6 +1735,8 @@ def build_story(ctx, where: str = "", scope_label: str = "All data",
             story += _report_section(ctx, fact, spec, ss, start, end, period_label,
                                      drilldown, sections, all_time,
                                      fy_window, fy_label)
+            if spec.key == "eos" and shows_programme(ctx, specs, sections):
+                story += _programme_section(ctx, ss)
 
     if specs and drilldown:
         story += _part("part_detail", "Part 2 — Supporting Detail",

@@ -166,7 +166,11 @@ class _Builder:
         # a block filling the plot; and a one-point series must not invent an
         # axis of 427…429 around its single value.
         # ``cliponaxis`` so a bar's value label is not cut off by the plot edge.
-        fig.update_traces(width=0.62, cliponaxis=False, selector={"type": "bar"})
+        # A grouped bar sets its own widths: forcing one width on every trace
+        # stacks the group's bars on top of each other.
+        if fig.layout.barmode != "group":
+            fig.update_traces(width=0.62, selector={"type": "bar"})
+        fig.update_traces(cliponaxis=False, selector={"type": "bar"})
         fig.update_yaxes(rangemode="tozero")
         if currency:
             # SI suffixes with a $ prefix on the axis: "$2M", "$840k".  The
@@ -1080,6 +1084,9 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec
                    "reported by generation, so they are not counted here; they "
                    "are listed in the data inconsistency review, and adding the "
                    "tag at source brings them into this report.</p>")
+        note = exporter.tracker_scope_note(ctx) if spec.key == "eos" else ""
+        if note:
+            why += f'<p class="note">{esc(note)}</p>'
         doc.write('<div class="card"><p class="empty">No nominations fall into '
                   f"this report for the current filters.</p>{why}</div>")
         if spec.breakdown:
@@ -1119,6 +1126,160 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec
     # No account list closes the report: every chart above already opens the
     # accounts it was drawn from, so a final table of all of them was the same
     # rows once more — and the bulk of the file.
+    doc.write('<p class="toplink"><a href="#top">↑ Back to contents</a></p>'
+              "</section>")
+
+
+# --------------------------------------------------------------------------- #
+# EOS Programme Tracker
+# --------------------------------------------------------------------------- #
+def _rows_panel(title: str, table: pd.DataFrame, table_id: str,
+                buckets: list[str] | None = None, open_: bool = False) -> str:
+    """A ready-made display table in an accordion a chart above can filter."""
+    if table is None or table.empty:
+        return _accordion(title, '<p class="empty">No accounts behind this.</p>',
+                          badge="0")
+    tags = pd.Series(buckets, index=table.index) if buckets is not None else None
+    tools = (f'<div class="tools">'
+             f'<input type="search" data-filters="{table_id}" '
+             f'placeholder="Search these {fmt_int(len(table))} rows…" '
+             f'aria-label="Search accounts">'
+             f'<span class="count" data-count-for="{table_id}">'
+             f'{fmt_int(len(table))} rows</span>'
+             + (f'<button class="btn" data-drill-clear="{table_id}" hidden '
+                f'type="button">Clear selection</button>'
+                f'<span class="drill-note" data-drill-note="{table_id}">Click a '
+                "point on the chart above to filter these rows.</span>"
+                if tags is not None else "")
+             + "</div>")
+    return _accordion(title, tools + _table(table, table_id, buckets=tags),
+                      badge=f"{fmt_int(len(table))} accounts", open_=open_,
+                      anchor=f"acc-{table_id}")
+
+
+def _top_down(fig):
+    """A heatmap read the way its table is: first row at the top."""
+    fig.update_yaxes(autorange="reversed")
+    return fig
+
+
+def _programme(doc: _Builder, ctx) -> None:
+    """The EOS Programme Tracker — the same sections the PDF prints, in order."""
+    from . import eos_programme as prog
+
+    report = prog.build(ctx.tracker, ctx.fact, ctx.as_of)
+    anchor = "rpt-programme"
+    doc.anchor(anchor, prog.TITLE)
+    line = ""
+    if not report.empty:
+        t = report.tiles
+        line = (f'<p class="pop"><b>{fmt_int(t["accounts"])}</b> accounts in the '
+                f'sheet · <b>{fmt_int(t["in_fdo"])}</b> with a nomination in the '
+                "FDO dataset · the reporting period and filters do not apply</p>")
+    doc.write(f'<section class="report" id="{anchor}">'
+              f'<div class="report-head"><h2>{esc(prog.TITLE)}</h2>'
+              f"<p>{esc(prog.BLURB)}</p>{line}</div>")
+    if report.empty:
+        doc.write('<div class="card"><p class="empty">The tracking sheet has no '
+                  "rows with a TPID.</p></div></section>")
+        return
+
+    tiles = [_Tile(label, value, note)
+             for label, value, note in exporter.programme_tiles(report.tiles)]
+    doc.write(_card("", "", _kpi_tiles(tiles)))
+    acc = report.accounts
+    table = prog.account_table(acc, metrics.fmt_compact_currency)
+    no_total = lambda g: g.drop(columns="Total", errors="ignore")  # noqa: E731
+
+    by_status = charts.stacked_bar(no_total(report.by_status))
+    by_state = charts.stacked_bar(no_total(report.by_state))
+    doc.write(_card(
+        "Where the migrations are",
+        "Accounts per Migration Status and per Current State, split by Target "
+        "SDDC Generation. Click a bar to list its accounts.",
+        f'<h4 class="sub">Accounts by Migration Status</h4>'
+        + doc.figure(by_status, height=340, drill="prog-status", mode="x")
+        + _rows_panel("Accounts — by Migration Status", table, "prog-status",
+                      [str(v) for v in acc["status"]])
+        + _table(prog.grid_frame(report.by_status, "Migration Status").astype(str),
+                 "prog-status-grid", row_head=True)
+        + f'<h4 class="sub">Accounts by Current State</h4>'
+        + doc.figure(by_state, height=300, drill="prog-state", mode="x")
+        + _rows_panel("Accounts — by Current State", table, "prog-state",
+                      [str(v) for v in acc["state"]])
+        + _table(prog.grid_frame(report.by_state, "Current State").astype(str),
+                 "prog-state-grid", row_head=True)))
+
+    grid = report.status_state
+    checks = ""
+    if not report.checks.empty:
+        shown = report.checks.rename(columns={
+            "tpid": "TPID", "customer_name": "Customer",
+            "migration_status": "Migration Status",
+            "current_state": "Current State", "issue": "Issue"}).astype(str)
+        checks = ('<h4 class="sub">Status and state that contradict each other</h4>'
+                  + _table(shown, "prog-checks"))
+    doc.write(_card(
+        "Migration Status against Current State",
+        "Where each stage meets each state. Click a cell to list its accounts.",
+        doc.figure(_top_down(charts.heatmap(grid)), height=90 + 40 * len(grid),
+                   drill="prog-pair", mode="y-x")
+        + _rows_panel("Accounts — by status and state", table, "prog-pair",
+                      [f"{a}{_REGION_STAGE_JOIN}{b}"
+                       for a, b in zip(acc["status"], acc["state"])])
+        + _table(prog.grid_frame(grid, "Migration Status").astype(str),
+                 "prog-pair-grid", row_head=True)
+        + checks))
+
+    sddcs = report.sddcs
+    if not sddcs.empty:
+        plot = sddcs[sddcs["generation"] != "All EOS"]
+        doc.write(_card(
+            "SDDC progress",
+            "Total SDDCs in Scope for Migration against Number of SDDCs "
+            "Migrated, per generation.",
+            doc.figure(charts.grouped_bar(plot, "generation",
+                                          ["in_scope", "migrated", "outstanding"]),
+                       height=300)
+            + _table(exporter.programme_sddc_table(sddcs), "prog-sddc",
+                     row_head=True, numeric={"Accounts", "In scope", "Migrated",
+                                             "Outstanding", "Complete"})))
+
+    timeline = ""
+    if not report.monthly.empty:
+        timeline = doc.figure(charts.grouped_bar(report.monthly, "month",
+                                                 ["Started", "Ended"]), height=300)
+    timeline += ('<h4 class="sub">In flight, by days since Migration Start Date</h4>'
+                 + _table(exporter.programme_ageing_table(report.ageing),
+                          "prog-ageing", numeric={"Accounts"}))
+    if not report.durations.empty:
+        timeline += ('<h4 class="sub">Completed migrations, start to end</h4>'
+                     + _table(exporter.programme_duration_table(report.durations),
+                              "prog-durations"))
+    doc.write(_card("Timeline", "Migrations started and ended per month, by the "
+                    "sheet's own Migration Start Date and Actual Migration End "
+                    "Date.", timeline))
+
+    region = report.region_status
+    if not region.empty:
+        doc.write(_card(
+            "By WW Region", "Accounts per WW Region and Migration Status. Click "
+                            "a cell to list its accounts.",
+            doc.figure(_top_down(charts.heatmap(region)), height=110 + 40 * len(region),
+                       drill="prog-region", mode="y-x")
+            + _rows_panel("Accounts — by WW Region", table, "prog-region",
+                          [f"{a}{_REGION_STAGE_JOIN}{b}"
+                           for a, b in zip(acc["ww_region"], acc["status"])])))
+
+    attention = prog.account_table(report.attention, metrics.fmt_compact_currency)
+    doc.write(_card(
+        "Needs attention", "Every account Blocked or On Hold, longest in "
+                           "migration first.",
+        _table(attention, "prog-attention") if not attention.empty
+        else '<p class="empty">No account is Blocked or On Hold.</p>'))
+    doc.write(_card("Every tracked account", "",
+                    _rows_panel("All accounts in the tracking sheet", table,
+                                "prog-all", open_=True)))
     doc.write('<p class="toplink"><a href="#top">↑ Back to contents</a></p>'
               "</section>")
 
@@ -1224,6 +1385,8 @@ def build_html_report(ctx, where: str = "", scope_label: str = "All data",
     for spec in specs:
         _report(doc, ctx, fact, all_time, spec, start, end, period_label,
                 sections, fy_window, fy_label)
+        if spec.key == "eos" and exporter.shows_programme(ctx, specs, sections):
+            _programme(doc, ctx)
     if specs:
         _methodology(doc)
     if "inconsistency" in chosen:

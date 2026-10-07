@@ -74,6 +74,10 @@ def build_customer_rollup(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFra
     out["milestone_status"] = last["milestone_status"]
     out["migration_status_label"] = last["migration_status_label"]
     out["migration_status_code"] = last["migration_status_code"]
+    for column in ("migration_status", "status_class", "status_source",
+                   "fdo_migration_status", "fdo_current_state"):
+        if column in df.columns:
+            out[column] = last[column]
     out["ww_region"] = last["ww_region"]
     out["region_geo"] = last["region_geo"]
     out["region"] = last["region"]
@@ -99,7 +103,9 @@ def build_customer_rollup(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFra
     # counting modes.
     for column in ("generation_source", "eos_target_generation",
                    "eos_tracker_status", "eos_tracker_state",
-                   "eos_tracker_region", "eos_tracker_customer"):
+                   "eos_tracker_region", "eos_tracker_customer",
+                   "eos_status_number", "eos_status_class",
+                   "eos_tracker_status_raw", "eos_tracker_state_raw"):
         if column in df.columns:
             out[column] = last[column]
     if "eos_tracked" in df.columns:
@@ -128,7 +134,8 @@ def build_customer_rollup(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFra
     last_completed = (
         (last["eos_status"] == "Completed")
         | last["current_state"].astype("string").str.contains("done|complete", case=False, na=False)
-        | (last["migration_status_code"] == 7)
+        | (last["status_class"] == "completed" if "status_class" in last.columns
+           else last["migration_status_code"] == 7)
     )
     last_cancelled = last["eos_status"] == "Cancelled"
     out["is_closed"] = last_completed.to_numpy()

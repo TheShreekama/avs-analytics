@@ -9,8 +9,9 @@ kind of thing:
   headers into one dataset.
 * The **manual EOS tracking sheet** is the programme's own spreadsheet, keyed on
   TPID.  It is *joined* onto the dataset rather than stacked with it, and
-  supplies three answers the export cannot give as well: the Target SDDC
-  Generation, the migration start date and the actual migration end date.  Every
+  supplies the answers the export cannot give as well: the Target SDDC
+  Generation, the migration start and actual end dates, and — replacing the
+  export's — each account's Migration Status and Current State.  Every
   other detail — Factory PM, Solution Architect, region, ACR — is looked up in
   the FDO dataset by TPID.  See :mod:`app.core.eos_tracker`.
 
@@ -54,14 +55,18 @@ def render() -> None:
     section("2 · Manual EOS tracking sheet")
     st.caption("Optional, and a **different document**: the EOS programme's own "
                "sheet, keyed on **TPID**. It decides each account's generation "
-               "(*Target SDDC Generation*) and supplies the *Migration Start "
-               "Date* and *Actual Migration End Date* the programme matrix "
-               "reports; everything else — Factory PM, Solution Architect, "
-               "region, ACR — is looked up against the FDO dataset by TPID. "
-               "Columns it does not recognise are left alone.")
+               "(*Target SDDC Generation*), its *Migration Status* and "
+               "*Current State* (replacing the export's), and supplies the "
+               "*Migration Start Date* and *Actual Migration End Date*; "
+               "everything else — Factory PM, Solution Architect, region, ACR "
+               "— is looked up against the FDO dataset by TPID. A title row "
+               "above the headers is fine, and in a workbook the sheet holding "
+               "the TPID column is found. Columns it does not recognise are "
+               "left alone.")
     tracker_ups = st.file_uploader(
         "EOS tracking sheet — choose file(s) (CSV, XLSX or XLS)",
         type=["csv", "xlsx", "xls"], accept_multiple_files=True, key="upload_eos")
+    _date_order_control(ctx)
 
     cols = st.columns([1, 1, 3])
     with cols[0]:
@@ -176,6 +181,35 @@ def _load_uploads(ctx, files: list, tracker_files: list) -> bool:
     return False
 
 
+_DATE_ORDERS = {"Detect from the column": None,
+                "Day first (DD-MM-YYYY)": True,
+                "Month first (MM-DD-YYYY)": False}
+
+
+def _date_order_control(ctx) -> None:
+    """How the sheet's ambiguous dates are read — "03-02-2026" is either.
+
+    Detected per column by default (a day above 12 settles it); when every date
+    in a column could be either, the detection has nothing to go on, and this is
+    where the reader says which the sheet means.
+    """
+    current = state.tracker_date_order()
+    labels = list(_DATE_ORDERS)
+    index = [_DATE_ORDERS[k] for k in labels].index(current)
+    choice = st.radio("Dates in the tracking sheet are written", labels,
+                      index=index, horizontal=True, key="tracker_date_order",
+                      help="03-02-2026 is 3 February day-first and 2 March "
+                           "month-first. Left on detect, the order is read off "
+                           "the column itself; pick one if the dates below read "
+                           "wrong.")
+    wanted = _DATE_ORDERS[choice]
+    if wanted != current:
+        state.set_tracker_date_order(wanted)
+        if ctx.has_tracker:
+            state.reload_with()
+            st.rerun()
+
+
 def _tracker_panel(ctx) -> None:
     """What the EOS tracking sheet is answering for, and what it could not.
 
@@ -197,6 +231,11 @@ def _tracker_panel(ctx) -> None:
     read = ctx.tracker_report or {}
     overlay = ctx.report.get("tracker") or {}
     unmatched = overlay.get("unmatched_tpids") or []
+    if read.get("accounts") and not overlay.get("matched_accounts"):
+        banner("⚠️ <b>None of the sheet's TPIDs matched the FDO dataset</b>, so "
+               "nothing in it reaches the EOS reports built on the export. "
+               "Compare the TPIDs below with the FDO file's; the EOS Programme "
+               "Tracker page still reports the sheet on its own.", "warn")
     components.kpi_row([
         {"label": "Sheet", "value": ctx.tracker_filename},
         {"label": "Accounts in sheet", "value": fmt_int(read.get("accounts", 0))},
@@ -210,6 +249,8 @@ def _tracker_panel(ctx) -> None:
                f"*Migration Start Date* and **{fmt_int(read.get('with_end', 0))}** "
                f"an *Actual Migration End Date*; the programme matrix uses those "
                f"and falls back to the FDO derivation for the rest.")
+
+    _tracker_read_panel(ctx, read)
 
     subheading("Which document decided each generation")
     components.show_table(eos_tracker.summary(ctx.fact))
@@ -227,6 +268,7 @@ def _tracker_panel(ctx) -> None:
         "untracked_eos_accounts": "In EOS scope, not in the sheet",
         "generation_disagrees": "Sheet and tag disagree on the generation",
         "ended_with_sddcs_outstanding": "Ended, with SDDCs still outstanding",
+        "status_state_disagree": "Migration Status and Current State disagree",
     }
     for key, label in labels.items():
         frame = issues.get(key)
@@ -236,6 +278,69 @@ def _tracker_panel(ctx) -> None:
                 components.show_table(frame, height=260)
             else:
                 st.caption("None.")
+
+
+def _tracker_read_panel(ctx, read: dict) -> None:
+    """How the sheet was read — where the headers were, which column fed each
+    field, and every date and status the reader could not make sense of.
+
+    A wrong-looking EOS number usually starts here: a column that was not
+    found, or a date column read the wrong way round.
+    """
+    subheading("How the sheet was read")
+    for note in read.get("files") or []:
+        where = f"sheet **{note['sheet']}**, " if note.get("sheet") else ""
+        st.caption(f"**{note['file']}** — {where}headers on row "
+                   f"**{note.get('header_row') or '–'}**"
+                   + (" — no TPID column found" if note.get("no_tpid_header") else ""))
+
+    mapping = read.get("mapping") or {}
+    checks = read.get("date_checks") or {}
+    rows = []
+    for f in eos_tracker.TRACKER_FIELDS:
+        row = {"Field": f.label, "Column in your sheet": mapping.get(f.key) or "— not found —"}
+        if f.key in checks:
+            c = checks[f.key]
+            row["Read"] = (f"{fmt_int(c['parsed'])} of {fmt_int(c['filled'])} "
+                           f"filled cells read as dates")
+        elif f.key == "migration_status":
+            row["Read"] = (f"{fmt_int(read.get('with_status', 0))} accounts with a "
+                           f"recognised status")
+        elif f.key == "current_state":
+            row["Read"] = (f"{fmt_int(read.get('with_state', 0))} accounts with a "
+                           f"recognised state")
+        else:
+            row["Read"] = ""
+        rows.append(row)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+
+    for key, c in checks.items():
+        label = c["label"]
+        with st.expander(f"{label} — how the dates were read "
+                         f"({fmt_int(len(c['unparsed']))} value(s) not understood)"):
+            sample = c.get("sample")
+            if sample is not None and not sample.empty:
+                st.caption("As written in the sheet, and the date it was read as:")
+                st.dataframe(sample.rename(columns={"raw": "In the sheet",
+                                                    "parsed": "Read as"}),
+                             width="stretch", hide_index=True)
+            if c["unparsed"]:
+                st.caption("Not understood, so treated as blank: "
+                           + ", ".join(f"`{v}`" for v in c["unparsed"]))
+
+    unknown_status = read.get("unrecognised_status") or []
+    unknown_state = read.get("unrecognised_state") or []
+    if unknown_status or unknown_state:
+        banner("⚠️ Values the sheet uses that are not in its vocabulary, so the "
+               "export's answer stands for those accounts — "
+               + (f"Migration Status: {', '.join(unknown_status[:12])}. "
+                  if unknown_status else "")
+               + (f"Current State: {', '.join(unknown_state[:12])}."
+                  if unknown_state else ""), "warn")
+    st.caption("Migration Status values read: "
+               + ", ".join(f"*{st_.text}*" for st_ in eos_tracker.TRACKER_STATUSES)
+               + ". Current State values read: "
+               + ", ".join(f"*{v}*" for v in eos_tracker.TRACKER_STATES) + ".")
 
 
 def _classification_panel(ctx) -> None:

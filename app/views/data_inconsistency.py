@@ -97,6 +97,13 @@ _CHECK_HELP = {
         "are migrated than are in scope. Reported exactly as the sheet states it; "
         "listed here because the two cells cannot both be right."
     ),
+    "tracker_status_state": (
+        "Accounts whose Migration Status and Current State in the tracking sheet "
+        "contradict each other — Completed on one and not the other, or On Hold / "
+        "Cancelled while On Track. The account is reported by the stated rule "
+        "(status Cancelled, then On Hold, then Completed, then the state); "
+        "correct whichever cell is wrong in the sheet."
+    ),
 }
 
 
@@ -183,6 +190,7 @@ _LABELS = {
     "tracker_missing": "In EOS scope, not in the EOS tracking sheet",
     "tracker_generation": "EOS tracking sheet and tag disagree on the generation",
     "tracker_sddcs": "Ended in the sheet, with SDDCs still outstanding",
+    "tracker_status_state": "Tracking sheet status and state disagree",
 }
 
 #: Tracker check key -> the frame :func:`app.core.eos_tracker.inconsistencies`
@@ -194,6 +202,7 @@ _TRACKER_CHECKS = {
     "tracker_missing": "untracked_eos_accounts",
     "tracker_generation": "generation_disagrees",
     "tracker_sddcs": "ended_with_sddcs_outstanding",
+    "tracker_status_state": "status_state_disagree",
 }
 
 

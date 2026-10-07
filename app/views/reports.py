@@ -74,11 +74,11 @@ def render() -> None:
                  "set as CSV below.")
 
     subheading("Optional sections",
-               help="Two sections not every audience wants in the document. "
+               help="Sections not every audience wants in the document. "
                     "Whether a section is *visible* when the HTML report opens "
                     "is the reader's own choice — each one carries its own "
                     "checkbox in the file.")
-    s1, s2 = st.columns(2)
+    s1, s2, s3 = st.columns(3)
     include_blocked = s1.checkbox(
         f"{exporter.BLOCKED_TITLE} section", value=True, key="rep_blocked",
         help="Accounts stopped on a blocking Current State, with the ACR they "
@@ -88,8 +88,16 @@ def render() -> None:
         "Insights section", value=False, key="rep_insights",
         help="The deterministic findings — pipeline exposure, bottlenecks, "
              "delays, wave and regional patterns — written out per report.")
+    include_programme = s3.checkbox(
+        f"{exporter.PROGRAMME_TITLE} section", value=True, key="rep_programme",
+        disabled=not ctx.has_tracker,
+        help="The manual EOS tracking sheet reported on its own — accounts by "
+             "Migration Status and Current State, SDDC progress, timeline and "
+             "the accounts that need attention. Follows the EOS report; needs a "
+             "tracking sheet loaded on Data & Upload.")
     sections = exporter.ReportSections(blocked=include_blocked,
-                                       insights=include_insights)
+                                       insights=include_insights,
+                                       programme=include_programme)
 
     subheading("Appendix")
     appendices: list[str] = []
