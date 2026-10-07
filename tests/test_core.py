@@ -710,11 +710,14 @@ def test_account_detail_takes_wave_fields_from_the_latest_wave():
     assert row["current_state"] == "Done"
 
 
-def test_account_detail_sums_acr_across_every_wave():
-    """10M + 15M + 20M is 45M; the latest wave's 20M alone understates it."""
+def test_account_detail_sums_acr_across_every_wave_but_blocked_ones():
+    """10M + 20M is 30M: the 15M wave is Blocked - Customer, so its ACR is not
+    counted in Total ACR; the latest wave's 20M alone would understate it."""
     from app.core import kpi
     row = kpi.account_detail(_multi_wave_fact()).set_index("tpid_key").loc["1"]
-    assert row["total_acr"] == 45_000_000.0
+    assert row["total_acr"] == 30_000_000.0
+    # The money held up behind a stopped account still counts every wave.
+    assert kpi.held_up_acr(_multi_wave_fact())["1"] == 45_000_000.0
 
 
 def test_account_detail_dates_the_account_by_its_earliest_wave():

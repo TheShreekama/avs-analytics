@@ -82,6 +82,22 @@ nav.toc {{
   box-shadow: var(--shadow); padding: 1rem 1rem 1.1rem;
   max-height: calc(100vh - 2rem); overflow: auto;
 }}
+/* The reporting-period switch: the first thing in the side panel. */
+.period-switch {{ margin: 0 0 1.1rem; padding: .8rem; border-radius: 10px;
+                  background: #EAF3FC; border: 1px solid var(--accent); }}
+.period-switch h2 {{ margin-top: 0; color: var(--primary-dark) !important; }}
+.period-switch .period-btn {{ display: block; width: 100%; text-align: left;
+  margin: .35rem 0 0; padding: .5rem .65rem; font-weight: 600; font-size: .84rem;
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--ink); cursor: pointer; white-space: normal; line-height: 1.3; }}
+.period-switch .period-btn[aria-pressed="true"] {{ background: var(--primary);
+  border-color: var(--primary); color: #fff; }}
+.period-switch .period-note {{ font-size: .72rem; color: var(--muted);
+                               margin: .6rem 0 0; line-height: 1.35; }}
+body[data-period="fy"] .pv:not([data-pv="fy"]),
+body[data-period="all"] .pv:not([data-pv="all"]),
+body[data-period="sel"] .pv:not([data-pv="sel"]) {{ display: none; }}
+
 nav.toc h2 {{ font-size: .72rem; text-transform: uppercase; letter-spacing: .09em;
               color: var(--muted); margin: 0 0 .6rem; }}
 nav.toc ol {{ list-style: none; margin: 0; padding: 0; }}
@@ -227,6 +243,15 @@ table.data tbody tr:hover {{ background: #EAF3FC; }}
 table.data td.num, table.data th.num {{ text-align: right;
                                         font-variant-numeric: tabular-nums; }}
 table.data td.rowhead {{ font-weight: 600; white-space: nowrap; }}
+/* A wide grid (the monthly programme matrix) keeps its row names in view while
+   the months scroll past underneath. */
+table.data.sticky-first th:first-child, table.data.sticky-first td:first-child {{
+  position: sticky; left: 0; z-index: 2; background: var(--card);
+  box-shadow: inset -1px 0 0 var(--border);
+}}
+table.data.sticky-first thead th:first-child {{ z-index: 3; background: #F0F4F9; }}
+table.data.sticky-first tbody tr:nth-child(even) td:first-child {{ background: #FBFCFE; }}
+table.data.sticky-first tbody tr:hover td:first-child {{ background: #EAF3FC; }}
 table.data td.blank {{ background: repeating-linear-gradient(
     -45deg, #FAFBFD, #FAFBFD 5px, #F2F4F8 5px, #F2F4F8 10px); }}
 table.data .fytot {{ background: #EAF3FC; font-weight: 700; }}
@@ -533,6 +558,21 @@ def script() -> str:
   document.querySelectorAll('input[data-optional]').forEach(function (box) {
     box.addEventListener('change', function () {
       if (box.checked) { setTimeout(resizeCharts, 0); }
+    });
+  });
+
+  // ---- reporting period ---------------------------------------------------
+  // Every period's sections are in the file; the switch only says which one
+  // shows.  The page opens on the default with no script at all.
+  document.querySelectorAll('.period-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.body.setAttribute('data-period', btn.getAttribute('data-period'));
+      document.querySelectorAll('.period-btn').forEach(function (other) {
+        other.setAttribute('aria-pressed', other === btn ? 'true' : 'false');
+      });
+      var chip = document.querySelector('[data-period-chip]');
+      if (chip) chip.textContent = btn.getAttribute('data-period-label');
+      setTimeout(resizeCharts, 0);
     });
   });
 

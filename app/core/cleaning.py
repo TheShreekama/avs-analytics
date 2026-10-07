@@ -228,6 +228,13 @@ def split_migration_status(s: pd.Series) -> tuple[pd.Series, pd.Series]:
 # --------------------------------------------------------------------------- #
 # Derived classifications
 # --------------------------------------------------------------------------- #
+def _without_from_avs(values: pd.Series) -> pd.Series:
+    """An offering column with any "From AVS" removed: that marker is read from
+    the Primary Migration Path only."""
+    return (values.fillna("").astype(str)
+            .str.replace(r"\(?\s*from\s+avs\s*\)?", " ", case=False, regex=True))
+
+
 def migration_direction(path: str) -> str:
     # Missingness is tested first and by ``is_blank``: an unmapped Primary
     # Migration Path column makes every value ``pd.NA``, and ``not pd.NA`` is a
@@ -501,11 +508,16 @@ def build_fact_frame(
     fact["is_from_avs"] = (fact["migration_direction"] == DIR_FROM_AVS)
     fact["is_to_avs"] = (fact["migration_direction"] == DIR_TO_AVS)
 
-    # Source / target platform, from the same distinct offering combinations.
-    src_lookup = {v: segments.source_platform(v) for v in offering_text.unique()}
-    tgt_lookup = {v: segments.target_platform(v) for v in offering_text.unique()}
-    fact["source_platform"] = offering_text.map(src_lookup)
-    fact["target_platform"] = offering_text.map(tgt_lookup)
+    # Source / target platform, from the same distinct offering combinations —
+    # except that "From AVS" is read from the Primary Migration Path alone, never
+    # from an offering name, so the offering columns are read without it.
+    platform_text = (fact["migration_path"].fillna("") + " | "
+                     + _without_from_avs(fact["factory_offering"]) + " | "
+                     + _without_from_avs(fact["linked_offering"]))
+    src_lookup = {v: segments.source_platform(v) for v in platform_text.unique()}
+    tgt_lookup = {v: segments.target_platform(v) for v in platform_text.unique()}
+    fact["source_platform"] = platform_text.map(src_lookup)
+    fact["target_platform"] = platform_text.map(tgt_lookup)
     # "All AVS Migrations" = every nomination whose target platform is AVS,
     # whatever it is coming from (on-premises, VMG, AWS/VMC, AVS, EOS refresh).
     fact["is_avs_target"] = fact["target_platform"].eq(segments.PLATFORM_AVS)

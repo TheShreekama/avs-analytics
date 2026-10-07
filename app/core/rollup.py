@@ -41,6 +41,13 @@ def build_customer_rollup(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFra
     df["_wave_order"] = df["wave_num"].fillna(9_999)
     df["_created_sort"] = df["created_date"].fillna(pd.Timestamp.max)
     df = df.sort_values(["customer_key", "_wave_order", "_created_sort"])
+    # Total ACR leaves out blocked waves — the same rule as kpi.account_acr.
+    blocked = (df["current_state"].astype("string")
+               .str.contains("blocked", case=False, na=False).fillna(False)
+               if "current_state" in df.columns
+               else pd.Series(False, index=df.index))
+    df["_acr_counted"] = pd.to_numeric(df["total_acr"], errors="coerce").where(
+        ~blocked.astype(bool).to_numpy())
 
     g = df.groupby("customer_key", sort=False)
     first = g.first()
@@ -156,7 +163,7 @@ def build_customer_rollup(fact: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFra
     out["azure_target"] = out["azure_target"].where(out["is_avs_to_azure"])
 
     # Summed commercial measures across the customer's waves.
-    out["total_acr"] = g["total_acr"].sum(min_count=1)
+    out["total_acr"] = g["_acr_counted"].sum(min_count=1)
     out["total_cores"] = g["total_cores"].sum(min_count=1)
 
     # Aging / cycle time from first creation to closure (or as-of for open).

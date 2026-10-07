@@ -177,7 +177,23 @@ under Streamlit's AppTest in both counting modes.
   Other. **On Hold** is a new state in `EXCLUDED_STATES` (stopped-accounts section, label
   "On Hold"). `kpi.on_track_wave` returns the latest wave for a sheet-on-track account with
   no export-on-track wave, and drops sheet-stopped ones. `kpi.migrations_completed` dates by
-  `kpi.completion_dates` — the sheet's Actual Migration End Date, else the latest wave's.
+  `kpi.completion_dates` — read from the account's **real latest row** (not the
+  column-filled one): its **FDO** Actual End Date (`fdo_actual_end_date`, never the
+  sheet's date, never one the sheet filled in), else `kpi.END_DATE_CHAIN` — Planned End →
+  Actual Start → Planned Start → Nom. Approval → Nom. Created (`kpi.end_dates`; records
+  carry `reported_end_date` + `end_date_source`). That is exactly the matrix's
+  *engagement end* (`engagement_end_dates` reuses `completion_date`) and the fallback of
+  *migration end*, so the Migrations Completed tile and the engagement-end row always
+  reconcile. **Hosts Migrated and ACR Claimed** (and their trends / the matrix hosts
+  row) date each wave the same way (`kpi._with_end_dates`) — but only a **completed**
+  wave falls back; any other wave counts on its own FDO Actual End Date or not at all.
+- **Total ACR leaves out blocked waves** (`kpi.account_acr`: Current State contains
+  "Blocked"): account rows, Top 10, by-state, reconciliation, the Programme Tracker and
+  the `customer` rollup (`_acr_counted`). The stopped-accounts section's **ACR held up**
+  is the exception — every wave (`kpi.held_up_acr`).
+- **From AVS is read from the Primary Migration Path only** (`kpi.mentions_from_avs`,
+  `cleaning.migration_direction`); platform classification reads the offerings with any
+  "From AVS" stripped (`cleaning._without_from_avs`). It never counts in All AVS or EOS.
   Pipeline condition 4 excludes `On Hold` and `Cancelled` too
   (`kpi.PIPELINE_EXCLUDED_STATUSES`).
 - **Account state** (`kpi.account_state`, read across **all** of an account's waves, first
@@ -192,7 +208,8 @@ under Streamlit's AppTest in both counting modes.
   account resolves to exactly one state, so `by_state` (the reported cut) and
   `excluded_accounts` (`EXCLUDED_STATES`) partition the population — nothing double-counted,
   nothing lost. `on_track_by_stage` groups by the stage of the **on-track wave itself**.
-- **Programme summary** (closes the EOS report — dashboard EOS (All) page, PDF and HTML;
+- **Programme summary** (opens the EOS report, before the executive summary — dashboard
+  EOS (All) page, PDF and HTML;
   `exporter.programme_summary` → `ProgrammeSummary`, text via `summary_sentence` /
   `summary_lines` / `summary_note`): "To date, X customers … Y completed, Z in progress, U
   in planning" + Gen1→Gen1 / Gen1→Gen2 / Gen1→Azure Native lines. Per account
@@ -202,10 +219,31 @@ under Streamlit's AppTest in both counting modes.
   Current State plays no part. X = every EOS (All) account, so X ≥ Y+Z+U. Azure Native =
   `avs_native` accounts whose first `cleaning.nomination_date` ≥ 1 Jul 2025
   (`kpi.nominated_since`, `exporter.summary_native_start` = `EOS_MATRIX_START_FY`).
-  "Include Azure Native customers" adds them (unique TPIDs) to every total: a
-  `st.checkbox` on the page, a CSS-only `.sum-toggle` in the HTML (both readings written
-  out), and `ReportSections.summary_native` (Reports page) for the PDF, which prints the
-  other reading underneath. All time, never the period.
+  "Include Azure Native customers" adds them (unique TPIDs) to every total — each customer
+  classified within its own motion, EOS phase winning (`exporter._totals`): a
+  `st.checkbox` on the page and a CSS-only `.sum-toggle` in the HTML (both readings written
+  out, always unticked — a reader's choice, never a generation option). The PDF prints the
+  EOS reading and the with-native one underneath. All time, never the period.
+- **Report periods in the exports** (`exporter.period_population`, `report_views`): both
+  renderers build every report from `all_time_where` (filters minus the period). Dated
+  headline tiles and trends read the **whole** category windowed by their own dates (as
+  the dashboards do), so a wave is never cut before latest-wave/state rules run (cutting
+  first used to make an account with a newer open wave look Completed). The pipeline,
+  regional, generation, insights and stopped-account sections read
+  `period_population` — accounts with a wave whose Nom. Created Date is in the period,
+  **all** their waves kept. **The HTML report carries a period switch** at the top of the
+  side panel: Current FY and All reporting period (Jul 2025 → as-of) always, plus the
+  Reports page's period as "Selected · …" when it is neither; it opens on the matching
+  view (All when none). Period-bound sections are written once per view inside
+  `<div class="pv" data-pv=…>` via `html_report._period_view`, which sets `_ID_PREFIX`
+  so every `_slug` id is view-prefixed (`all-optx-eos`, `fy-kpis-eos`); CSS on
+  `<body data-period>` hides the others with no script. The programme summary, matrix,
+  fiscal-year view and top accounts are written once and never change. The matrix
+  table's first column is sticky (`_table(..., sticky_first=True)`).
+- **Latest wave** (`kpi._last_of`): column-wise `GroupBy.last()` (a blank cell takes the
+  account's most recent answer) **except** `_STATUS_COLUMNS`, taken whole from the real
+  latest row — else a sheet stage (no code) borrowed an earlier wave's code ("Stage 7 =
+  Executing Migration").
 - **Where every account sits** (`exporter.reconciliation`, under the pipeline on every
   dashboard and in both exports): each account state, its account count and ACR, and
   **where that state is reported** — On-Track and Completed are charted, everything else is
@@ -249,8 +287,9 @@ under Streamlit's AppTest in both counting modes.
   (4) `Migration Status NOT IN ("5 - Deferred By Customer", "6 - Cancelled / Archived",
   "On Hold", "Cancelled")`. Condition (1) is **per report** (`kpi.in_pipeline_scope(fact,
   motion)`, `exporter.pipeline_motion(category)`): AVS and EOS (`MOTION_AVS`) = the offering
-  **and no "From AVS" in the path or the offering** (`kpi.mentions_from_avs`); AVS → Azure
-  Native (`MOTION_NATIVE`) = the path contains "From AVS". **From AVS counts in AVS → Azure
+  **and no "From AVS" in the path** (`kpi.mentions_from_avs`); AVS → Azure
+  Native (`MOTION_NATIVE`) = the path contains "From AVS" (the path only — never an
+  offering name). **From AVS counts in AVS → Azure
   Native and nowhere else**; `nodes_planned` (EOS only) always reads `MOTION_AVS`.
   `acr_pipeline` sums Total ACR over them (every report); `nodes_planned` sums Total Cores
   (**EOS reports only**, `exporter.shows_nodes_planned`). Note the rule excludes 5 and 6

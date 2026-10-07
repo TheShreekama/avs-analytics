@@ -234,14 +234,19 @@ state, SDDC progress, starts and completions by month, days in migration, WW Reg
 status and the accounts that need attention. It counts the same accounts as the EOS
 report; the sheet's TPIDs the FDO Dataset does not hold are named under its tiles.
 
-The EOS report (dashboard, PDF and HTML) closes on a **Programme summary**: *"To date,
+The EOS report (dashboard, PDF and HTML) opens on a **Programme summary**: *"To date,
 X customers are participating in factory-driven migrations, including Y completed
 migrations, Z currently in progress and U in planning"*, then the customers Gen1 to
 Gen1, Gen1 to Gen2 and Gen1 to Azure Native. In progress = a wave at stage 4 (Executing
 Migration); in planning = stage 2 or 3; completed = account state Completed. Azure
 Native = customers with `(From AVS)` in the Primary Migration Path, first nominated on or
 after 1 July 2025. An **Include Azure Native customers** checkbox adds them to the
-totals (on the page, in the HTML report, and on the Reports page for the PDF).
+totals (on the page and in the HTML report; the PDF prints both readings).
+
+The HTML report has a **Reporting period** switch at the top of its side panel: **Current
+FY** and **All reporting period** (July 2025 to the as-of date). Every period-bound figure
+changes with it; the programme summary, the monthly programme matrix, the fiscal years
+side by side and the top accounts always cover the whole programme.
 
 The sheet is read forgivingly: a title row above the headers is fine (the header row is
 the first with a TPID column), a workbook's sheets are tried until one has a TPID column,

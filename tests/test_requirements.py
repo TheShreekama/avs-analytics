@@ -480,7 +480,7 @@ def test_glossary_explains_every_headline_metric():
     assert "Tags" in glossary.GENERATION_RULE
     assert "latest wave" in glossary.MIGRATIONS_COMPLETED
     assert "Current State" in glossary.ON_TRACK_ACCOUNTS
-    assert "ACTUAL END DATE" in glossary.ACR_CLAIMED
+    assert "Actual End Date" in glossary.ACR_CLAIMED
     assert set(glossary.CATEGORY_HELP) == set(segments.CATEGORY_LABELS)
 
 
@@ -1110,18 +1110,21 @@ def test_with_every_wave_closed_the_latest_takes_the_sheets_status(raw_frame):
     assert kpi.on_track_accounts(built[built["tpid"] == "100"]).count == 1
 
 
-def test_a_completion_the_sheet_states_is_dated_by_the_sheet(raw_frame):
+def test_a_completion_is_dated_by_the_export_like_engagement_end(raw_frame):
+    """Migrations Completed and the matrix's engagement end are one rule: the
+    sheet's Actual Migration End Date dates *migration end* only."""
     built, _tracker, _report = _status_sheet(raw_frame, [
         ("300", "Completed", "Completed", "Gen2", "09-05-2026"),
     ])
     pop = built[built["tpid"] == "300"]
-    done = kpi.migrations_completed(pop, pd.Timestamp("2026-09-01"),
+    sept = kpi.migrations_completed(pop, pd.Timestamp("2026-09-01"),
                                     pd.Timestamp("2026-09-30"))
-    assert done.count == 1
-    assert list(done.records["completion_date"]) == [pd.Timestamp("2026-09-05")]
-    # …and not in August, where the export's own Actual End Date would put it.
-    assert kpi.migrations_completed(pop, pd.Timestamp("2026-08-01"),
-                                    pd.Timestamp("2026-08-31")).count == 0
+    assert sept.count == 0                       # the sheet's month
+    aug = kpi.migrations_completed(pop, pd.Timestamp("2026-08-01"),
+                                   pd.Timestamp("2026-08-31"))
+    assert aug.count == 1                        # the export's month
+    ends = kpi.engagement_end_dates(pop)
+    assert list(ends["engagement_end_date"]) == list(aug.records["completion_date"])
 
 
 def test_a_status_the_sheet_does_not_recognise_leaves_the_export_answering(raw_frame):
@@ -1735,16 +1738,13 @@ def test_a_this_fy_row_is_added_when_the_period_is_something_else(html_ctx):
     assert "This FY (FY26)" in month
     # Two headline rows — the FY one, then the period one.  Counted by their tile
     # groups, since other sections render tiles of their own.
-    import re
-    groups = set(re.findall(r'data-tile-group="(kpis-[^"]+)"', month))
-    assert len(groups) == 2, groups
+    assert _tile_rows(month) == {"kpis-eos", "kpis-eos-fy"}
 
     fy_span = metrics.date_preset_range(html_ctx.as_of, "This FY", 7)
     same = html_report.build_html_report(
         html_ctx, reports=["eos"], period_label="This FY",
         date_window=(fy_span[0], fy_span[1])).decode("utf-8")
-    assert "Two periods:" not in same                  # nothing to compare against
-    assert len(set(re.findall(r'data-tile-group="(kpis-[^"]+)"', same))) == 1
+    assert _tile_rows(same) == {"kpis-eos"}
 
 
 def test_underlying_data_shows_the_accounts_not_just_the_chart_numbers(html_doc):
@@ -1951,7 +1951,8 @@ def test_the_matrix_still_honours_filters_that_are_not_the_period(html_ctx):
 
     assert str(grid.loc["Total number of new engagement", "Jul-25"]) == "0"
     assert str(grid.loc["Total number of new engagement", "Dec-25"]) == "1"
-    assert "<b>4</b> accounts (TPIDs)" in doc      # the report itself is whole
+    # The report is built from those same filters (only the period is its own).
+    assert "<b>4</b> accounts (TPIDs)" not in doc
 
 
 def test_the_report_does_not_end_with_a_list_of_every_account(html_doc):
@@ -2328,7 +2329,7 @@ def test_the_regional_breakdown_keeps_only_the_heatmap(state_doc):
     assert "WW Region × status heatmap" in body
     assert "Migration status by WW Region" not in body
     # …and the heatmap still opens the accounts for a region and a stage.
-    assert 'data-drill="rh-eos" data-drill-mode="y-x"' in body
+    assert 'data-drill="all-rh-eos" data-drill-mode="y-x"' in body
 
 
 def test_money_in_tooltips_is_written_in_k_and_m(state_doc):
@@ -2351,7 +2352,10 @@ def test_the_optional_sections_are_present_but_hidden_by_default(state_doc):
     body = _main(state_doc)
     toggles = re.findall(
         r'<input type="checkbox" class="opt-toggle" id="([^"]+)"([^>]*)>', body)
-    assert [t for t, _ in toggles] == ["optx-avs", "optx-eos", "opt-methodology"]
+    # One blocked section per report and period (Current FY, All reporting
+    # period), then the methodology.
+    assert [t for t, _ in toggles] == ["fy-optx-avs", "all-optx-avs", "fy-optx-eos",
+                                       "all-optx-eos", "opt-methodology"]
     for _id, attrs in toggles:
         assert "checked" not in attrs              # unticked when the file opens
     # Hidden by a CSS rule on the checkbox itself, so it is hidden from the
@@ -2367,11 +2371,11 @@ def test_the_optional_sections_are_present_but_hidden_by_default(state_doc):
 def test_the_blocked_accounts_table_carries_the_status_summary(state_doc):
     """The reason an account has stopped, in the programme's own words."""
     body = _main(state_doc)
-    blocked = body.split('id="optx-eos-body"', 1)[1]
+    blocked = body.split('id="all-optx-eos-body"', 1)[1]
     assert "<th>Status Summary</th>" in blocked
     # …and only in a blocked section: everything before the first one — tiles,
     # trends, pipeline, regional — must not carry a paragraph per row.
-    assert body.split('id="optx-avs"', 1)[0].count("<th>Status Summary</th>") == 0
+    assert body.split('id="fy-optx-avs"', 1)[0].count("<th>Status Summary</th>") == 0
     # Headers read as names throughout, not as column keys.
     assert "<th>Customer Name</th>" in body and "<th>customer_name</th>" not in body
 
@@ -2578,9 +2582,18 @@ def test_an_insight_with_nothing_to_say_says_nothing(state_fact):
 # --------------------------------------------------------------------------- #
 # The This-FY row, and the optional sections
 # --------------------------------------------------------------------------- #
-def _tile_rows(doc: str) -> set:
+def _opening_view(doc: str) -> str:
+    """The period the report opens on — ``<body data-period>``."""
     import re
-    return set(re.findall(r'data-tile-group="(kpis-[^"]+)"', _main(doc)))
+    return re.search(r'<body data-period="(\w+)">', doc).group(1)
+
+
+def _tile_rows(doc: str) -> set:
+    """The headline tile groups of the period the report opens on."""
+    import re
+    view = _opening_view(doc)
+    return {g[len(view) + 1:] for g in
+            re.findall(r'data-tile-group="(' + view + r'-kpis-[^"]+)"', _main(doc))}
 
 
 def test_every_period_other_than_this_fy_gets_a_this_fy_row(state_ctx):
@@ -2608,7 +2621,6 @@ def test_every_period_other_than_this_fy_gets_a_this_fy_row(state_ctx):
         state_ctx, reports=["avs"], period_label="This FY",
         date_window=(span[0], span[1]))
     assert _tile_rows(same.decode()) == {"kpis-avs"}
-    assert "Two periods:" not in same.decode()
 
 
 def test_the_optional_sections_default_to_blocked_in_insights_out(state_ctx):
@@ -2620,7 +2632,7 @@ def test_the_optional_sections_default_to_blocked_in_insights_out(state_ctx):
 
     doc = html_report.build_html_report(state_ctx, reports=["avs"]).decode()
     body = _main(doc)
-    assert 'id="optx-avs"' in body                 # the blocked section's card
+    assert 'id="all-optx-avs"' in body             # the blocked section's card
     assert '<h3 class="block">Insights</h3>' not in body
 
 
@@ -2635,7 +2647,7 @@ def test_each_optional_section_is_included_only_when_asked_for(
         state_ctx, reports=["avs"], sections=sections).decode())
     # The section's own card, not its title: the methodology names the section
     # too, and would answer for it.
-    assert ('id="optx-avs"' in body) is blocked
+    assert ('id="all-optx-avs"' in body) is blocked
     assert ('<h3 class="block">Insights</h3>' in body) is insights
 
     # The PDF answers to the same selector.  The marker is the closing sentence
@@ -2752,10 +2764,12 @@ _SEP_WINDOW = (pd.Timestamp("2025-09-01"), pd.Timestamp("2026-06-30"))
 
 
 def _tile_values(doc: str, group: str) -> dict:
+    """One headline row's tiles, in the period the report opens on."""
     import re
     body = _main(doc)
+    group = f"{_opening_view(doc)}-{group}"
     return dict(re.findall(
-        r'data-tile="kpi-\w+-(\w+)" data-tile-group="' + group +
+        r'data-tile="[\w-]*kpi-\w+-(\w+)" data-tile-group="' + group +
         r'"[^>]*>.*?<div class="value">([^<]*)</div>', body, re.S))
 
 
@@ -2822,7 +2836,8 @@ def test_money_in_the_underlying_tables_reads_in_k_and_m(state_doc):
         acr = headers.index("Total ACR")
         for row in re.findall(r"<tr[^>]*>(.*?)</tr>", table.split("<tbody>")[-1], re.S):
             cells = re.findall(r"<td[^>]*>([^<]*)</td>", row)
-            if len(cells) > acr and cells[acr]:
+            # "—": an account whose every wave is Blocked has no Total ACR.
+            if len(cells) > acr and cells[acr] and cells[acr] != "—":
                 assert re.fullmatch(r"\$[\d.]+[KMB]?", cells[acr]), cells[acr]
         # Cores are whole things, not floats.
         if "Total Cores" in headers:
@@ -2990,14 +3005,14 @@ def test_the_generation_heatmap_is_in_the_eos_report_only(every_state_fact):
 
     eos = _main(html_report.build_html_report(ctx, reports=["eos"]).decode())
     assert "Accounts by generation and state" in eos
-    assert 'data-drill="gs-eos" data-drill-mode="y-x"' in eos      # a cell opens rows
+    assert 'data-drill="all-gs-eos" data-drill-mode="y-x"' in eos  # a cell opens rows
     assert "The counts — generation × state" in eos
 
     # The rendered grid covers EVERY account in the report — a regression on a
     # generation's wave index leaking into it, which silently dropped a whole
     # row from the heatmap while the table above it still read correctly.
     parser = _Cells()
-    parser.feed(eos.split('id="gt-eos"', 1)[1].split("</table>", 1)[0])
+    parser.feed(eos.split('id="all-gt-eos"', 1)[1].split("</table>", 1)[0])
     header, *body_rows = [r for r in parser.rows if r]
     total = header.index("Total")
     pop = segments.population(every_state_fact, segments.CAT_EOS_ALL)
@@ -3438,7 +3453,7 @@ def test_azure_native_customers_count_from_their_first_nomination_in_july_2025()
     assert set(kept["tpid_key"]) == {"new"}
 
 
-def test_the_eos_report_closes_on_the_programme_summary():
+def test_the_eos_report_opens_on_the_programme_summary():
     from app.core import html_report
     ctx = _sample_with_sheet()
     eos = segments.population(ctx.fact, segments.CAT_EOS_ALL)
@@ -3455,18 +3470,182 @@ def test_the_eos_report_closes_on_the_programme_summary():
                                "migration, 2 currently in progress and 1 in planning")
     assert "5 customers from Gen1 to Azure Native" in _exp().summary_lines(s)
 
-    # The HTML report carries both readings behind one checkbox, unticked.
+    # The HTML report carries both readings behind the reader's own checkbox,
+    # unticked, ahead of the executive summary.
     html = _main(html_report.build_html_report(ctx, reports=["eos"]).decode())
     assert esc(eos_line) in html and esc(all_line) in html
     assert 'id="sum-native">' in html
-    on = _exp().ReportSections(summary_native=True)
-    assert 'id="sum-native" checked>' in html_report.build_html_report(
-        ctx, reports=["eos"], sections=on).decode()
-    # The PDF prints the chosen reading, the other underneath.
+    assert html.index("prog-summary") < html.index("kpis-eos")
+    # The PDF prints the EOS reading first, the other underneath, before the
+    # executive summary.
     pdf = _pdf_text(ctx, reports=["eos"], drilldown=False)
     assert "Programme summary" in pdf and eos_line in pdf
-    assert "With the Azure Native customers:" in pdf
-    pdf_on = _pdf_text(ctx, reports=["eos"], drilldown=False, sections=on)
-    assert all_line in pdf_on and "Without the Azure Native customers:" in pdf_on
-    # Only the EOS report closes this way.
+    assert "With the Azure Native customers added:" in pdf
+    eos_part = pdf.split("EOS Migrations", 2)[-1]
+    assert eos_part.index(eos_line) < eos_part.index("Executive summary")
+    # Only the EOS report opens this way.
     assert eos_line not in _pdf_text(ctx, reports=["avs"], drilldown=False)
+
+
+def test_adding_azure_native_never_reclassifies_an_eos_customer():
+    """A completed EOS migration stays completed when its From AVS waves are added."""
+    from app.core import statuses as st_
+    eos = _phase_frame([("A", 1, 7, "Completed", st_.SOURCE_FDO, "Done", st_.COMPLETED)])
+    eos["generation"] = segments.GEN_1
+    native = _phase_frame([("A", 2, 4, "Executing Migration", st_.SOURCE_FDO,
+                            "On Track", st_.IN_FLIGHT),
+                           ("B", 1, 2, "Executing Pre-requisites", st_.SOURCE_FDO,
+                            "On Track", st_.IN_FLIGHT)])
+    native["approval_date"] = pd.Timestamp("2025-09-01")
+    s = _exp().programme_summary(eos, native)
+    assert (s.eos.customers, s.eos.completed) == (1, 1)
+    assert (s.with_native.customers, s.with_native.completed,
+            s.with_native.in_progress, s.with_native.planning) == (2, 1, 0, 1)
+
+
+def test_the_latest_wave_takes_its_status_whole():
+    """A sheet stage never borrows an earlier export wave's stage number."""
+    frame = pd.DataFrame({
+        "tpid_key": ["a", "a"], "wave_num": [1, 2],
+        "migration_status_code": [7.0, float("nan")],
+        "migration_status_label": ["Completed", "Executing Migration"],
+        "migration_status": ["7 - Completed", "Executing Migration"],
+        "status_class": ["completed", "in_flight"],
+        "status_source": ["FDO export", "EOS tracker"],
+    })
+    last = kpi.latest_wave(frame).iloc[0]
+    assert pd.isna(last["migration_status_code"])
+    labels, _legend = kpi.stage_labels(kpi.latest_wave(frame))
+    assert list(labels) == ["Executing Migration"]
+
+
+def test_migrations_completed_reconciles_with_engagement_end_over_the_matrix_span():
+    """The card and the matrix row are one rule, so over the same months they agree."""
+    ctx = _sample_with_sheet()
+    eos = segments.population(ctx.fact, segments.CAT_EOS_ALL)
+    start = metrics.named_fiscal_year_start(26, 7)
+    card = kpi.migrations_completed(eos, start, ctx.as_of).value
+    ends = kpi.engagement_end_dates(eos)
+    in_span = kpi.in_window(ends["engagement_end_date"], start, ctx.as_of)
+    assert card == int(ends.loc[in_span.to_numpy(), "tpid_key"].nunique())
+
+
+def test_a_report_period_keeps_every_wave_of_the_accounts_it_covers():
+    frame = pd.DataFrame({
+        "tpid_key": ["a", "a", "b"],
+        "created_date": pd.to_datetime(["2025-08-01", "2026-08-01", "2025-01-01"]),
+    })
+    kept = _exp().period_population(frame, pd.Timestamp("2026-07-01"),
+                                    pd.Timestamp("2027-06-30"))
+    assert list(kept["tpid_key"]) == ["a", "a"]      # both of a's waves, none of b's
+
+
+def test_the_html_report_switches_between_current_fy_and_all_reporting_period():
+    from app.core import html_report
+    ctx = _sample_with_sheet()
+    doc = html_report.build_html_report(ctx, reports=["eos", "native"]).decode()
+    assert '<body data-period="all">' in doc
+    assert 'data-period="fy"' in doc and "Current FY (FY" in doc
+    assert "All reporting period · Jul 2025" in doc
+    body = _main(doc)
+    # Period-bound sections exist once per period; the matrix only once.
+    assert 'data-pv="fy"' in body and 'data-pv="all"' in body
+    assert body.count('id="mx-gen1"') == 1
+    assert 'class="data sticky-first" id="mx-gen1"' in body
+    # Hidden by CSS alone until the switch is pressed.
+    assert 'body[data-period="fy"] .pv:not([data-pv="fy"])' in doc
+    # A period chosen on the Reports page that is neither is carried as a third.
+    month = html_report.build_html_report(
+        ctx, reports=["eos"], period_label="Nov 2025",
+        date_window=(pd.Timestamp("2025-11-01"), pd.Timestamp("2025-11-30"))).decode()
+    assert '<body data-period="sel">' in month and "Selected · Nov 2025" in month
+
+
+def test_money_goes_on_the_value_axis_of_a_horizontal_bar():
+    """Top 10 accounts by ACR: "$" on the amounts, never on the account names."""
+    import plotly.graph_objects as go
+    from app.core import html_report
+    doc = html_report._Builder(body=[], scripts=[], toc=[])
+    fig = go.Figure(go.Bar(x=[1_000_000], y=["CONTOSO (1)"], orientation="h"))
+    doc.figure(fig, currency=True)
+    assert fig.layout.xaxis.tickprefix == "$"
+    assert fig.layout.yaxis.tickprefix in (None, "")
+
+
+# --------------------------------------------------------------------------- #
+# End-date fallbacks, blocked ACR, From AVS on the path only
+# --------------------------------------------------------------------------- #
+def _dated_waves():
+    from app.core import statuses as st_
+    return pd.DataFrame({
+        "tpid": ["A", "B", "C", "D"], "tpid_key": ["A", "B", "C", "D"],
+        "wave_num": [1, 1, 1, 1],
+        "migration_status_code": [7, 7, 7, 4],
+        "migration_status_label": ["Completed"] * 3 + ["Executing Migration"],
+        "migration_status": ["7 - Completed"] * 3 + ["4 - Executing Migration"],
+        "status_class": [st_.COMPLETED] * 3 + [st_.IN_FLIGHT],
+        "current_state": ["Done", "Done", "Done", "On Track"],
+        "nomination_status": ["Approved"] * 4,
+        "actual_end_date": pd.to_datetime(["2025-08-10", None, None, None]),
+        "planned_end_date": pd.to_datetime([None, "2025-09-15", None, "2025-09-20"]),
+        "actual_start_date": pd.to_datetime([None, None, None, None]),
+        "planned_start_date": pd.to_datetime([None, None, None, None]),
+        "approval_date": pd.to_datetime([None, None, None, None]),
+        "created_date": pd.to_datetime(["2025-07-01", "2025-07-01", "2025-10-02",
+                                        "2025-07-01"]),
+        "total_cores": [4, 6, 8, 10], "total_acr": [100.0, 200.0, 300.0, 400.0],
+    })
+
+
+def test_a_completion_with_no_actual_end_date_falls_back_along_the_chain():
+    waves = _dated_waves()
+    done = kpi.migrations_completed(waves).records.set_index("tpid_key")
+    assert done.loc["A", "completion_date"] == pd.Timestamp("2025-08-10")
+    assert done.loc["B", "completion_date"] == pd.Timestamp("2025-09-15")
+    assert done.loc["B", "end_date_source"] == "Planned End Date"
+    assert done.loc["C", "completion_date"] == pd.Timestamp("2025-10-02")
+    assert done.loc["C", "end_date_source"] == "Nom. Created Date"
+    # Engagement end reads the same date.
+    ends = kpi.engagement_end_dates(waves).set_index("tpid_key")
+    assert ends.loc["B", "engagement_end_date"] == pd.Timestamp("2025-09-15")
+
+
+def test_hosts_and_acr_claimed_fall_back_only_for_completed_waves():
+    waves = _dated_waves()
+    sept = (pd.Timestamp("2025-09-01"), pd.Timestamp("2025-09-30"))
+    # B's completed wave is dated by its Planned End Date; D is still running,
+    # so its Planned End Date claims nothing.
+    assert kpi.hosts_migrated(waves, *sept).value == 6
+    assert kpi.acr_claimed(waves, *sept).value == 200.0
+    assert kpi.hosts_migrated(waves).value == 18           # A, B and C, all dated
+    # An FDO date wins over a date the EOS sheet filled in.
+    filled = waves.assign(fdo_actual_end_date=pd.to_datetime([None] * 4))
+    assert kpi.hosts_migrated(filled, pd.Timestamp("2025-08-01"),
+                              pd.Timestamp("2025-08-31")).value == 0
+
+
+def test_total_acr_leaves_out_blocked_waves_everywhere_it_is_reported():
+    waves = _dated_waves().assign(
+        tpid_key=["A", "A", "B", "B"], tpid=["A", "A", "B", "B"], wave_num=[1, 2, 1, 2],
+        current_state=["Done", "Blocked - Customer", "Done", "On Track"])
+    acr = kpi.account_acr(waves)
+    assert acr["A"] == 100.0 and acr["B"] == 700.0
+    detail = kpi.account_detail(waves).set_index("tpid_key")
+    assert detail.loc["A", "total_acr"] == 100.0
+    _summary, rows = kpi.by_state(waves, only=None)
+    assert rows.set_index("tpid_key").loc["A", "total_acr"] == 100.0
+
+
+def test_from_avs_is_read_from_the_migration_path_alone():
+    frame = pd.DataFrame({
+        "migration_path": ["Onprem to AVS", "SQL Server MI Migration (From AVS)"],
+        "factory_offering": ["AVS Migration Nominations",
+                             "AVS Migration Nominations"],
+    })
+    assert list(kpi.mentions_from_avs(frame)) == [False, True]
+    # An offering name is never searched for it.
+    offering_only = frame.assign(migration_path="Onprem to AVS",
+                                 factory_offering="SQL Migration (From AVS)")
+    assert not kpi.mentions_from_avs(offering_only).any()
+    assert list(kpi.in_pipeline_scope(frame, kpi.MOTION_AVS)) == [True, False]
+    assert list(kpi.in_pipeline_scope(frame, kpi.MOTION_NATIVE)) == [False, True]

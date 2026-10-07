@@ -23,7 +23,7 @@ PROGRAMME_TRACKER = (
 )
 
 PROGRAMME_SUMMARY = (
-    "The sentence that closes the EOS report, over the whole programme (never "
+    "The sentence that opens the EOS report, over the whole programme (never "
     "the reporting period).\n"
     "• Customers = unique TPIDs in EOS Migrations (All).\n"
     "• Completed = account state Completed.\n"
@@ -54,14 +54,18 @@ MIGRATIONS_COMPLETED = (
     "Unique customers (TPIDs) whose migration finished inside the period.\n"
     "• Takes each TPID's LATEST wave (highest Phase/Wave number).\n"
     "• That wave's Migration Status must be '7 - Completed'.\n"
-    "• Dated by its Actual End Date.\n"
+    "• Dated by its Actual End Date in the export; with none, its Planned End "
+    "Date, Actual Start Date, Planned Start Date, Nom. Approval Date, then Nom. "
+    "Created Date.\n"
     "An account with Wave 7 completed but Wave 8 still running is NOT counted — "
     "completion always follows the latest wave."
 )
 
 HOSTS_MIGRATED = (
     "Sum of the Total Cores column — treated as nodes/hosts — over every wave "
-    "record that is '7 - Completed' with an Actual End Date inside the period.\n"
+    "record that is '7 - Completed' dated inside the period: its Actual End "
+    "Date in the export, else Planned End, Actual Start, Planned Start, Nom. "
+    "Approval, then Nom. Created Date.\n"
     "This is deliberately NOT a customer count: an account with three completed "
     "waves contributes the cores of all three. Each source record is counted once."
 )
@@ -92,12 +96,15 @@ ON_TRACK_ACCOUNTS = (
 )
 
 ACR_CLAIMED = (
-    "ACR of every wave whose ACTUAL END DATE falls inside the reporting period.\n"
+    "ACR of every wave whose end date falls inside the reporting period — its "
+    "Actual End Date in the export.\n"
     "• Wave-level, not account-level: if Waves 2 and 3 of one account and Wave 5 "
     "of another ended inside the window, all three waves' Total ACR is summed.\n"
     "• A wave that ended outside the window contributes nothing, even when a "
     "sibling wave of the same account ended inside it.\n"
-    "• A wave with no Actual End Date has not claimed and is never counted.\n"
+    "• A completed wave with no Actual End Date is dated by its Planned End, "
+    "Actual Start, Planned Start, Nom. Approval, then Nom. Created Date; any "
+    "other wave with no Actual End Date has not claimed and is never counted.\n"
     "Shown as $1.2M / $840.0K. Across a multi-month period the trend chart splits "
     "the same total by the month each wave ended."
 )
@@ -110,7 +117,7 @@ ACR_PIPELINE = (
     "therefore the commercial value still to land.\n"
     "A wave is eligible when ALL FOUR hold, judged on the wave itself:\n"
     "1. AVS and EOS reports: Factory Offering = 'AVS Migration Nominations', "
-    "with no 'From AVS' in it or in the Primary Migration Path. AVS → Azure "
+    "with no 'From AVS' in the Primary Migration Path. AVS → Azure "
     "Native report: Primary Migration Path CONTAINS 'From AVS' — the only "
     "report a From AVS wave ever counts in.\n"
     "2. Nomination Status = 'Approved'.\n"
@@ -131,8 +138,8 @@ NODES_PLANNED = (
     "Migration Nominations', Nomination Status = 'Approved', Current State = "
     "'On Track', and Migration Status not '5 - Deferred By Customer', '6 - "
     "Cancelled / Archived', 'On Hold' or 'Cancelled'.\n"
-    "A wave with 'From AVS' in its Primary Migration Path or Factory Offering "
-    "is NEVER counted: From AVS belongs to AVS → Azure Native only.\n"
+    "A wave with 'From AVS' in its Primary Migration Path is NEVER counted: "
+    "From AVS belongs to AVS → Azure Native only.\n"
     "Reported as NODES because that is what the AVS motions deploy, from the "
     "Total Cores column that records them. Read against Hosts Migrated, which "
     "is the deployment already delivered.\n"
@@ -196,9 +203,10 @@ TREND_NOMINATIONS = (
 TOP_ACCOUNTS_ACR = (
     "The ten accounts carrying the most ACR in this category, largest first.\n"
     "• One row per account (TPID), never per wave.\n"
-    "• Total ACR is summed across EVERY wave the account has — an account with "
-    "waves of 10M, 15M and 20M is a 45M account, and ranking it on its latest "
-    "wave's 20M alone would place it wrongly.\n"
+    "• Total ACR is summed across every wave the account has EXCEPT those whose "
+    "Current State is Blocked — an account with waves of 10M, 15M and 20M is a "
+    "45M account, and ranking it on its latest wave's 20M alone would place it "
+    "wrongly.\n"
     "• Accounts with no ACR are left out rather than listed as zeroes.\n"
     "• Not narrowed by the reporting period: it answers where the money in this "
     "category is, which is a question about the whole category.\n"
@@ -225,7 +233,8 @@ TREND_CORES = TREND_HOSTS.replace("Nodes deployed", "Cores migrated")
 
 TREND_COMPLETED = (
     "Completed migrations per month: unique TPIDs whose latest wave is "
-    "'7 - Completed', placed in the month of that wave's Actual End Date."
+    "'7 - Completed', placed in the month of that wave's Actual End Date (or "
+    "its first fallback date when it has none)."
 )
 
 PIPELINE = (
@@ -296,8 +305,9 @@ DETAILED_DATA = (
     "• Most Recent / Latest Wave, and every wave-specific field (migration "
     "status, Current State, region, cores, actual dates, owners) — from the "
     "account's LATEST wave, so the row reads as where it stands now.\n"
-    "• Total ACR — summed across EVERY wave of the account. Waves of 10M, 15M "
-    "and 20M show as 45M; the latest wave's 20M alone would understate it.\n"
+    "• Total ACR — summed across every wave of the account except Blocked ones. "
+    "Waves of 10M, 15M and 20M show as 45M; the latest wave's 20M alone would "
+    "understate it.\n"
     "• Nom. Approval Date — from the first wave whatever its Migration Status "
     "or Current State, falling through to the next wave that carries one: the "
     "same wave the New Engagements tile reads, because that is when the account "
@@ -516,8 +526,10 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "wave carries one.",
         )),
         Definition("Read across every wave", (
-            "An account's **Total ACR** is every one of its waves added "
-            "together.",
+            "An account's **Total ACR** is its waves added together, leaving "
+            "out any wave whose **Current State** reads Blocked.",
+            "The blocked, deferred and cancelled section is the exception: its "
+            "ACR held up adds every wave, blocked ones included.",
             "Waves worth 10M, 15M and 20M make a 45M account; the latest wave "
             "alone would understate it by more than half.",
             "Every account-level figure counts an account once, however many "
@@ -549,9 +561,11 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Where the EOS tracking sheet covers the account, its **Migration "
             "Status** of **Completed** or **Current State** of **Completed** "
             "decides instead.",
-            "Date it by the tracking sheet's **Actual Migration End Date** "
-            "where there is one, otherwise the latest wave's **Actual End "
-            "Date**.",
+            "Date it by the latest wave's **Actual End Date** as the export "
+            "records it — the same date as engagement end in the EOS matrix.",
+            "With none, use that same wave's **Planned End Date**, **Actual "
+            "Start Date**, **Planned Start Date**, **Nom. Approval Date** or "
+            "**Nom. Created Date**, the first one filled in.",
             "Count each qualifying **TPID** once.",
             "Unit: customer.",
         )),
@@ -559,9 +573,10 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Identify every wave whose **Migration Status** is **7 - "
             "Completed**, or **Completed** where the EOS tracking sheet "
             "supplied it.",
-            "Use that wave's **Actual End Date** to decide the reporting period; "
-            "a wave the sheet completed with none takes the sheet's **Actual "
-            "Migration End Date**.",
+            "Date each by its **Actual End Date** as the export records it; "
+            "with none, by its **Planned End Date**, **Actual Start Date**, "
+            "**Planned Start Date**, **Nom. Approval Date** and **Nom. Created "
+            "Date**, in that order.",
             "Add up **Total Cores** over those waves.",
             "It counts the work, not the customers: an account with three "
             "completed waves contributes all three.",
@@ -590,23 +605,28 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Unit: customer.",
         )),
         Definition("ACR Claimed", (
-            "Identify every wave whose **Actual End Date** falls in the "
-            "reporting period, whatever state the account is in now.",
+            "Identify every wave whose **Actual End Date**, as the export "
+            "records it, falls in the reporting period, whatever state the "
+            "account is in now.",
             "Add up **Total ACR** over those waves.",
             "Claiming is per wave, not per account: waves 2 and 3 of one "
             "account and wave 5 of another all count if all three ended in the "
             "window.",
             "A wave that ended outside the window contributes nothing, even "
             "when a sibling wave of the same account ended inside it.",
-            "A wave with no **Actual End Date** has not claimed and never "
-            "counts.",
+            "A completed wave with no **Actual End Date** is dated by its "
+            "**Planned End Date**, **Actual Start Date**, **Planned Start "
+            "Date**, **Nom. Approval Date** or **Nom. Created Date**, the first "
+            "one filled in.",
+            "Any other wave with no **Actual End Date** has not claimed and "
+            "never counts.",
             "Unit: currency.",
         )),
         Definition("ACR Pipeline", (
             "A wave qualifies when all four of these hold.",
             "It belongs to this report's motion — AVS and EOS: **Factory "
-            "Offering** is **AVS Migration Nominations** and neither it nor "
-            "**Primary Migration Path** contains **From AVS**; AVS to Azure "
+            "Offering** is **AVS Migration Nominations** and **Primary "
+            "Migration Path** does not contain **From AVS**; AVS to Azure "
             "Native: **Primary Migration Path** contains **From AVS**, the only "
             "report From AVS ever counts in.",
             "Its **Nomination Status** is **Approved**.",
@@ -626,8 +646,8 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         Definition("Nodes Deployment Planned (EOS reports only)", (
             "Use the four ACR Pipeline conditions as the AVS and EOS reports "
             "apply them: **Factory Offering** is **AVS Migration Nominations**.",
-            "A wave whose **Primary Migration Path** or **Factory Offering** "
-            "contains **From AVS** is never counted.",
+            "A wave whose **Primary Migration Path** contains **From AVS** is "
+            "never counted.",
             "Add up **Total Cores** over those waves instead of **Total ACR**.",
             "Read over the whole dataset, not the reporting period.",
             "Unit: nodes.",
@@ -778,7 +798,7 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Data Inconsistency review.",
         )),
         Definition("Programme summary", (
-            "Closes the EOS report, read over the whole programme, never the "
+            "Opens the EOS report, read over the whole programme, never the "
             "reporting period.",
             "Customers: each **TPID** in EOS Migrations (All), counted once.",
             "Completed: the account state is Completed.",
@@ -826,8 +846,8 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "A wave the export already shows as **7 - Completed** or **6 - "
             "Cancelled / Archived** keeps its own status.",
             "**Migration Start Date** and **Actual Migration End Date** supply "
-            "the two date rows of the monthly programme matrix, and date "
-            "Migrations Completed.",
+            "the migration start and migration end rows of the monthly "
+            "programme matrix, and nothing else.",
             "**Total SDDCs in Scope for Migration** and **Number of SDDCs "
             "Migrated** feed the EOS Programme Tracker only.",
             "Where the sheet is silent, the export answers exactly as it did "
@@ -955,7 +975,8 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Otherwise, for each **TPID**, identify the latest **Phase** / wave "
             "record.",
             "The account's state must be Completed, by the rules above.",
-            "Use that wave's **Actual End Date**.",
+            "Use the date Migrations Completed uses: that wave's **Actual End "
+            "Date**, else the fallback dates listed there.",
             "Count the unique **TPID** in that date's month, once only.",
             "Unit: customer.",
         )),
@@ -964,15 +985,18 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "The account's state must be Completed, by the rules above — the "
             "same test All AVS Migrations uses.",
             "Use that wave's **Actual End Date**, as the export records it — "
-            "never the tracking sheet's **Actual Migration End Date**.",
+            "never the tracking sheet's **Actual Migration End Date** — else "
+            "the fallback dates Migrations Completed lists.",
             "With no tracking sheet, this row equals migration end.",
             "Count the unique **TPID** in that date's month, once only.",
             "Unit: customer.",
         )),
         Definition("Number of hosts migrated (monthly)", (
             "Identify every wave whose **Migration Status** is **7 - "
-            "Completed**.",
-            "Use its **Actual End Date** to decide the month.",
+            "Completed**, or **Completed** where the EOS tracking sheet "
+            "supplied it.",
+            "Date it as Hosts Migrated does: its **Actual End Date**, else the "
+            "fallback dates.",
             "Add up **Total Cores** over those waves.",
             "Unit: nodes.",
         )),
@@ -1052,7 +1076,8 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "fiscal years would not mean anything.",
         )),
         Definition("Top 10 accounts by ACR", (
-            "Add up **Total ACR** across every wave of each account.",
+            "Add up **Total ACR** across every wave of each account, except "
+            "waves whose **Current State** reads Blocked.",
             "Leave out accounts with no ACR rather than listing them as zeroes.",
             "Take the ten largest, biggest first.",
             "Label each bar with the **Customer Name** and its **TPID**, so no "
@@ -1063,11 +1088,17 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         )),
         Definition("The reporting period, and the This FY row", (
             "The period narrows New Engagements, Migrations Completed, Hosts "
-            "Migrated, ACR Claimed and the monthly trends.",
-            "It does not narrow On-Track Accounts, the current pipeline, the "
-            "regional cut, the stopped accounts, ACR Pipeline, Nodes Deployment "
-            "Planned, the programme matrix or the fiscal-year comparison.",
-            "Each of those says so under its own title.",
+            "Migrated, ACR Claimed and the monthly trends, each by its own date, "
+            "over the whole programme.",
+            "It never narrows On-Track Accounts, ACR Pipeline, Nodes Deployment "
+            "Planned, the programme summary, the programme matrix, the "
+            "fiscal-year comparison or the top accounts.",
+            "In the PDF and HTML reports, the pipeline, regional, generation and "
+            "stopped-account sections cover the accounts with a wave whose "
+            "**Nom. Created Date** is in the period, each with all its waves.",
+            "On screen, those sections always cover the whole programme.",
+            "The HTML report switches between Current FY and All reporting "
+            "period (July 2025 to the as-of date) from its side panel.",
             "Selecting any period other than the current fiscal year adds a "
             "**This FY** row of tiles above the selected one, so a month's "
             "numbers keep the year they sit in.",

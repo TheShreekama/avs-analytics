@@ -94,10 +94,6 @@ class ReportSections:
     #: The EOS Programme Tracker — the tracking sheet reported on its own —
     #: after the EOS report, whenever a sheet is loaded and EOS is chosen.
     programme: bool = True
-    #: Whether the EOS report's closing programme summary adds AVS → Azure
-    #: Native customers into its totals.  The HTML report's checkbox starts in
-    #: this position; the PDF, which cannot be clicked, prints it this way.
-    summary_native: bool = False
 
 
 #: What a report calls itself when the caller says nothing.  Deliberately about
@@ -328,7 +324,7 @@ def reconciliation(pop: pd.DataFrame, waves: kpi.WaveIndex) -> tuple[pd.DataFram
         return pd.DataFrame(columns=["State", "Accounts", "ACR", "Reported in"]), 0
     states = kpi.account_state(pop, lasts)
     frame = lasts.assign(_state=states,
-                         _acr=pd.to_numeric(lasts.get("total_acr"), errors="coerce"))
+                         _acr=lasts["tpid_key"].map(kpi.account_acr(pop)).to_numpy())
     _summary, blocked = kpi.blocked_accounts(pop, lasts=lasts)
     in_section = set(blocked["tpid_key"]) if not blocked.empty else set()
 
@@ -505,7 +501,8 @@ TOP_ACCOUNT_REPORTS = ("avs", "native")
 
 TOP_ACCOUNTS_NOTE = (
     "The accounts this category's money sits in, largest first. Total ACR is "
-    "summed across **every wave** of an account — an account with waves of 10M, "
+    "summed across **every wave** of an account except those whose Current "
+    "State is Blocked — an account with waves of 10M, "
     "15M and 20M is a 45M account — so the order is the account-level one the "
     "reconciliation and the account records both use. Accounts with no ACR are "
     "left out rather than listed as zeroes. **Read over the whole dataset, not "
@@ -529,11 +526,75 @@ def top_accounts_line(summary: pd.DataFrame, pop: pd.DataFrame) -> str:
     """One sentence stating what share of the category these accounts carry."""
     if summary.empty:
         return ""
-    total = float(pd.to_numeric(pop.get("total_acr"), errors="coerce").sum())
+    total = float(kpi.account_acr(pop).sum())
     shown = float(summary["acr"].sum())
     share = f" — {shown / total:.0%} of the category's ACR" if total else ""
     return (f"These {fmt_int(len(summary))} accounts carry "
             f"{fmt_currency(shown)}{share}.")
+
+
+def period_population(pop: pd.DataFrame, start, end,
+                      column: str = "created_date") -> pd.DataFrame:
+    """The accounts a reporting period covers — **every** wave of each one.
+
+    An account is in the period when any of its waves was nominated
+    (**Nom. Created Date**) inside it; all of its waves then come with it, so
+    the rules that read an account across its waves (the latest wave, its
+    state, its stage) see the whole account.  Cutting waves first and then
+    asking for the latest wave is what used to make an account look Completed
+    when its newest, still-open wave fell outside the window.
+
+    The dated headline metrics (New Engagements, Migrations Completed, Hosts
+    Migrated, ACR Claimed) and the trends do **not** read this: like the
+    dashboards, they take the whole population and window it by their own date.
+    """
+    if pop.empty or (start is None and end is None) or column not in pop.columns:
+        return pop
+    keys = pop["tpid_key"] if "tpid_key" in pop.columns else segments.tpid_key(pop)
+    hit = set(keys[kpi.in_window(pop[column], start, end).to_numpy()])
+    return pop[keys.isin(hit).to_numpy()]
+
+
+@dataclass(frozen=True)
+class ReportView:
+    """One reporting period the HTML report can be switched to."""
+    key: str
+    label: str
+    start: object
+    end: object
+
+
+def report_views(as_of, date_window=None, period_label: str = ""
+                 ) -> tuple[list[ReportView], str]:
+    """The periods the HTML report carries, and which one it opens on.
+
+    Always **Current FY** (the whole fiscal year the as-of date is in) and
+    **All reporting period** (July 2025 — the start of FY26, where the EOS
+    programme begins — to the as-of date).  A period chosen on the Reports page
+    that is neither is carried as a third view, and the report opens on the
+    view matching that choice ("All reporting period" when none was made).
+    """
+    as_of = pd.Timestamp(as_of).normalize()
+    span = metrics.date_preset_range(as_of, "This FY", FY_START_MONTH)
+    fy_start, fy_end = pd.Timestamp(span[0]), pd.Timestamp(span[1])
+    fy_name = metrics.fiscal_year_label(fy_start, FY_START_MONTH)
+    first = summary_native_start()
+    views = [
+        ReportView("fy", f"Current FY ({fy_name}) · {fy_start:%b %Y} – "
+                         f"{fy_end:%b %Y}", fy_start, fy_end),
+        ReportView("all", f"All reporting period · {first:%b %Y} – {as_of:%b %Y}",
+                   first, as_of),
+    ]
+    start, end = date_window or (None, None)
+    if start is None and end is None:
+        return views, "all"
+    for view in views:
+        if (pd.Timestamp(start).date() == pd.Timestamp(view.start).date()
+                and pd.Timestamp(end).date() == pd.Timestamp(view.end).date()):
+            return views, view.key
+    views.append(ReportView("sel", f"Selected · {period_label or ''}".rstrip(" ·"),
+                            start, end))
+    return views, "sel"
 
 
 def this_fiscal_year(as_of, start, end) -> tuple[tuple | None, str]:
@@ -823,7 +884,7 @@ NO_GENERATION_BLOCK = "Generation not stated"
 
 
 # --------------------------------------------------------------------------- #
-# Programme summary — the sentence that closes the EOS report
+# Programme summary — the sentence that opens the EOS report
 # --------------------------------------------------------------------------- #
 SUMMARY_TITLE = "Programme summary"
 SUMMARY_NATIVE_LABEL = "Include Azure Native customers"
@@ -839,7 +900,7 @@ class SummaryTotals:
 
 @dataclass(frozen=True)
 class ProgrammeSummary:
-    """The EOS report's closing summary, both ways round."""
+    """The EOS report's opening summary, both ways round."""
     eos: SummaryTotals = SummaryTotals()
     #: The same totals with the AVS → Azure Native customers added in.
     with_native: SummaryTotals = SummaryTotals()
@@ -858,10 +919,19 @@ def summary_native_start() -> pd.Timestamp:
     return metrics.named_fiscal_year_start(EOS_MATRIX_START_FY, FY_START_MONTH)
 
 
-def _totals(rows: pd.DataFrame) -> SummaryTotals:
-    if rows.empty:
+def _totals(*populations: pd.DataFrame) -> SummaryTotals:
+    """Each customer's phase, read within its own population, then merged.
+
+    A customer in both motions keeps its EOS phase: reading its EOS and its
+    From AVS waves as one account would let an on-track native wave turn a
+    completed EOS migration back into "in progress".
+    """
+    phases = [kpi.account_phase(rows) for rows in populations if not rows.empty]
+    if not phases:
         return SummaryTotals()
-    phase = kpi.account_phase(rows)
+    phase = phases[0]
+    for more in phases[1:]:
+        phase = pd.concat([phase, more[~more.index.isin(phase.index)]])
     return SummaryTotals(customers=int(len(phase)),
                          completed=int(phase.eq(kpi.PHASE_COMPLETED).sum()),
                          in_progress=int(phase.eq(kpi.PHASE_IN_PROGRESS).sum()),
@@ -879,9 +949,8 @@ def programme_summary(eos: pd.DataFrame, native: pd.DataFrame) -> ProgrammeSumma
     native = kpi.nominated_since(native, summary_native_start())
     gens = (eos.drop_duplicates("tpid_key")["generation"]
             if not eos.empty else pd.Series(dtype="object"))
-    both = pd.concat([eos, native], ignore_index=True) if not native.empty else eos
     return ProgrammeSummary(
-        eos=_totals(eos), with_native=_totals(both),
+        eos=_totals(eos), with_native=_totals(eos, native),
         gen1=int(gens.eq(segments.GEN_1).sum()),
         gen2=int(gens.eq(segments.GEN_2).sum()),
         no_generation=int((~gens.isin((segments.GEN_1, segments.GEN_2))).sum()),
@@ -1285,10 +1354,14 @@ def _report_section(ctx, fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
     accounts, the pipeline, the offering cut, the regional cut, the generations,
     the insights, and the accounts that have stopped last.
     """
-    pop = segments.population(fact, spec.category)
-    # The forward-looking tiles, the programme matrix and the fiscal-year
-    # comparison all read the whole programme rather than the window.
-    ahead = None if all_time is None else segments.population(all_time, spec.category)
+    # The whole category, filters applied but never the period: the dated
+    # headline metrics and the trends window it by their own dates (as the
+    # dashboards do), and the matrix, the fiscal-year view, the top accounts and
+    # the programme summary read it whole.  Everything else reads the accounts
+    # nominated in the period, each with all of its waves.
+    rows = fact if all_time is None else all_time
+    whole = segments.population(rows, spec.category)
+    pop = period_population(whole, start, end)
     links = [("View drill-down →", f"dd_{spec.key}")] if with_drilldown else []
     links.append(("Contents", "toc"))
 
@@ -1299,7 +1372,7 @@ def _report_section(ctx, fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
              kit.spacer(0.1),
              _population_line(spec, pop, ss),
              kit.spacer(0.3)]
-    if pop.empty:
+    if whole.empty:
         story.append(Paragraph("No nominations fall into this report for the "
                                "current filters.", ss["Body2"]))
         note = tracker_scope_note(ctx) if spec.key == "eos" else ""
@@ -1319,30 +1392,40 @@ def _report_section(ctx, fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
         story.append(kit.page_break())
         return story
 
-    waves = kpi.wave_index(pop)
-    # The whole-dataset population, for everything a reporting period must not
-    # narrow; it falls back to the report's own population when the caller has
-    # no period to drop.
-    whole = pop if ahead is None else ahead
-    whole_waves = waves if whole is pop else kpi.wave_index(whole)
+    whole_waves = kpi.wave_index(whole)
+    waves = whole_waves if pop is whole else kpi.wave_index(pop)
 
-    blocks = [_summary_block(spec, pop, waves, start, end, ss, period_label,
-                             ahead, fy_window, fy_label)]
+    blocks = []
+    # The EOS report opens on the programme in one sentence.
+    if spec.key == "eos":
+        native = segments.population(rows, segments.CAT_AVS_NATIVE)
+        blocks.append(_programme_summary_block(programme_summary(whole, native), ss))
+    blocks.append(_summary_block(spec, whole, whole_waves, start, end, ss,
+                                 period_label, whole, fy_window, fy_label))
     if spec.key == "eos":
         blocks.append(_matrix_block(ctx, whole, ss))
-    blocks.append(_trend_block(pop, waves, start, end, spec, ss))
+    blocks.append(_trend_block(whole, whole_waves, start, end, spec, ss))
     blocks.append(_fiscal_year_block(whole, whole_waves, spec, ss))
     if shows_top_accounts(spec):
         blocks.append(_top_accounts_block(whole, whole_waves, ss))
-    blocks.append(_pipeline_block(pop, waves, ss))
-    if spec.key == "native":
-        blocks.append(_offering_block(pop, ss))
-    blocks.append(_regional_block(waves, ss))
+    if pop.empty:
+        blocks.append([Paragraph("No account in this report was nominated in the "
+                                 "reporting period, so the pipeline, regional and "
+                                 "account sections below have nothing to show.",
+                                 ss["Body2"])])
+    else:
+        blocks.append(_pipeline_block(pop, waves, ss))
+        if spec.key == "native":
+            blocks.append(_offering_block(pop, ss))
+        blocks.append(_regional_block(waves, ss))
     if spec.breakdown:
-        blocks.append(_generation_block(fact, spec, start, end, ss))
+        blocks.append(_generation_block(rows, spec, start, end, ss))
     for block in blocks:
         if block:
             story += [*block, kit.spacer(0.35)]
+    if pop.empty:
+        story.append(kit.page_break())
+        return story
     if sections.insights:
         story += [Paragraph("Insights", ss["H2"]),
                   Paragraph("Derived from this report's own population by "
@@ -1354,33 +1437,24 @@ def _report_section(ctx, fact: pd.DataFrame, spec: ReportSpec, ss, start, end,
     # Last, as in the HTML report: the accounts none of the above counts.
     if sections.blocked:
         story += [*_blocked_block(pop, waves, ss), kit.spacer(0.35)]
-    # The EOS report closes on the programme in one sentence.
-    if spec.key == "eos":
-        native = segments.population(fact if all_time is None else all_time,
-                                     segments.CAT_AVS_NATIVE)
-        story += _programme_summary_block(programme_summary(whole, native),
-                                          sections.summary_native, ss)
     story.append(kit.page_break())
     return story
 
 
-def _programme_summary_block(summary: ProgrammeSummary, include_native: bool,
-                             ss) -> list:
-    """The closing summary, printed the way the Reports page chose.  Paper has
-    no checkbox, so the other reading is given underneath in one line."""
-    other = summary.totals(not include_native)
-    other_line = (("Without" if include_native else "With")
-                  + " the Azure Native customers: " + summary_sentence(other)
-                  .replace("To date, ", "", 1))
+def _programme_summary_block(summary: ProgrammeSummary, ss) -> list:
+    """The opening summary, EOS customers only.  Paper has no checkbox, so the
+    reading with the Azure Native customers added is given underneath."""
+    other_line = ("With the Azure Native customers added: "
+                  + summary_sentence(summary.totals(True)).replace("To date, ", "", 1))
     return [KeepTogether([
         Paragraph(SUMMARY_TITLE, ss["H2"]),
-        Paragraph(_esc(summary_sentence(summary.totals(include_native))), ss["Body2"]),
+        Paragraph(_esc(summary_sentence(summary.totals(False))), ss["Body2"]),
         kit.spacer(0.1),
         *[Paragraph(_esc(line), ss["Body2"]) for line in summary_lines(summary)],
         kit.spacer(0.1),
         Paragraph(_esc(other_line), ss["Muted"]),
-        Paragraph(_esc(summary_note(include_native)), ss["Muted"]),
-    ]), kit.spacer(0.35)]
+        Paragraph(_esc(summary_note(False)), ss["Muted"]),
+    ])]
 
 
 # --------------------------------------------------------------------------- #

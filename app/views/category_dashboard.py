@@ -105,6 +105,8 @@ def render(category: str) -> None:
     # One wave sort for the whole page: every metric below reuses it.
     waves = kpi.wave_index(fact)
     unit_label = _unit(category)
+    if category == segments.CAT_EOS_ALL:
+        _programme_summary(ctx, fact, key)
     _executive_summary(ctx, fact, waves, start, end, key, unit_label, category,
                        shown, preset)
     if category == segments.CAT_EOS_ALL:
@@ -118,12 +120,10 @@ def render(category: str) -> None:
         _regional_breakdown(fact, waves, key)
     _blocked_accounts(fact, waves, key)
     _detailed_data(fact, waves, start, end, key, shown)
-    if category == segments.CAT_EOS_ALL:
-        _programme_summary(ctx, fact, key)
 
 
 def _programme_summary(ctx, fact: pd.DataFrame, key: str) -> None:
-    """The sentence that closes the EOS report, over the whole programme."""
+    """The sentence that opens the EOS report, over the whole programme."""
     section(exporter.SUMMARY_TITLE, help=glossary.PROGRAMME_SUMMARY)
     summary = exporter.programme_summary(
         fact, segments.population(ctx.fact, segments.CAT_AVS_NATIVE))
@@ -392,10 +392,11 @@ def _top_accounts(fact: pd.DataFrame, waves: kpi.WaveIndex, key: str) -> None:
     if summary.empty:
         components.empty_state("No account in this category carries any ACR.")
         return
-    total = float(pd.to_numeric(fact.get("total_acr"), errors="coerce").sum())
+    total = float(kpi.account_acr(fact).sum())
     shown = float(summary["acr"].sum())
     share = f" — **{shown / total:.0%}** of the category's ACR" if total else ""
-    st.caption(f"Total ACR summed across every wave of each account. These "
+    st.caption(f"Total ACR summed across every wave of each account, blocked "
+               f"waves left out. These "
                f"**{fmt_int(len(summary))}** accounts carry "
                f"**{fmt_currency(shown)}**{share}. Click a bar or a table row "
                f"to open the account behind it.")
