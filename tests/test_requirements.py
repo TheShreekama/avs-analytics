@@ -3196,3 +3196,49 @@ def test_an_empty_eos_report_says_when_the_sheet_matched_nothing():
     assert "No nominations fall into" in html and esc(note) in html
     # …while the tracker section still reports the sheet itself.
     assert "Every tracked account" in html
+
+
+# --------------------------------------------------------------------------- #
+# Debug
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("value,expected", [
+    ("13 May 26", "2026-05-13"), ("13.05.26", "2026-05-13"), ("May 13 26", "2026-05-13"),
+    ("13th May, 2026", "2026-05-13"),
+])
+def test_two_digit_years_are_still_read(value, expected):
+    assert str(cleaning.parse_date_series(pd.Series([value]))[0].date()) == expected
+
+
+def test_the_debug_trace_explains_an_account_end_to_end():
+    from app.core import diagnostics
+    ctx = _sample_with_sheet()
+    funnel = diagnostics.eos_funnel(ctx).set_index("Step")
+    assert funnel.loc["EOS Migrations (All) — accounts", "Accounts"] == 5
+    assert funnel.loc["…whose TPID is in the FDO dataset", "Accounts"] == 5
+    traced = diagnostics.trace(ctx, "672,112")              # matched as digits
+    text = " ".join(traced["verdicts"])
+    assert "Generation used: Gen-1 (decided by EOS tracker)" in text
+    assert "Account state: On-Track (from the tracking sheet)" in text
+    # Every date shown as written beside what it was read as.
+    assert "05-18-2026 → 18 May 2026" in set(
+        traced["waves"]["Nom. Created Date (written → read)"])
+    assert "NOT in the FDO dataset" in " ".join(
+        diagnostics.trace(ctx, "88888888")["verdicts"])
+    summary = diagnostics.summary_text(ctx, traced=traced)
+    assert "== EOS FUNNEL ==" in summary and "== TRACE 672112 ==" in summary
+
+
+def test_the_trace_names_an_account_the_reporting_floor_dropped(raw_frame):
+    from app.core import diagnostics
+    from app.state import DataContext
+    old = raw_frame.copy()
+    old.loc[old["TPID"] == "500", ["Nom. Approval Date", "Nom. Created Date"]] = "01-05-2023"
+    mp = mapping.resolve_mapping(list(old.columns))
+    built, report = cleaning.build_fact_frame(old, mp, pd.Timestamp("2026-09-01"))
+    built, report["scope"] = cleaning.apply_reporting_floor(built, 2025)
+    assert report["scope"]["excluded_tpids"] == ["500"]
+    ctx = DataContext(filename="x.csv", signature="s", raw=old, mapping=mp, fact=built,
+                      customer=pd.DataFrame(), report=report, as_of=pd.Timestamp("2026-09-01"),
+                      con=None)
+    assert "before the FY25 reporting floor" in " ".join(
+        diagnostics.trace(ctx, "500")["verdicts"])

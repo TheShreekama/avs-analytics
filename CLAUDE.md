@@ -262,10 +262,22 @@ under Streamlit's AppTest in both counting modes.
   (`state.tracker_date_order`, session key; folded into the fact cache key, never into
   `ctx.tracker_signature`, which the upload page compares). `report["date_checks"]` holds
   each date column's raw→parsed sample and unparsed values; Data & Upload renders them.
-- **`parse_date_series` never raises on a cell**: month-year ("Feb-26") is the 1st; a value
-  with no 4-digit year that no format matches ("1/2") stays blank rather than getting this
-  year; anything outside 1900-2200 is NaT (`cleaning._bounded` — "0001-02-03" used to crash
-  the whole upload with a pandas AssertionError).
+- **`parse_date_series` never raises on a cell**: month-year ("Feb-26") is the 1st; the
+  generic fallback only takes values naming day, month **and** year (a 4-digit year, or
+  three parts — "13 May 26"), so "1/2" stays blank rather than getting this year; anything
+  outside 1900-2200 is NaT (`cleaning._bounded` — "0001-02-03" used to crash the whole
+  upload with a pandas AssertionError). Two-digit-year formats are listed explicitly; a
+  change here must parse everything the previous version did (compare old vs new on a
+  format matrix before committing).
+- **Debug page** (`views/debug.py` over `core/diagnostics.py`, Data → Debug): built for a
+  user who cannot share the file — one copyable/photographable text block
+  (`diagnostics.summary_text`): what is loaded (a loud warning when it is the **bundled
+  sample**: uploads live only for the browser session, so a refresh/restart silently
+  reverts), the EOS funnel from file to report, every key FDO column with dates written →
+  read, the sheet's mapping/dates/unrecognised values, and a per-TPID `trace` giving each
+  decision with its reason. `fact["raw_row"]` (position in the combined upload) is what lets
+  a trace show a cell as written; `report["scope"]["excluded_tpids"]` names accounts the
+  FY25 floor dropped. The sidebar also warns whenever the sample is active.
 - **EOS Programme Tracker** (`eos_programme.build` → `Programme`): the **sheet itself**, one
   row per TPID including ones the FDO lacks (`in_fdo`), with name/WW Region/PM/ACR (non
   From-AVS waves) looked up by TPID. Tiles, by status × gen, by state × gen, status × state,
