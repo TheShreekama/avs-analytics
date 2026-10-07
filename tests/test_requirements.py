@@ -3270,3 +3270,16 @@ def test_the_verdict_names_why_eos_is_empty():
     assert "RESULT: 0 EOS accounts" in text
     cats = diagnostics.categories(ctx).set_index("Report")
     assert cats.loc["All AVS Migrations", "Accounts (all time)"] > 0
+
+
+def test_the_verdict_says_when_no_report_can_place_a_row():
+    from app import state as state_mod
+    from app.core import diagnostics
+    data = (state_mod.SAMPLE_DATA.read_bytes().replace(b"AVS", b"XYZ")
+            .replace(b"EGS", b"ABC"))
+    ctx = state_mod.build_dataset([("export.csv", data)], tracker_dayfirst=None)
+    text = " ".join(diagnostics.verdicts(ctx))
+    assert "NO REPORT HAS ANY ACCOUNT" in text
+    window = (pd.Timestamp("2020-01-01").date(), pd.Timestamp("2020-12-31").date())
+    assert "NOTHING FALLS IN THE REPORTING PERIOD" in " ".join(
+        diagnostics.verdicts(_sample_with_sheet(), period=window))

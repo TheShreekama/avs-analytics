@@ -164,8 +164,26 @@ def _this_fy(ctx) -> tuple:
     return metrics.date_preset_range(ctx.as_of, "This FY", FY_START_MONTH)[:2]
 
 
-def verdicts(ctx, last_failure: dict | None = None) -> list[str]:
-    """Why the EOS report shows what it shows, in plain sentences, worst first."""
+def period_line(ctx, period: tuple | None) -> str:
+    """How much of the data the sidebar's reporting period lets through."""
+    fact = ctx.fact
+    if not period or period[0] is None:
+        return "All time — no date filter"
+    start, end = pd.Timestamp(period[0]), pd.Timestamp(period[1])
+    created = pd.to_datetime(fact["created_date"], errors="coerce") \
+        if not fact.empty else pd.Series(dtype="datetime64[ns]")
+    inside = created.between(start, end)
+    accounts = fact.loc[inside, "tpid_key"].nunique() if not fact.empty else 0
+    span = (f"{created.min():%d %b %Y} – {created.max():%d %b %Y}"
+            if created.notna().any() else "none readable")
+    return (f"{start:%d %b %Y} – {end:%d %b %Y}: {int(inside.sum()):,} of "
+            f"{len(fact):,} waves ({accounts:,} accounts) have a Nom. Created Date "
+            f"inside it. Your Nom. Created Dates run {span}.")
+
+
+def verdicts(ctx, last_failure: dict | None = None,
+             period: tuple | None = None) -> list[str]:
+    """Why the reports show what they show, in plain sentences, worst first."""
     out: list[str] = []
     fact = ctx.fact
     if ctx.is_sample:
@@ -194,6 +212,24 @@ def verdicts(ctx, last_failure: dict | None = None) -> list[str]:
     if fact.empty:
         out.append("No usable FDO rows are loaded.")
         return out
+    # Every report: a page is empty either because no row belongs to it, or
+    # because none of its rows falls in the reporting period.
+    cats = categories(ctx).set_index("Report")["Accounts (all time)"]
+    if cats.sum() == 0:
+        top = value_report(ctx, "migration_path", 5)
+        shown = "; ".join(f"'{v}' ({n})" for v, n in top.itertuples(index=False))
+        out.append("NO REPORT HAS ANY ACCOUNT: a row reaches All AVS Migrations when "
+                   "its Primary Migration Path / Factory Offering names AVS ('to AVS', "
+                   "'AVS Migration' …) and AVS → Azure Native when the path contains "
+                   f"'From AVS'. Your most common paths: {shown}.")
+    if period and period[0] is not None and not fact.empty:
+        start, end = pd.Timestamp(period[0]), pd.Timestamp(period[1])
+        created = pd.to_datetime(fact["created_date"], errors="coerce")
+        if not created.between(start, end).any():
+            out.append(f"NOTHING FALLS IN THE REPORTING PERIOD: the sidebar is set to "
+                       f"{start:%d %b %Y} – {end:%d %b %Y} and no row has a Nom. Created "
+                       f"Date inside it, so every dated page is empty. Set the sidebar's "
+                       f"Date range to All time.")
     tagged = int(segments.generation_by_tpid(fact)
                  .isin((segments.GEN_1, segments.GEN_2)).sum())
     path = int(fact.groupby("tpid_key")["is_av36_eos"].any().sum())
@@ -501,12 +537,14 @@ def example_tpids(ctx, n: int = 8) -> list[str]:
 def summary_text(ctx, funnel: pd.DataFrame | None = None,
                  columns: pd.DataFrame | None = None,
                  traced: dict | None = None,
-                 last_failure: dict | None = None) -> str:
+                 last_failure: dict | None = None,
+                 period: tuple | None = None) -> str:
     """The whole diagnosis as plain text, short enough for one screen."""
     lines = ["== VERDICT =="]
-    lines += [f"* {v}" for v in verdicts(ctx, last_failure)]
+    lines += [f"* {v}" for v in verdicts(ctx, last_failure, period)]
     lines.append("== LOADED ==")
     lines += [f"{k}: {val}" for k, val in loaded(ctx)]
+    lines.append(f"Sidebar reporting period: {period_line(ctx, period)}")
     files = files_report(ctx)
     if not files.empty:
         lines.append("== FDO FILES (read / empty skipped / kept / accounts) ==")

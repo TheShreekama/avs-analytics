@@ -283,6 +283,12 @@ under Streamlit's AppTest in both counting modes.
   failed upload — `state.LAST_FAILURE_KEY`, set by `data_upload._failure_panel` — no EOS
   marker in the FDO file, no/unmatched sheet, period vs all-time); it also lists every
   report's account counts and the top Primary Migration Path / Factory Offering values.
+  Two verdicts cover "every page is empty": no report can place any row (paths/offerings
+  name neither AVS nor From AVS), and the sidebar period (`components.global_range`,
+  passed in by the page) holding none of the rows' Nom. Created Dates
+  (`diagnostics.period_line`). `state.set_context` drops any custom date range when a
+  different dataset loads — a range picked inside the old file's span can exclude every
+  row of the new one.
 - **Empty rows are skipped** (`cleaning.build_fact_frame` step 0): a row whose every mapped
   identity column (`_IDENTITY_KEYS`: TPID, name, task, account, wave, offering, path,
   nomination/migration status) is blank is dropped and counted in `report["empty_rows"]`

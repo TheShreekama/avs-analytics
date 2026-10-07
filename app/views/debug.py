@@ -11,6 +11,7 @@ import streamlit as st
 
 from app import state
 from app.core import diagnostics as dg
+from app.ui import components
 from app.ui.theme import banner, page_header, section
 
 
@@ -40,12 +41,17 @@ def render() -> None:
     traced = dg.trace(ctx, tpid) if tpid else None
 
     failure = st.session_state.get(state.LAST_FAILURE_KEY)
+    period = components.global_range(ctx)
     st.markdown("### What is wrong")
-    for line in dg.verdicts(ctx, failure):
+    for line in dg.verdicts(ctx, failure, period):
         st.markdown(f"- {line}")
+    st.markdown("**Every report's accounts**")
+    st.dataframe(dg.categories(ctx), width="stretch", hide_index=True)
+    st.caption("Sidebar reporting period: " + dg.period_line(ctx, period))
 
     section("1 · The whole diagnosis (copy or photograph this)")
-    st.code(dg.summary_text(ctx, funnel, columns, traced, failure), language=None,
+    st.code(dg.summary_text(ctx, funnel, columns, traced, failure, period),
+            language=None,
             wrap_lines=True)
 
     section("2 · What is loaded")
@@ -56,9 +62,6 @@ def render() -> None:
     if not files.empty:
         st.markdown("**FDO files**")
         st.dataframe(files, width="stretch", hide_index=True)
-    st.markdown("**Every report's accounts**")
-    st.dataframe(dg.categories(ctx), width="stretch", hide_index=True)
-
     section("3 · EOS — from the file to the report")
     st.dataframe(funnel, width="stretch", hide_index=True)
 
