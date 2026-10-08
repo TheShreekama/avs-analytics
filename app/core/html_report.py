@@ -102,6 +102,8 @@ _COLUMN_LABELS.update({
     "reported_end_date": "End date used", "end_date_source": "End date read from",
     "matrix_measure": "Measure", "matrix_month": "Month",
     "summary_line": "Summary line", "summary_phase": "Where it stands",
+    "fdo_status": "Migration Status (FDO export)",
+    "summary_blocked": "Blocked wave (FDO Current State)",
     "matrix_date": "Date counted", "date_source": "Date read from",
 })
 
@@ -271,15 +273,23 @@ def _kpi_tiles(tiles: list["_Tile"], group: str = "") -> str:
     return f'<div class="kpis">{"".join(cells)}</div>'
 
 
+#: Free-text columns that wrap rather than stretch the table to one long line.
+_WRAP_COLUMNS = {"Status Summary"}
+
+
 def _table(frame: pd.DataFrame, table_id: str, *, numeric: set[str] | None = None,
            row_head: bool = False, highlight: str = "",
            buckets: pd.Series | None = None, sticky_first: bool = False,
-           cell_drill: str = "") -> str:
+           cell_drill: str = "", row_attrs: list[str] | None = None,
+           lean_toggle: str = "", actions: bool = True) -> str:
     """A DataFrame as a sortable table.  Values are already display strings.
 
     ``buckets`` tags each row with the chart point it belongs to, so a click on
     the chart above can show just those rows.  It is computed in Python and
     written into the markup, so the browser only ever compares strings.
+
+    Every table carries **Copy** and **CSV** buttons (:func:`_table_tools`) —
+    above it, or, with ``actions=False``, in the search row its caller writes.
     """
     if frame.empty:
         return '<p class="empty">Nothing to show.</p>'
@@ -287,18 +297,23 @@ def _table(frame: pd.DataFrame, table_id: str, *, numeric: set[str] | None = Non
     columns = list(frame.columns)
     tags = ([f' data-bucket="{esc(b)}"' for b in buckets] if buckets is not None
             else [""] * len(frame))
+    if row_attrs is not None:
+        tags = [t + (row_attrs[i] if i < len(row_attrs) else "")
+                for i, t in enumerate(tags)]
 
-    def classes(column: str, first: bool) -> str:
+    def classes(column: str, first: bool, cell: bool = True) -> str:
         bits = []
         if column in numeric:
             bits.append("num")
+        if cell and str(column) in _WRAP_COLUMNS:
+            bits.append("wrap")
         if highlight and highlight in str(column):
             bits.append("fytot")
         if first and row_head:
             bits.append("rowhead")
         return f' class="{" ".join(bits)}"' if bits else ""
 
-    head = "".join(f"<th{classes(c, i == 0)}>{esc(c)}</th>"
+    head = "".join(f"<th{classes(c, i == 0, cell=False)}>{esc(c)}</th>"
                    for i, c in enumerate(columns))
     rows = []
     for position, (_, record) in enumerate(frame.iterrows()):
@@ -319,9 +334,26 @@ def _table(frame: pd.DataFrame, table_id: str, *, numeric: set[str] | None = Non
         rows.append(f"<tr{tags[position]}>{''.join(cells)}</tr>")
     css = "data sticky-first" if sticky_first else "data"
     drill = f' data-cell-drill="{cell_drill}"' if cell_drill else ""
-    return (f'<div class="table-wrap"><table class="{css}" id="{table_id}"{drill}>'
+    lean = f' data-lean-toggle="{lean_toggle}"' if lean_toggle else ""
+    return ((_table_tools(table_id) if actions else "")
+            + f'<div class="table-wrap"><table class="{css}" id="{table_id}"{drill}{lean}>'
             f"<thead><tr>{head}</tr></thead>"
             f"<tbody>{''.join(rows)}</tbody></table></div>")
+
+
+def _table_tools(table_id: str) -> str:
+    """Copy and CSV buttons for one table.
+
+    Both act on the rows **as shown** — a search, a chart selection or a sort
+    carries through — and both run in the report's own script with nothing to
+    fetch: Copy puts the table on the clipboard as tab-separated text (and as
+    HTML, so it pastes into Excel or an email as a table), CSV saves a file.
+    """
+    return (f'<div class="tbl-actions">'
+            f'<button class="btn tbl-btn" type="button" data-copy-table="{table_id}" '
+            f'title="Copy the rows shown, to paste into Excel or an email">Copy</button>'
+            f'<button class="btn tbl-btn" type="button" data-csv-table="{table_id}" '
+            f'title="Download the rows shown as a CSV file">CSV</button></div>')
 
 
 def _searchable_table(frame: pd.DataFrame, table_id: str, **kw) -> str:
@@ -333,8 +365,8 @@ def _searchable_table(frame: pd.DataFrame, table_id: str, **kw) -> str:
              f'placeholder="Filter these {fmt_int(len(frame))} rows…" '
              f'aria-label="Filter table">'
              f'<span class="count" data-count-for="{table_id}">'
-             f'{fmt_int(len(frame))} rows</span></div>')
-    return tools + _table(frame, table_id, **kw)
+             f'{fmt_int(len(frame))} rows</span>{_table_tools(table_id)}</div>')
+    return tools + _table(frame, table_id, actions=False, **kw)
 
 
 def _accordion(title: str, body: str, badge: str = "", open_: bool = False,
@@ -351,12 +383,15 @@ def _accounts_panel(title: str, rows: pd.DataFrame, table_id: str, *,
                     buckets=None, limit: int = 800, open_: bool = False,
                     columns: list[str] | None = None,
                     hint: str = "Click a point on the chart above to filter these rows.",
-                    noun: str = "accounts") -> str:
+                    noun: str = "accounts", row_attrs: list[str] | None = None,
+                    lean_toggle: str = "") -> str:
     """The accounts behind a chart, in an accordion the chart can filter.
 
     ``buckets`` is a callable taking the (truncated) record frame and returning
     one bucket per row, matching what a click on the chart reports.  The rows
     are written once and filtered in the browser, so a click costs nothing.
+    ``row_attrs`` adds markup to each row (``data-left-out``), and
+    ``lean_toggle`` names the checkbox that, unticked, hides those rows.
     """
     if rows is None or getattr(rows, "empty", True):
         return _accordion(title, '<p class="empty">No accounts behind this.</p>',
@@ -384,11 +419,14 @@ def _accounts_panel(title: str, rows: pd.DataFrame, table_id: str, *,
              f'{fmt_int(len(shown))} rows</span>'
              + (f'<button class="btn" data-drill-clear="{table_id}" hidden '
                 f'type="button">Clear selection</button>' if tags is not None else "")
+             + _table_tools(table_id)
              + (f'<span class="drill-note" data-drill-note="{table_id}" '
                 f'data-hint="{esc(hint)}">{esc(hint)}</span>'
                 if tags is not None else "")
              + "</div>")
-    body = note + tools + _table(shown, table_id, buckets=tags)
+    body = note + tools + _table(shown, table_id, buckets=tags,
+                                 row_attrs=(row_attrs or [])[:len(keep)] or None,
+                                 lean_toggle=lean_toggle, actions=False)
     return _accordion(title, body, badge=f"{fmt_int(total)} {noun}",
                       open_=open_, anchor=f"acc-{table_id}")
 
@@ -410,8 +448,8 @@ def _accounts_body(rows: pd.DataFrame, table_id: str, limit: int = 800
              f'placeholder="Search these {fmt_int(len(shown))} rows…" '
              f'aria-label="Search accounts">'
              f'<span class="count" data-count-for="{table_id}">'
-             f'{fmt_int(len(shown))} rows</span></div>')
-    return note + tools + _table(shown, table_id), total
+             f'{fmt_int(len(shown))} rows</span>{_table_tools(table_id)}</div>')
+    return note + tools + _table(shown, table_id, actions=False), total
 
 
 def _tile_accounts(group: str, panes: list[tuple[str, str, pd.DataFrame]]) -> str:
@@ -1221,11 +1259,12 @@ def _report(doc: _Builder, ctx, fact: pd.DataFrame, all_time: pd.DataFrame, spec
 
 
 def _programme_summary(doc: _Builder, summary) -> None:
-    """The sentence that opens the EOS report, with its own checkbox.
+    """The sentence that opens the EOS report, with its own two checkboxes.
 
-    Both readings are written out and a CSS sibling rule shows the one the box
-    asks for — no script, so it works in a file opened offline.  The box is the
-    reader's: it starts unticked (EOS customers only).
+    Every reading — EOS customers or all of them, blocked accounts in or out —
+    is written out, and CSS sibling rules show the one the boxes ask for: no
+    script, so it works in a file opened offline.  The boxes are the reader's:
+    Azure Native starts unticked, blocked accounts ticked.
     """
     panel = _slug("sum-acc")
     rows = summary.rows
@@ -1239,35 +1278,53 @@ def _programme_summary(doc: _Builder, summary) -> None:
                 f'data-pick-label="{esc(exporter.summary_bucket_label(bucket))}">'
                 f"{fmt_int(value)}</a>")
 
-    def sentence(flag: bool, cls: str) -> str:
-        return (f'<p class="sum-text {cls}">'
-                f"{exporter.summary_sentence(summary.totals(flag), num, 'all' if flag else 'eos')}"
-                "</p>")
+    readings = [(True, "sum-wb", ""), (False, "sum-nb", exporter.NO_BLOCKED)]
+    natives = [(False, "sum-eos", "eos"), (True, "sum-all", "all")]
+    body = []
+    for include_blocked, bcls, tag in readings:
+        reading = summary.reading(include_blocked)
+        for flag, ncls, scope in natives:
+            body.append(f'<p class="sum-text {ncls} {bcls}">'
+                        + exporter.summary_sentence(reading.totals(flag), num,
+                                                    scope + tag) + "</p>")
+    for include_blocked, bcls, tag in readings:
+        reading = summary.reading(include_blocked)
+        for flag, ncls, _scope in natives:
+            items = "".join(f"<li>{line}</li>" for line in
+                            exporter.summary_lines(reading, flag, num, tag))
+            body.append(f'<ul class="sum-lines {ncls} {bcls}">{items}</ul>')
+    for include_blocked, bcls, _tag in readings:
+        overlap = exporter.summary_overlap_note(summary.reading(include_blocked))
+        if overlap:
+            body.append(f'<p class="note sum-all {bcls}">{esc(overlap)}</p>')
+    body.append(f'<p class="sum-caveat sum-all">{esc(exporter.NATIVE_CAVEAT)}</p>')
+    for include_blocked, bcls, _tag in readings:
+        for flag, ncls, _scope in natives:
+            body.append(f'<p class="note sum-note {ncls} {bcls}">'
+                        f"{esc(exporter.summary_note(flag, include_blocked))}</p>")
 
-    def note(flag: bool, cls: str) -> str:
-        return f'<p class="note sum-note {cls}">{esc(exporter.summary_note(flag))}</p>'
-
-    def lines(flag: bool, cls: str) -> str:
-        items = "".join(f"<li>{line}</li>"
-                        for line in exporter.summary_lines(summary, flag, num))
-        return f'<ul class="sum-lines {cls}">{items}</ul>'
-
-    accounts = (_accounts_panel(
-        "Customers behind these numbers", rows, panel,
-        buckets=lambda r: list(r["_buckets"]), columns=exporter.SUMMARY_COLUMNS,
-        hint="Click a number above to see the customers behind it.",
-        noun="rows") if rows is not None and not rows.empty else "")
+    accounts = ""
+    if rows is not None and not rows.empty:
+        left_out = (list(rows["_left_out"]) if "_left_out" in rows.columns
+                    else [False] * len(rows))
+        accounts = _accounts_panel(
+            "Customers behind these numbers", rows, panel,
+            buckets=lambda r: list(r["_buckets"]), columns=exporter.SUMMARY_COLUMNS,
+            hint="Click a number above to see the customers behind it.",
+            noun="rows",
+            row_attrs=[" data-left-out" if flag else "" for flag in left_out],
+            lean_toggle="sum-blocked")
     doc.write(f'<div class="card prog-summary">'
               f'<h3 class="block">{esc(exporter.SUMMARY_TITLE)}</h3>'
-              f'<input type="checkbox" class="sum-toggle" id="sum-native">'
+              f'<input type="checkbox" class="sum-toggle" id="sum-native" '
+              f'data-resets="{panel}">'
               f'<label class="sum-label" for="sum-native">'
               f"{esc(exporter.SUMMARY_NATIVE_LABEL)}</label>"
-              + sentence(False, "sum-eos") + sentence(True, "sum-all")
-              + lines(False, "sum-eos") + lines(True, "sum-all")
-              + (f'<p class="note sum-all">{esc(exporter.summary_overlap_note(summary))}</p>'
-                 if exporter.summary_overlap_note(summary) else "")
-              + f'<p class="sum-caveat sum-all">{esc(exporter.NATIVE_CAVEAT)}</p>'
-              + note(False, "sum-eos") + note(True, "sum-all") + accounts + "</div>")
+              f'<input type="checkbox" class="sum-blk-toggle" id="sum-blocked" '
+              f'data-resets="{panel}" checked>'
+              f'<label class="sum-label" for="sum-blocked">'
+              f"{esc(exporter.SUMMARY_BLOCKED_LABEL)}</label>"
+              + "".join(body) + accounts + "</div>")
 
 
 # --------------------------------------------------------------------------- #
@@ -1286,13 +1343,15 @@ def _rows_panel(title: str, table: pd.DataFrame, table_id: str,
              f'aria-label="Search accounts">'
              f'<span class="count" data-count-for="{table_id}">'
              f'{fmt_int(len(table))} rows</span>'
+             + _table_tools(table_id)
              + (f'<button class="btn" data-drill-clear="{table_id}" hidden '
                 f'type="button">Clear selection</button>'
                 f'<span class="drill-note" data-drill-note="{table_id}">Click a '
                 "point on the chart above to filter these rows.</span>"
                 if tags is not None else "")
              + "</div>")
-    return _accordion(title, tools + _table(table, table_id, buckets=tags),
+    return _accordion(title, tools + _table(table, table_id, buckets=tags,
+                                            actions=False),
                       badge=f"{fmt_int(len(table))} accounts", open_=open_,
                       anchor=f"acc-{table_id}")
 

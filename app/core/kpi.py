@@ -1530,7 +1530,9 @@ def blocked_accounts(fact: pd.DataFrame, lasts: pd.DataFrame | None = None
 
     Returns ``(summary, rows)`` where summary is reason × accounts × ACR and
     rows are the accounts' latest waves carrying ``state`` (the derived account
-    state) and ``blocked_state`` (the reason).
+    state) and ``blocked_state`` (the reason).  Each row's ``status_summary``
+    is the **blocked wave's** (:func:`status_summary_by_account`), since that
+    is the wave whose summary says why it is blocked.
     """
     empty = pd.DataFrame(columns=["category", "count", "acr"])
     if lasts is None:
@@ -1543,6 +1545,11 @@ def blocked_accounts(fact: pd.DataFrame, lasts: pd.DataFrame | None = None
     if rows.empty:
         return empty, rows
     rows["blocked_state"] = blocked_state_label(rows)
+    # The sentence saying why: from the wave that is blocked, not merely the
+    # latest one (see :func:`status_summary_by_account`).
+    if "status_summary" in fact.columns:
+        rows["status_summary"] = rows["tpid_key"].map(
+            status_summary_by_account(fact)).to_numpy()
     rows["total_acr"] = rows["tpid_key"].map(held_up_acr(fact)).to_numpy()
     rows["_acr"] = pd.to_numeric(rows["total_acr"], errors="coerce")
     summary = (rows.groupby("blocked_state", as_index=False)
@@ -1784,6 +1791,12 @@ def drilldown_frame(records: pd.DataFrame,
 # --------------------------------------------------------------------------- #
 # Programme summary — where each account's migration has got to
 # --------------------------------------------------------------------------- #
+# The summary is read from the **FDO export's Migration Status and nothing
+# else**: not the tracking sheet's status (which elsewhere replaces the
+# export's), and not Current State.  "Blocked" is not a Migration Status, so it
+# is not a phase either; it is a separate question — does any wave read Blocked
+# in the export's Current State — which the summary's "Include blocked
+# accounts" box answers.
 PHASE_COMPLETED = "Completed"
 PHASE_IN_PROGRESS = "In progress"
 PHASE_PLANNING = "In planning"
@@ -1793,108 +1806,202 @@ PHASE_PLANNING = "In planning"
 #: "Executing Pre-requisites" and stage 3 "Finalize Scope" are planning.
 IN_PROGRESS_CODES = (4,)
 PLANNING_CODES = (1, 2, 3)
-#: The EOS tracking sheet's own statuses, by the same phases.  Its stages carry
-#: no number, so they are read by name: "Executing Migration" is the export's
-#: stage 4 and "Sign-off Pending" follows it (the move is done, the sign-off is
-#: not); "Planning & Prerequisites" and "Ready for Migration" come before it.
-IN_PROGRESS_SHEET_STATUSES = ("Executing Migration", "Sign-off Pending")
-PLANNING_SHEET_STATUSES = ("Kick-Off Awaited", "Planning & Prerequisites",
-                           "Ready for Migration")
 
 
-def wave_phase(df: pd.DataFrame) -> pd.Series:
-    """Per wave: In progress, In planning, or NA — read from its Migration Status.
+def fdo_migration_status(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Each wave's Migration Status **as the FDO export wrote it**: its number,
+    its wording and its class (``statuses.fdo_status_class``).
 
-    An export stage by its number, a tracking-sheet stage by its name.  Only a
-    wave still in flight has a phase; a completed, deferred, cancelled or
-    on-hold wave has none.
+    Read from ``fdo_migration_status`` — the export's own value, which
+    :func:`app.core.eos_tracker.apply_status` keeps before the tracking sheet
+    writes its status over it — so the sheet never answers here.  A frame
+    without that column (one built by hand) reads ``migration_status``, which
+    is then the export's.
     """
-    out = pd.Series(pd.NA, index=df.index, dtype="object")
+    for column in ("fdo_migration_status", "migration_status"):
+        if column in df.columns:
+            raw = df[column]
+            break
+    else:
+        code = df.get("migration_status_code", pd.Series(pd.NA, index=df.index))
+        label = df.get("migration_status_label", pd.Series(pd.NA, index=df.index))
+        raw = pd.Series([pd.NA if pd.isna(lb) else
+                         (lb if pd.isna(c) else f"{int(c)} - {lb}")
+                         for c, lb in zip(code, label)], index=df.index)
+    raw = raw.astype("string").str.strip()
+    raw = raw.mask(raw.eq("") | raw.str.casefold().eq("unknown"))
+    code = pd.to_numeric(raw.str.extract(r"^\s*(\d+)\s*-", expand=False),
+                         errors="coerce")
+    label = raw.str.replace(r"^\s*\d+\s*-\s*", "", regex=True).str.strip()
+    label = label.mask(label.eq("")).fillna(raw)
+    return code, label, statuses.fdo_status_class(code, label)
+
+
+def fdo_current_state(df: pd.DataFrame) -> pd.Series:
+    """Each wave's Current State as the FDO export wrote it (``fdo_current_state``,
+    kept before the tracking sheet replaces it), else ``current_state``."""
+    for column in ("fdo_current_state", "current_state"):
+        if column in df.columns:
+            return df[column].astype("string").str.strip()
+    return pd.Series(pd.NA, index=df.index, dtype="string")
+
+
+def is_fdo_blocked(df: pd.DataFrame) -> pd.Series:
+    """Waves whose **FDO export** Current State reads Blocked — "Blocked",
+    "Blocked - Customer", "Blocked - Account team", "Blocked - Partner / ISD"."""
     if df.empty:
-        return out
-    code = pd.to_numeric(df.get("migration_status_code"), errors="coerce")
-    label = df.get("migration_status_label",
-                   pd.Series(pd.NA, index=df.index)).astype("string")
-    sheet = (df["status_source"].eq(statuses.SOURCE_TRACKER).fillna(False)
-             if "status_source" in df.columns
-             else pd.Series(False, index=df.index)).astype(bool) & code.isna()
-    moving = statuses.is_class(df, statuses.IN_FLIGHT).to_numpy()
-    planning = (code.isin(PLANNING_CODES)
-                | (sheet & label.isin(PLANNING_SHEET_STATUSES).fillna(False)))
-    progress = (code.isin(IN_PROGRESS_CODES)
-                | (sheet & label.isin(IN_PROGRESS_SHEET_STATUSES).fillna(False)))
-    out[planning.to_numpy() & moving] = PHASE_PLANNING
-    out[progress.to_numpy() & moving] = PHASE_IN_PROGRESS
-    return out
+        return pd.Series(dtype=bool)
+    return (fdo_current_state(df).str.contains("blocked", case=False, na=False)
+            .fillna(False).astype(bool))
+
+
+def fdo_blocked_accounts(fact: pd.DataFrame) -> set:
+    """The ``tpid_key`` of every account with **any** wave the FDO export's
+    Current State calls Blocked (:func:`is_fdo_blocked`)."""
+    if fact.empty:
+        return set()
+    return set(_keys(fact)[is_fdo_blocked(fact).to_numpy()])
+
+
+def status_summary_by_account(fact: pd.DataFrame) -> pd.Series:
+    """The **Status Summary** that explains each account (indexed by ``tpid_key``).
+
+    Taken from the account's **blocked wave** — its latest wave whose FDO
+    Current State reads Blocked and that has a Status Summary written — because
+    that wave's summary is the one that says *why* it is blocked.  An account
+    with no such wave shows its latest written Status Summary.
+    """
+    if fact.empty or "status_summary" not in fact.columns:
+        return pd.Series(dtype="string")
+    ordered = _ordered(_narrow(fact, "status_summary"))
+    text = ordered["status_summary"].astype("string").str.strip()
+    text = text.mask(text.eq(""))
+    keys = ordered["tpid_key"]
+    latest = text.groupby(keys, sort=False).last()
+    blocked = (is_fdo_blocked(ordered) & text.notna()).to_numpy()
+    if not blocked.any():
+        return latest
+    from_blocked = text[blocked].groupby(keys[blocked], sort=False).last()
+    return from_blocked.combine_first(latest)
+
+
+#: Where a customer in none of the three phases stands — read from its latest
+#: wave's FDO Migration Status.  Deferred and Cancelled are named first, then
+#: any other status the export writes, in its own wording, and last the
+#: customers whose latest wave states none — so the numbers always add up.
+REST_DEFERRED = "Deferred"
+REST_CANCELLED = "Cancelled"
+REST_NOT_STATED = "Status not stated"
+REST_ORDER = (REST_DEFERRED, REST_CANCELLED)
+_REST_BY_CLASS = {statuses.DEFERRED: REST_DEFERRED,
+                  statuses.CANCELLED: REST_CANCELLED}
+
+
+#: What :func:`programme_status` reads — sorting only these, not a 90-column
+#: export, is most of what keeps it fast on a large file.
+_PROGRAMME_COLUMNS = ("fdo_migration_status", "migration_status",
+                      "migration_status_code", "migration_status_label",
+                      "fdo_current_state", "current_state", "status_summary")
+
+
+def _narrow(fact: pd.DataFrame, *columns: str) -> pd.DataFrame:
+    """*fact* cut to *columns* plus what orders its waves (TPID, wave, date)."""
+    keep = [c for c in ("tpid_key", "tpid", "wave_num", "created_date", *columns)
+            if c in fact.columns]
+    return fact[list(dict.fromkeys(keep))]
+
+
+def programme_status(fact: pd.DataFrame) -> pd.DataFrame:
+    """Where the programme summary puts each account, and what it read to do so.
+
+    One row per account (indexed by ``tpid_key``), every column from the **FDO
+    export**:
+
+    * ``summary_phase`` — the first of these to hold, from its Migration Status:
+
+      1. **In progress** — any wave at ``4 - Executing Migration``;
+      2. **In planning** — any wave at ``1``, ``2`` or ``3``;
+      3. **Completed** — the latest wave is ``7 - Completed`` (and, by 1 and 2,
+         no wave is still at a stage);
+      4. otherwise the latest wave's own Migration Status: **Deferred** (5),
+         **Cancelled** (6), any other value in the export's own wording, or
+         **Status not stated** when it is blank.
+
+    * ``fdo_status`` — the latest wave's Migration Status as written;
+    * ``blocked`` — any wave's Current State reads Blocked (:func:`is_fdo_blocked`),
+      and ``blocked_state`` the latest such wave's Current State as written;
+    * ``status_summary`` — from the blocked wave (:func:`status_summary_by_account`).
+
+    Current State plays no part in the phase, and the tracking sheet none at all.
+    """
+    columns = ["summary_phase", "fdo_status", "blocked", "blocked_state",
+               "status_summary"]
+    if fact.empty:
+        return pd.DataFrame(columns=columns, index=pd.Index([], name="tpid_key"))
+    ordered = _ordered(_narrow(fact, *_PROGRAMME_COLUMNS))
+    keys = ordered["tpid_key"]
+    code, label, cls = fdo_migration_status(ordered)
+    raw = (label.where(code.isna(), code.astype("Int64").astype("string") + " - " + label))
+    index = pd.Index(keys.unique(), name="tpid_key")
+    progress = set(keys[code.isin(IN_PROGRESS_CODES).fillna(False).to_numpy()])
+    planning = set(keys[code.isin(PLANNING_CODES).fillna(False).to_numpy()])
+    # The latest wave's status comes whole from the latest row, never filled in
+    # from an earlier wave (see :func:`_last_of`).
+    tail = ~keys.duplicated(keep="last").to_numpy()
+    last_cls = pd.Series(cls.to_numpy()[tail], index=keys[tail].to_numpy())
+    last_label = pd.Series(label.to_numpy()[tail], index=keys[tail].to_numpy())
+    last_raw = pd.Series(raw.to_numpy()[tail], index=keys[tail].to_numpy())
+
+    # Assigned in reverse precedence: each line overrides the ones above it.
+    last_cls, last_label = last_cls.reindex(index), last_label.reindex(index)
+    written = last_label.astype("object").where(last_label.notna(), REST_NOT_STATED)
+    phase = last_cls.map(_REST_BY_CLASS).astype("object")
+    phase = phase.where(phase.notna(), written)
+    phase[last_cls.eq(statuses.COMPLETED).fillna(False).to_numpy()] = PHASE_COMPLETED
+    phase[index.isin(planning)] = PHASE_PLANNING
+    phase[index.isin(progress)] = PHASE_IN_PROGRESS
+    # The Current State of the account's latest blocked wave, as written.
+    flagged = is_fdo_blocked(ordered).to_numpy()
+    blocked_state = (fdo_current_state(ordered)[flagged]
+                     .groupby(keys[flagged], sort=False).last())
+    return pd.DataFrame({
+        "summary_phase": phase,
+        "fdo_status": last_raw.reindex(index),
+        "blocked": index.isin(set(blocked_state.index)),
+        "blocked_state": blocked_state.reindex(index),
+        "status_summary": status_summary_by_account(ordered).reindex(index),
+    }, index=index)
 
 
 def account_phase(fact: pd.DataFrame) -> pd.Series:
     """Per account (indexed by ``tpid_key``): Completed, In progress, In planning
-    or NA, the first of these to hold:
-
-    1. **Completed** — the account state is Completed (:func:`account_state`).
-    2. **In progress** — any wave is at stage 4 (or the sheet's "Executing
-       Migration" / "Sign-off Pending").
-    3. **In planning** — any wave is at stage 1, 2 or 3 (or the sheet's
-       "Kick-Off Awaited", "Planning & Prerequisites" / "Ready for Migration").
-
-    Current State plays no part: a Blocked wave at stage 4 is still in progress.
-    Everything else (deferred, on hold, cancelled, no stage) has no phase.
-    """
+    or NA — :func:`programme_status`'s three phases, read from the FDO export's
+    Migration Status alone."""
     if fact.empty:
         return pd.Series(dtype="object")
-    keys = _keys(fact)
-    lasts = latest_wave(fact)
-    out = pd.Series(pd.NA, index=pd.Index(_keys(lasts).unique(), name="tpid_key"),
-                    dtype="object")
-    phase = wave_phase(fact)
-    planning = set(keys[phase.eq(PHASE_PLANNING).fillna(False).to_numpy()])
-    progress = set(keys[phase.eq(PHASE_IN_PROGRESS).fillna(False).to_numpy()])
-    state = pd.Series(account_state(fact, lasts).to_numpy(), index=_keys(lasts).to_numpy())
-    done = set(state.index[state.eq(STATE_COMPLETED).to_numpy()])
-    out[out.index.isin(planning)] = PHASE_PLANNING
-    out[out.index.isin(progress)] = PHASE_IN_PROGRESS
-    out[out.index.isin(done)] = PHASE_COMPLETED
-    return out
-
-
-#: Where a customer with none of the three phases stands, first match wins —
-#: so the summary's numbers always add up to its customer count.
-REST_BLOCKED = "Blocked"
-REST_DEFERRED = "Deferred"
-REST_ON_HOLD = "On hold"
-REST_CANCELLED = "Cancelled"
-REST_NOT_STATED = "Status not stated"
-REST_ORDER = (REST_BLOCKED, REST_DEFERRED, REST_ON_HOLD, REST_CANCELLED,
-              REST_NOT_STATED)
-_REST_BY_STATE = {STATE_BLOCKED: REST_BLOCKED, STATE_DEFERRED: REST_DEFERRED,
-                  STATE_ON_HOLD: REST_ON_HOLD, STATE_CANCELLED: REST_CANCELLED}
+    phase = programme_status(fact)["summary_phase"]
+    return phase.where(phase.isin((PHASE_COMPLETED, PHASE_IN_PROGRESS,
+                                   PHASE_PLANNING)))
 
 
 def account_phase_detail(fact: pd.DataFrame) -> pd.Series:
-    """Per account (indexed by ``tpid_key``): :func:`account_phase`, and for an
-    account with none of the three phases, where it stands instead:
+    """Per account (indexed by ``tpid_key``): its phase, or for an account in
+    none of the three, where its latest wave's FDO Migration Status puts it
+    (Deferred, Cancelled, the status as written, Status not stated).  Every
+    account gets exactly one answer, so they add up to the customer count."""
+    if fact.empty:
+        return pd.Series(dtype="object")
+    return programme_status(fact)["summary_phase"]
 
-    4. **Blocked / Deferred / On hold / Cancelled** — its account state
-       (:func:`account_state`).
-    5. **Status not stated** — anything else.
 
-    Every account gets exactly one answer, so the phases and the rest add up
-    to the customer count.
-    """
-    phase = account_phase(fact)
-    if phase.empty:
-        return phase
-    out = phase.astype("object").copy()
-    rest = out.isna().to_numpy()
-    if not rest.any():
-        return out
-    lasts = latest_wave(fact)
-    state = pd.Series(account_state(fact, lasts).to_numpy(),
-                      index=_keys(lasts).to_numpy())
-    for key in out.index[rest]:
-        out[key] = _REST_BY_STATE.get(state.get(key), REST_NOT_STATED)
-    return out
+def rest_order(labels) -> list[str]:
+    """The rest's labels in reading order: Deferred, Cancelled, any other
+    status as the FDO export words it, and Status not stated last."""
+    labels = list(dict.fromkeys(labels))
+    known = [label for label in REST_ORDER if label in labels]
+    other = sorted(label for label in labels
+                   if label not in REST_ORDER and label != REST_NOT_STATED)
+    return known + other + ([REST_NOT_STATED] if REST_NOT_STATED in labels else [])
 
 
 def nominated_since(fact: pd.DataFrame, start) -> pd.DataFrame:

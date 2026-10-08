@@ -24,19 +24,23 @@ PROGRAMME_TRACKER = (
 
 PROGRAMME_SUMMARY = (
     "The sentence that opens the EOS report, over the whole programme (never "
-    "the reporting period).\n"
+    "the reporting period). Every customer is placed by the FDO export's "
+    "Migration Status alone — the EOS tracking sheet and Current State play no "
+    "part.\n"
     "• Customers = unique TPIDs in EOS Migrations (All).\n"
-    "• Completed = account state Completed.\n"
-    "• In progress = any wave at stage 4 Executing Migration (sheet: Executing "
-    "Migration or Sign-off Pending).\n"
+    "• In progress = any wave at stage 4 Executing Migration.\n"
     "• In planning = any wave at stage 1 Validating Commitment, 2 Executing "
-    "Pre-requisites or 3 Finalize Scope (sheet: Kick-Off Awaited, Planning & "
-    "Prerequisites or Ready for Migration).\n"
-    "• Everyone else is named by state — blocked, deferred, on hold, cancelled "
-    "or status not stated — so the numbers always add up.\n"
+    "Pre-requisites or 3 Finalize Scope.\n"
+    "• Completed = latest wave 7 Completed, no wave still at a stage.\n"
+    "• Everyone else by their latest wave's Migration Status — deferred, "
+    "cancelled, as the FDO export words it, or status not stated — so the "
+    "numbers always add up.\n"
+    "• Blocked = any wave whose Current State in the FDO export reads Blocked; "
+    "shown beside the list (they are counted in it too).\n"
     "• Gen1 to Azure Native = customers whose Primary Migration Path contains "
     "(From AVS), first nominated on or after 1 July 2025.\n"
-    "Tick 'Include Azure Native customers' to add those to the totals."
+    "Tick 'Include Azure Native customers' to add those to the totals; untick "
+    "'Include blocked accounts' to leave the blocked customers out."
 )
 
 NEW_ENGAGEMENTS = (
@@ -731,8 +735,9 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "at.",
             "None of these accounts is in any other figure. New Engagements is "
             "the one deliberate exception.",
-            "Every row carries the account's **Status Summary**, the "
-            "programme's own note on what it is waiting for.",
+            "Every row carries the **Status Summary** of the account's blocked "
+            "wave (its latest wave whose FDO export **Current State** reads "
+            "Blocked), else of its latest wave: the note on what it waits for.",
         )),
         Definition("Where every account sits", (
             "A table under the pipeline lists every state, its account count, "
@@ -808,29 +813,31 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         Definition("Programme summary", (
             "Opens the EOS report, read over the whole programme, never the "
             "reporting period.",
-            "Customers: each **TPID** in EOS Migrations (All), counted once.",
-            "Completed: the account state is Completed.",
-            "In progress: any wave's **Migration Status** is **4 - Executing "
-            "Migration**, or the sheet's **Executing Migration** or **Sign-off "
-            "Pending**.",
-            "In planning: any wave at **1 - Validating Commitment & Initial "
-            "Scope**, **2 - Executing Pre-requisites** or **3 - Finalize Scope**, "
-            "or the sheet's **Kick-Off Awaited**, **Planning & Prerequisites** or "
-            "**Ready for Migration**.",
-            "Each customer takes the first of those three that holds, "
-            "**Current State** playing no part; anyone else is named by account "
-            "state (blocked, deferred, on hold, cancelled), else status not "
-            "stated — so every line adds up.",
-            "Gen1 to Gen1 and Gen1 to Gen2 count the customers by generation, "
-            "each line with its own completed, in progress and in planning "
-            "split.",
-            "Gen1 to Azure Native counts customers whose **Primary Migration "
-            "Path** contains **(From AVS)**, whose first **Nom. Approval "
-            "Date**, else **Nom. Created Date**, is 1 July 2025 or later and, "
-            "with the All EOS customers list loaded, whose **TPID** is on it.",
+            "Customers: each **TPID** in EOS Migrations (All), counted once and "
+            "placed by the FDO export's **Migration Status** alone; the EOS "
+            "tracking sheet and **Current State** play no part.",
+            "In progress: any wave at **4 - Executing Migration**. In planning: "
+            "any wave at **1 - Validating Commitment & Initial Scope**, **2 - "
+            "Executing Pre-requisites** or **3 - Finalize Scope**.",
+            "Completed: the latest wave is **7 - Completed** and no wave is "
+            "still at stage 1 to 4.",
+            "Everyone else by the latest wave's **Migration Status**: deferred "
+            "(**5 - Deferred by Customer**), cancelled (**6 - Cancelled / "
+            "Archived**), any other value as written, else status not stated, "
+            "so every line adds up.",
+            "Blocked: any wave whose **Current State** in the FDO export reads "
+            "**Blocked**, **Blocked - Customer**, **Blocked - Account team** or "
+            "**Blocked - Partner / ISD**. Named beside the list, as they are "
+            "counted in it too.",
+            "Include blocked accounts is ticked by default; unticked, those "
+            "customers leave every number and line.",
+            "Gen1 to Gen1 and Gen1 to Gen2 split the customers by generation. "
             "Ticking Include Azure Native customers adds those to every total, "
-            "each customer still counted once, and shows the Gen1 to Azure "
-            "Native line, which is hidden until then.",
+            "each customer counted once, and shows the Gen1 to Azure Native line.",
+            "Azure Native customers: **Primary Migration Path** contains **(From "
+            "AVS)**, first **Nom. Approval Date**, else **Nom. Created Date**, on "
+            "or after 1 July 2025 and, with the All EOS customers list loaded, "
+            "**TPID** on it.",
             "Unit: customer.",
         )),
     )),
