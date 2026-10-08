@@ -24,19 +24,19 @@ PROGRAMME_TRACKER = (
 
 PROGRAMME_SUMMARY = (
     "The sentence that opens the EOS report, over the whole programme (never "
-    "the reporting period). Every customer is placed by the FDO export's "
-    "Migration Status alone — the EOS tracking sheet and Current State play no "
-    "part.\n"
+    "the reporting period). Every customer is placed by the FDO export alone — "
+    "the EOS tracking sheet plays no part — in the first of four that fits, so "
+    "the four add up to the customers.\n"
     "• Customers = unique TPIDs in EOS Migrations (All).\n"
+    "• Completed = latest wave's Migration Status 7 Completed, no wave still "
+    "at a stage.\n"
+    "• Blocked = latest wave's Current State is written and is anything but "
+    "On Track, Done or Waiting action on follow up date.\n"
     "• In progress = any wave at stage 4 Executing Migration.\n"
     "• In planning = any wave at stage 1 Validating Commitment, 2 Executing "
     "Pre-requisites or 3 Finalize Scope.\n"
-    "• Completed = latest wave 7 Completed, no wave still at a stage.\n"
-    "• Everyone else by their latest wave's Migration Status — deferred, "
-    "cancelled, as the FDO export words it, or status not stated — so the "
-    "numbers always add up.\n"
-    "• Blocked = any wave whose Current State in the FDO export reads Blocked; "
-    "shown beside the list (they are counted in it too).\n"
+    "• Anyone else — latest wave 5 Deferred or 6 Cancelled, or no status — is "
+    "blocked too. A blank Current State blocks nothing on its own.\n"
     "• Gen1 to Azure Native = customers whose Primary Migration Path contains "
     "(From AVS), first nominated on or after 1 July 2025.\n"
     "Tick 'Include Azure Native customers' to add those to the totals; untick "
@@ -159,14 +159,14 @@ NODES_PLANNED = (
 BLOCKED_ACCOUNTS = (
     "Every account that is neither On-Track nor Completed, grouped by WHY it "
     "has stopped:\n"
-    "• The blocking CURRENT STATES, in the programme's own words — 'Blocked', "
-    "'Blocked - Account team', 'Blocked - Customer', 'Blocked - Partner / "
-    "ISD', 'Waiting action on follow up date'.\n"
-    "• 'Deferred By Customer' and 'Cancelled / Archived', broken out by "
-    "MIGRATION STATUS — those are decisions the customer has taken rather than "
-    "work that is stuck, and a review reads them differently. The status wins "
-    "over the Current State: an account deferred while its state still reads "
-    "'Blocked - Customer' is reported as deferred.\n"
+    "• The FDO export's CURRENT STATE first, wherever it blocks — anything "
+    "written other than 'On Track', 'Done' or 'Waiting action on follow up "
+    "date' ('Blocked', 'Blocked - Account team', 'Blocked - Customer', "
+    "'Blocked - Partner / ISD', …). It wins over the Migration Status: an "
+    "account deferred while its state reads 'Blocked - Customer' is reported "
+    "as blocked by the customer.\n"
+    "• Otherwise 'Cancelled / Archived', 'On Hold' and 'Deferred By Customer', "
+    "by MIGRATION STATUS, then the Current State as reported.\n"
     "• 'Not approved' for a nomination whose status is not 'Approved', and "
     "'Not stated' where nothing has been recorded. Nothing is inferred.\n"
     "They are reported HERE AND NOWHERE ELSE: none of them is counted in the "
@@ -679,10 +679,11 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "three-part test above.",
             "**Completed** — the latest wave's **Migration Status** is **7 - "
             "Completed** and no wave of the account is on track.",
+            "**Blocked** — the latest wave's **Current State** in the FDO "
+            "export is written and is anything but **On Track**, **Done** or "
+            "**Waiting action on follow up date**; a blank one is not Blocked.",
             "**Cancelled** — the latest wave's **Migration Status** is **6 - "
             "Cancelled / Archived**.",
-            "**Blocked** — the latest wave's **Current State** mentions being "
-            "blocked.",
             "**Deferred** — the latest wave's **Migration Status** is **5 - "
             "Deferred By Customer**.",
             "**Other** — anything left.",
@@ -720,24 +721,23 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "that is the whole test.",
             "Label each one with why it stopped; the first reason that fits is "
             "the one shown.",
-            "**Migration Status** of **6 - Cancelled / Archived** — cancelled.",
-            "**Migration Status** of **On Hold** in the EOS tracking sheet "
-            "— on hold.",
-            "**Migration Status** of **5 - Deferred By Customer** — deferred. "
-            "The **Migration Status** wins over the **Current State**, because "
-            "somebody decided those.",
-            "Otherwise the **Current State** in its own words: **Blocked**, "
-            "**Blocked - Account team**, **Blocked - Customer**, **Blocked - "
-            "Partner / ISD** or **Waiting action on follow up date**.",
+            "The FDO export's **Current State**, when it is written and is "
+            "anything but **On Track**, **Done** or **Waiting action on follow "
+            "up date** — it wins over the **Migration Status**.",
+            "**Migration Status** of **6 - Cancelled / Archived** — cancelled; "
+            "**On Hold** in the EOS tracking sheet — on hold; **5 - Deferred By "
+            "Customer** — deferred.",
+            "Otherwise the **Current State** as reported, in its own words: "
+            "**Blocked** or **Waiting action on follow up date**, say.",
             "Otherwise, a **Nomination Status** that is not **Approved** — not "
             "approved.",
             "Otherwise, nothing recorded — labelled as such rather than guessed "
             "at.",
             "None of these accounts is in any other figure. New Engagements is "
             "the one deliberate exception.",
-            "Every row carries the **Status Summary** of the account's blocked "
-            "wave (its latest wave whose FDO export **Current State** reads "
-            "Blocked), else of its latest wave: the note on what it waits for.",
+            "Every row carries a **Status Summary**: for an account whose "
+            "latest wave is blocked, the latest blocked wave's note, else the "
+            "latest one written.",
         )),
         Definition("Where every account sits", (
             "A table under the pipeline lists every state, its account count, "
@@ -813,24 +813,22 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
         Definition("Programme summary", (
             "Opens the EOS report, read over the whole programme, never the "
             "reporting period.",
-            "Customers: each **TPID** in EOS Migrations (All), counted once and "
-            "placed by the FDO export's **Migration Status** alone; the EOS "
-            "tracking sheet and **Current State** play no part.",
+            "Customers: each **TPID** in EOS Migrations (All), counted once, "
+            "in the first of four that fits, read from the FDO export alone; "
+            "the EOS tracking sheet plays no part.",
+            "Completed: the latest wave's **Migration Status** is **7 - "
+            "Completed** and no wave is still at stage 1 to 4.",
+            "Blocked: the latest wave's **Current State** is written and is "
+            "anything but **On Track**, **Done** or **Waiting action on follow "
+            "up date**.",
             "In progress: any wave at **4 - Executing Migration**. In planning: "
             "any wave at **1 - Validating Commitment & Initial Scope**, **2 - "
             "Executing Pre-requisites** or **3 - Finalize Scope**.",
-            "Completed: the latest wave is **7 - Completed** and no wave is "
-            "still at stage 1 to 4.",
-            "Everyone else by the latest wave's **Migration Status**: deferred "
-            "(**5 - Deferred by Customer**), cancelled (**6 - Cancelled / "
-            "Archived**), any other value as written, else status not stated, "
-            "so every line adds up.",
-            "Blocked: any wave whose **Current State** in the FDO export reads "
-            "**Blocked**, **Blocked - Customer**, **Blocked - Account team** or "
-            "**Blocked - Partner / ISD**. Named beside the list, as they are "
-            "counted in it too.",
-            "Include blocked accounts is ticked by default; unticked, those "
-            "customers leave every number and line.",
+            "Blocked as well: a latest wave at **5 - Deferred By Customer** or "
+            "**6 - Cancelled / Archived**, or with no **Migration Status**, so "
+            "the four add up. A blank **Current State** blocks nothing alone.",
+            "Include blocked accounts is ticked by default; unticked, the "
+            "blocked customers leave every number and line.",
             "Gen1 to Gen1 and Gen1 to Gen2 split the customers by generation. "
             "Ticking Include Azure Native customers adds those to every total, "
             "each customer counted once, and shows the Gen1 to Azure Native line.",

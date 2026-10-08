@@ -882,28 +882,19 @@ SUMMARY_BLOCKED_LABEL = "Include blocked accounts"
 #: left out ("eos-nb:completed"), so a number in either reading opens exactly
 #: the customers it counts.
 NO_BLOCKED = "-nb"
-#: The bucket key of the blocked customers — not "blocked", which an FDO
-#: Migration Status literally reading "Blocked" would slug to as a rest label.
-BLOCKED_KEY = "blocked_wave"
 
 
 @dataclass(frozen=True)
 class SummaryTotals:
+    """The four buckets (``kpi.PHASES``) — they add up to ``customers``."""
     customers: int = 0
     completed: int = 0
     in_progress: int = 0
     planning: int = 0
-    #: Everyone else, by where they stand (``kpi.rest_order``), non-zero only —
-    #: so the phases and these always add up to ``customers``.
-    rest: tuple = ()
-    #: Of ``customers``, those with a wave the FDO export's Current State calls
-    #: Blocked — counted in their phase as well, so not part of the sum.
     blocked: int = 0
-
-    @property
-    def others(self) -> int:
-        """Everyone outside the three phases."""
-        return int(sum(n for _label, n in self.rest))
+    #: False in the reading that leaves the blocked customers out, where the
+    #: sentence names three buckets rather than "0 blocked".
+    show_blocked: bool = True
 
 
 @dataclass(frozen=True)
@@ -928,8 +919,8 @@ class ProgrammeSummary:
     #: One row per customer per line, with the buckets each number opens
     #: (``_buckets``) — the HTML report's clickable summary reads it.
     rows: pd.DataFrame = field(default_factory=pd.DataFrame, compare=False)
-    #: Customers with a blocked wave (``kpi.is_fdo_blocked``) in the EOS totals,
-    #: and in the totals with the Azure Native customers added.
+    #: Blocked customers in the EOS totals, and in the totals with the Azure
+    #: Native customers added.
     blocked_eos: int = 0
     blocked_all: int = 0
     #: The same summary with every blocked customer left out — what the
@@ -952,29 +943,27 @@ def summary_native_start() -> pd.Timestamp:
     return metrics.named_fiscal_year_start(EOS_MATRIX_START_FY, FY_START_MONTH)
 
 
-def _totals(*frames: pd.DataFrame) -> SummaryTotals:
+def _totals(*frames: pd.DataFrame, show_blocked: bool = True) -> SummaryTotals:
     """Totals over each motion's :func:`kpi.programme_status` frame, merged.
 
-    Each customer's phase is read within its own motion, and a customer in
-    both keeps its EOS phase: reading its EOS and its From AVS waves as one
+    Each customer's bucket is read within its own motion, and a customer in
+    both keeps its EOS bucket: reading its EOS and its From AVS waves as one
     account would let a native wave at stage 4 turn a completed EOS migration
     back into "in progress".
     """
     frames = [f for f in frames if not f.empty]
     if not frames:
-        return SummaryTotals()
+        return SummaryTotals(show_blocked=show_blocked)
     status = frames[0]
     for more in frames[1:]:
         status = pd.concat([status, more[~more.index.isin(status.index)]])
     phase = status["summary_phase"]
-    rest = [p for p in phase.dropna().unique() if p not in _PHASE_KEYS]
     return SummaryTotals(customers=int(len(phase)),
                          completed=int(phase.eq(kpi.PHASE_COMPLETED).sum()),
                          in_progress=int(phase.eq(kpi.PHASE_IN_PROGRESS).sum()),
                          planning=int(phase.eq(kpi.PHASE_PLANNING).sum()),
-                         rest=tuple((label, int(phase.eq(label).sum()))
-                                    for label in kpi.rest_order(rest)),
-                         blocked=int(status["blocked"].astype(bool).sum()))
+                         blocked=int(phase.eq(kpi.PHASE_BLOCKED).sum()),
+                         show_blocked=show_blocked)
 
 
 def _unblocked(status: pd.DataFrame) -> pd.DataFrame:
@@ -985,14 +974,15 @@ def programme_summary(eos: pd.DataFrame, native: pd.DataFrame) -> ProgrammeSumma
     """Counts for the summary, from the EOS report's population and the AVS →
     Azure Native one — both over the whole dataset, never a reporting period.
 
-    Every customer is placed by the **FDO export's Migration Status** alone
-    (:func:`kpi.programme_status`, worked out once per motion).  The native
+    Every customer is placed by the **FDO export** alone — its Migration
+    Status and Current State (:func:`kpi.programme_status`, worked out once per
+    motion).  The native
     customers are those whose first nomination falls on or after
     :func:`summary_native_start`.  Customers are unique TPIDs, so one in both
     motions is counted once in the combined totals.  The summary is given
-    twice: as it stands, and with every customer that has a blocked wave
-    (within the motion it is counted in) left out — ``excluding_blocked``, for
-    the "Include blocked accounts" box.  A customer's own phase does not depend
+    twice: as it stands, and with every Blocked customer (within the motion it
+    is counted in) left out — ``excluding_blocked``, for the "Include blocked
+    accounts" box.  A customer's own phase does not depend
     on anyone else's, so the second reading is the first one's frames filtered.
     """
     native = kpi.nominated_since(native, summary_native_start())
@@ -1001,7 +991,7 @@ def programme_summary(eos: pd.DataFrame, native: pd.DataFrame) -> ProgrammeSumma
            if not eos.empty else pd.Series(dtype="object"))
     st_eos = st_eos.assign(_gen=gen.reindex(st_eos.index).to_numpy())
     full = _summary(st_eos, st_native)
-    lean = _summary(_unblocked(st_eos), _unblocked(st_native))
+    lean = _summary(_unblocked(st_eos), _unblocked(st_native), show_blocked=False)
     return replace(full,
                    rows=_summary_rows(eos, native, st_eos, st_native),
                    blocked_eos=full.eos.customers - lean.eos.customers,
@@ -1009,16 +999,20 @@ def programme_summary(eos: pd.DataFrame, native: pd.DataFrame) -> ProgrammeSumma
                    excluding_blocked=lean)
 
 
-def _summary(eos: pd.DataFrame, native: pd.DataFrame) -> ProgrammeSummary:
+def _summary(eos: pd.DataFrame, native: pd.DataFrame,
+             show_blocked: bool = True) -> ProgrammeSummary:
     """One reading of the summary, from each motion's status frame (the EOS one
     carrying each customer's generation as ``_gen``)."""
     gen = eos["_gen"] if "_gen" in eos.columns else pd.Series(dtype="object")
     gen1, gen2 = gen.eq(segments.GEN_1).to_numpy(), gen.eq(segments.GEN_2).to_numpy()
     rest = ~(gen1 | gen2)
+    def totals(*frames: pd.DataFrame) -> SummaryTotals:
+        return _totals(*frames, show_blocked=show_blocked)
+
     return ProgrammeSummary(
-        gen1_split=_totals(eos[gen1]), gen2_split=_totals(eos[gen2]),
-        no_generation_split=_totals(eos[rest]), native_split=_totals(native),
-        eos=_totals(eos), with_native=_totals(eos, native),
+        gen1_split=totals(eos[gen1]), gen2_split=totals(eos[gen2]),
+        no_generation_split=totals(eos[rest]), native_split=totals(native),
+        eos=totals(eos), with_native=totals(eos, native),
         gen1=int(gen1.sum()), gen2=int(gen2.sum()), no_generation=int(rest.sum()),
         native=int(len(native)),
         overlap=int(len(eos.index.intersection(native.index))))
@@ -1030,22 +1024,21 @@ SUMMARY_SCOPES = {"eos": "EOS customers", "all": "All customers",
                   "gen1": "Gen1 to Gen1", "gen2": "Gen1 to Gen2",
                   "nogen": "No generation stated", "native": "Gen1 to Azure Native"}
 _PHASE_KEYS = {kpi.PHASE_COMPLETED: "completed", kpi.PHASE_IN_PROGRESS: "in_progress",
-               kpi.PHASE_PLANNING: "planning"}
+               kpi.PHASE_PLANNING: "planning", kpi.PHASE_BLOCKED: "blocked"}
 
 
 def summary_key(phase: str) -> str:
-    """The bucket key for a phase or a rest label ("Status not stated" becomes
-    "status_not_stated")."""
+    """The bucket key for a phase ("In progress" becomes "in_progress")."""
     return _PHASE_KEYS.get(phase) or re.sub(r"[^a-z0-9]+", "_", str(phase).lower()).strip("_")
 
 
 def summary_bucket_label(bucket: str) -> str:
-    """"gen1:deferred" becomes "Gen1 to Gen1 · deferred", for the filter note —
+    """"gen1:blocked" becomes "Gen1 to Gen1 · blocked", for the filter note —
     "… (blocked left out)" for a number from the reading without them."""
     scope, _, key = bucket.partition(":")
     lean = scope.endswith(NO_BLOCKED)
     scope = scope[:-len(NO_BLOCKED)] if lean else scope
-    words = {"total": "all", "in_progress": "in progress", BLOCKED_KEY: "blocked"}
+    words = {"total": "all", "in_progress": "in progress"}
     return (f"{SUMMARY_SCOPES.get(scope, scope)} · {words.get(key, key.replace('_', ' '))}"
             + (" (blocked accounts left out)" if lean else ""))
 
@@ -1063,18 +1056,15 @@ def _join(parts: list[str]) -> str:
 
 
 def _split_text(t: SummaryTotals, scope: str, num=_plain) -> str:
-    """"4 completed, 0 in progress, 3 in planning, 1 deferred, 1 cancelled (2 of
-    them blocked)" — the three phases always, then everyone else by status, so
-    the list adds up to the customers it describes.  Blocked customers are
-    already in that list (in their phase), so they are named alongside it."""
+    """"4 completed, 0 in progress, 3 in planning, 2 blocked" — the four
+    buckets, which add up to the customers they describe ("blocked" left out
+    of the reading that leaves the blocked customers out)."""
     parts = [f"{num(t.completed, f'{scope}:completed')} completed",
              f"{num(t.in_progress, f'{scope}:in_progress')} in progress",
              f"{num(t.planning, f'{scope}:planning')} in planning"]
-    parts += [f"{num(n, f'{scope}:{summary_key(label)}')} {label.lower()}"
-              for label, n in t.rest]
-    blocked = (f" ({num(t.blocked, f'{scope}:{BLOCKED_KEY}')} of them blocked)"
-               if t.blocked else "")
-    return ", ".join(parts) + blocked
+    if t.show_blocked:
+        parts.append(f"{num(t.blocked, f'{scope}:blocked')} blocked")
+    return ", ".join(parts)
 
 
 def summary_sentence(t: SummaryTotals, num=_plain, scope: str = "eos") -> str:
@@ -1109,7 +1099,7 @@ def summary_lines(s: ProgrammeSummary, include_native: bool = False,
 #: The columns the summary's customers are listed with in the HTML report —
 #: every one of them read from the FDO export, as the summary itself is.
 SUMMARY_COLUMNS = ["tpid", "customer_name", "summary_line", "summary_phase",
-                   "fdo_status", "summary_blocked", "region_geo", "status_summary"]
+                   "fdo_status", "fdo_state", "region_geo", "status_summary"]
 
 
 #: What the panel's rows are built from (beyond what ``programme_status`` adds).
@@ -1140,7 +1130,7 @@ def _summary_rows(eos: pd.DataFrame, native: pd.DataFrame,
         rows = lasts.reindex(status.index).reset_index()
         rows["summary_phase"] = status["summary_phase"].to_numpy()
         rows["fdo_status"] = status["fdo_status"].to_numpy()
-        rows["summary_blocked"] = status["blocked_state"].to_numpy()
+        rows["fdo_state"] = status["fdo_state"].to_numpy()
         rows["status_summary"] = status["status_summary"].to_numpy()
         rows["_left_out"] = status["blocked"].astype(bool).to_numpy()
         if motion == "eos":
@@ -1165,8 +1155,6 @@ def _summary_rows(eos: pd.DataFrame, native: pd.DataFrame,
                 for scope in scopes:
                     scope += tag
                     out += [f"{scope}:total", f"{scope}:{pk}"]
-                    if blocked:
-                        out.append(f"{scope}:{BLOCKED_KEY}")
             buckets.append("|".join(out))
         rows["_buckets"] = buckets
         parts.append(rows)
@@ -1199,20 +1187,18 @@ def summary_note(include_native: bool, include_blocked: bool = True) -> str:
     start = summary_native_start()
     who = ("Totals include the AVS to Azure Native customers"
            if include_native else "Totals cover the EOS customers only")
-    blocked = (" Blocked = any wave whose Current State in the FDO export reads "
-               "Blocked; those customers are also counted where their Migration "
-               "Status puts them." if include_blocked else
-               " Customers with a blocked wave (Current State reads Blocked in the "
-               "FDO export) are left out.")
-    return (f"{who}.{blocked} Every customer is placed by the Migration Status in "
-            f"the FDO export alone — the EOS tracking sheet and Current State play "
-            f"no part. In progress = any wave at stage 4 Executing Migration; in "
-            f"planning = any wave at stage 1 Validating Commitment, 2 Executing "
-            f"Pre-requisites or 3 Finalize Scope; completed = latest wave 7 "
-            f"Completed. Everyone else is named by their latest wave's Migration "
-            f"Status (deferred, cancelled, or as the FDO export words it). Azure "
-            f"Native = Primary Migration Path contains (From AVS), first nominated "
-            f"on or after {start:%d %b %Y}. All time.")
+    blocked = "" if include_blocked else " The blocked customers are left out."
+    return (f"{who}.{blocked} Every customer is placed by the FDO export alone — "
+            f"the EOS tracking sheet plays no part — in the first of: completed = "
+            f"latest wave's Migration Status 7 Completed with no wave still at a "
+            f"stage; blocked = latest wave's Current State is written and is "
+            f"anything but On Track, Done or Waiting action on follow up date; in "
+            f"progress = any wave at stage 4 Executing Migration; in planning = "
+            f"any wave at stage 1 Validating Commitment, 2 Executing "
+            f"Pre-requisites or 3 Finalize Scope. Anyone else (latest wave 5 "
+            f"Deferred or 6 Cancelled, or no status) is blocked too, so the four "
+            f"add up. Azure Native = Primary Migration Path contains (From AVS), "
+            f"first nominated on or after {start:%d %b %Y}. All time.")
 
 
 #: The matrix block that adds every other block together.
@@ -1722,8 +1708,8 @@ def _programme_summary_block(summary: ProgrammeSummary, ss) -> list:
     lean_line = ""
     if summary.blocked_eos:
         lean = summary.reading(False)
-        lean_line = (f"Leaving out the {_customers(summary.blocked_eos)} with a "
-                     "blocked wave: "
+        lean_line = (f"Leaving out the {fmt_int(summary.blocked_eos)} blocked "
+                     f"customer{'' if summary.blocked_eos == 1 else 's'}: "
                      + summary_sentence(lean.totals(False)).replace("To date, ", "", 1))
     return [KeepTogether([
         Paragraph(SUMMARY_TITLE, ss["H2"]),

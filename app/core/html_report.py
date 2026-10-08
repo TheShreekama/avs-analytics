@@ -103,7 +103,7 @@ _COLUMN_LABELS.update({
     "matrix_measure": "Measure", "matrix_month": "Month",
     "summary_line": "Summary line", "summary_phase": "Where it stands",
     "fdo_status": "Migration Status (FDO export)",
-    "summary_blocked": "Blocked wave (FDO Current State)",
+    "fdo_state": "Current State (FDO export)",
     "matrix_date": "Date counted", "date_source": "Date read from",
 })
 
@@ -273,8 +273,9 @@ def _kpi_tiles(tiles: list["_Tile"], group: str = "") -> str:
     return f'<div class="kpis">{"".join(cells)}</div>'
 
 
-#: Free-text columns that wrap rather than stretch the table to one long line.
-_WRAP_COLUMNS = {"Status Summary"}
+#: Free-text columns kept to one line in a wide column, so every row of the
+#: table is the same height; the whole note is on hover (and in Copy / CSV).
+_NOTE_COLUMNS = {"Status Summary"}
 
 
 def _table(frame: pd.DataFrame, table_id: str, *, numeric: set[str] | None = None,
@@ -305,8 +306,8 @@ def _table(frame: pd.DataFrame, table_id: str, *, numeric: set[str] | None = Non
         bits = []
         if column in numeric:
             bits.append("num")
-        if cell and str(column) in _WRAP_COLUMNS:
-            bits.append("wrap")
+        if cell and str(column) in _NOTE_COLUMNS:
+            bits.append("note-cell")
         if highlight and highlight in str(column):
             bits.append("fytot")
         if first and row_head:
@@ -330,6 +331,8 @@ def _table(frame: pd.DataFrame, table_id: str, *, numeric: set[str] | None = Non
                 css = ' class="blank"'
             elif not value and index:
                 css = css[:-1] + ' blank"'
+            if value and str(column) in _NOTE_COLUMNS:
+                css += f' title="{value}"'
             cells.append(f"<td{css}>{value}</td>")
         rows.append(f"<tr{tags[position]}>{''.join(cells)}</tr>")
     css = "data sticky-first" if sticky_first else "data"

@@ -2094,11 +2094,13 @@ def test_the_blocked_section_covers_every_stopped_account(state_fact):
     ("blocked – partner/isd", "2 - Executing Pre-Requisites", "Blocked - Partner / ISD"),
     ("Waiting action on follow up date", "3 - Finalize Scope",
      "Waiting action on follow up date"),
-    # …the two Migration Statuses win over whatever the Current State says…
-    ("Blocked - Customer", "5 - Deferred By Customer", "Deferred By Customer"),
+    # …a blocking FDO Current State wins over the Migration Status, which
+    # names the reason only where the Current State does not block…
+    ("Blocked - Customer", "5 - Deferred By Customer", "Blocked - Customer"),
     ("On Track", "5 - Deferred By Customer", "Deferred By Customer"),
-    ("Blocked - Customer", "6 - Cancelled / Archived", "Cancelled / Archived"),
+    ("Blocked - Customer", "6 - Cancelled / Archived", "Blocked - Customer"),
     ("On Track", "6 - Cancelled / Archived", "Cancelled / Archived"),
+    ("", "6 - Cancelled / Archived", "Cancelled / Archived"),
     # …and anything else is named by what the file actually says.
     ("Blocked by legal", "2 - Executing Pre-Requisites", "Blocked by legal"),
     ("Done", "2 - Executing Pre-Requisites", "Done"),
@@ -3419,60 +3421,63 @@ def _phase_frame(rows):
     })
 
 
-def test_each_account_takes_one_phase_from_the_fdo_migration_status_alone():
-    """The summary reads the FDO export's Migration Status and nothing else —
-    not the tracking sheet's status written over it, and not Current State."""
+def test_each_account_takes_one_of_four_buckets_from_the_fdo_export_alone():
+    """Completed, Blocked, In progress, In planning — first match, from the FDO
+    export's Migration Status and Current State, never the tracking sheet's."""
     from app.core import statuses as st_
     fdo, sheet = st_.SOURCE_FDO, st_.SOURCE_TRACKER
     nan = float("nan")
     frame = _phase_frame([
         ("A", 1, 4, "Executing Migration", fdo, "On Track", st_.IN_FLIGHT),
-        ("B", 1, 4, "Executing Migration", fdo, "Blocked", st_.IN_FLIGHT),   # still stage 4
+        ("B", 1, 4, "Executing Migration", fdo, "Blocked", st_.IN_FLIGHT),   # blocked wins
         ("C", 1, 2, "Executing Pre-requisites", fdo, "On Track", st_.IN_FLIGHT),
-        ("D", 1, 3, "Finalize Scope", fdo, "On Track", st_.IN_FLIGHT),
-        ("E", 1, 1, "Validating Commitment & Initial Scope", fdo, "On Track", st_.IN_FLIGHT),
+        ("D", 1, 3, "Finalize Scope", fdo, "Waiting action on follow up date",
+         st_.IN_FLIGHT),
+        ("E", 1, 1, "Validating Commitment & Initial Scope", fdo, "Done", st_.IN_FLIGHT),
         ("F", 1, 7, "Completed", fdo, "Done", st_.COMPLETED),
         ("G", 1, 2, "Executing Pre-requisites", fdo, "On Track", st_.IN_FLIGHT),
         ("G", 2, 4, "Executing Migration", fdo, "On Track", st_.IN_FLIGHT),  # 4 beats 2
+        # A blank Current State blocks nothing: the Migration Status decides.
+        ("H", 1, 4, "Executing Migration", fdo, "Unknown", st_.IN_FLIGHT),
+        ("I", 1, 2, "Executing Pre-requisites", fdo, "Unknown", st_.IN_FLIGHT),
+        ("J", 1, 7, "Completed", fdo, "Unknown", st_.COMPLETED),
+        # Deferred, cancelled or no status, with no stage: blocked, whatever the state.
         ("K", 1, 5, "Deferred By Customer", fdo, "On Track", st_.DEFERRED),
-        ("L", 1, 6, "Cancelled / Archived", fdo, "Blocked - Customer", st_.CANCELLED),
-        # A latest wave completed while an earlier one is still at a stage:
-        # the FDO export says work is still in planning.
-        ("M", 1, 2, "Executing Pre-requisites", fdo, "Waiting", st_.IN_FLIGHT),
+        ("L", 1, 6, "Cancelled / Archived", fdo, "Unknown", st_.CANCELLED),
+        ("N", 1, nan, "Unknown", fdo, "Done", st_.UNKNOWN),
+        # Completed first: an old blocked wave does not undo a finished migration.
+        ("O", 1, 6, "Cancelled / Archived", fdo, "Blocked - Customer", st_.CANCELLED),
+        ("O", 2, 7, "Completed", fdo, "Done", st_.COMPLETED),
+        # …but a wave still at a stage keeps the account from being Completed.
+        ("M", 1, 2, "Executing Pre-requisites", fdo, "On Track", st_.IN_FLIGHT),
         ("M", 2, 7, "Completed", fdo, "Done", st_.COMPLETED),
-        ("N", 1, nan, "Unknown", fdo, "On Track", st_.UNKNOWN),
-        ("O", 1, nan, "On Hold", fdo, "On Track", st_.UNKNOWN),
-        # The tracking sheet wrote over these two; the export's value decides.
-        ("P", 1, nan, "Executing Migration", sheet, "On Track", st_.IN_FLIGHT),
-        ("Q", 1, nan, "On Hold", sheet, "Blocked", st_.ON_HOLD),
+        # The latest wave's state decides: blocked earlier, moving now.
+        ("R", 1, 2, "Executing Pre-requisites", fdo, "Blocked", st_.IN_FLIGHT),
+        ("R", 2, 4, "Executing Migration", fdo, "On Track", st_.IN_FLIGHT),
+        # The tracking sheet wrote over these two; the export's values decide.
+        ("P", 1, nan, "Executing Migration", sheet, "Blocked", st_.IN_FLIGHT),
+        ("Q", 1, nan, "On Hold", sheet, "On Track", st_.ON_HOLD),
     ])
     frame["migration_status"] = frame["migration_status"].mask(
         frame["tpid_key"].eq("N"))
     frame["fdo_migration_status"] = frame["migration_status"]
-    frame.loc[frame["tpid_key"].eq("P"), "fdo_migration_status"] = \
-        "2 - Executing Pre-Requisites"
-    frame.loc[frame["tpid_key"].eq("Q"), "fdo_migration_status"] = \
-        "6 - Cancelled / Archived"
+    frame["fdo_current_state"] = frame["current_state"]
+    frame.loc[frame["tpid_key"].eq("P"), ["fdo_migration_status", "fdo_current_state"]] = \
+        ["2 - Executing Pre-Requisites", "On Track"]
+    frame.loc[frame["tpid_key"].eq("Q"), ["fdo_migration_status", "fdo_current_state"]] = \
+        ["4 - Executing Migration", "Blocked - Partner / ISD"]
     phase = kpi.account_phase(frame).to_dict()
-    assert phase["A"] == phase["B"] == phase["G"] == kpi.PHASE_IN_PROGRESS
-    assert (phase["C"] == phase["D"] == phase["E"] == phase["M"] == phase["P"]
-            == kpi.PHASE_PLANNING)
-    assert phase["F"] == kpi.PHASE_COMPLETED
-    assert pd.isna(phase["K"])
-    # …and the detail names everyone the three phases do not cover, by the
-    # latest wave's FDO Migration Status — in its own words when it is neither.
-    detail = kpi.account_phase_detail(frame).to_dict()
-    assert detail["K"] == kpi.REST_DEFERRED
-    assert detail["L"] == detail["Q"] == kpi.REST_CANCELLED
-    assert detail["N"] == kpi.REST_NOT_STATED
-    assert detail["O"] == "On Hold"
-    # Blocked is a Current State, not a phase: flagged, never reclassified.
+    assert {k for k, v in phase.items() if v == kpi.PHASE_IN_PROGRESS} == {"A", "G", "H", "R"}
+    assert {k for k, v in phase.items() if v == kpi.PHASE_PLANNING} == {"C", "D", "E", "I",
+                                                                       "M", "P"}
+    assert {k for k, v in phase.items() if v == kpi.PHASE_COMPLETED} == {"F", "J", "O"}
+    assert {k for k, v in phase.items() if v == kpi.PHASE_BLOCKED} == {"B", "K", "L", "N",
+                                                                      "Q"}
     status = kpi.programme_status(frame)
-    assert set(status.index[status["blocked"]]) == {"B", "L", "Q"}
-    assert status.loc["L", "blocked_state"] == "Blocked - Customer"
-    assert kpi.rest_order(["Status not stated", "On Hold", "Cancelled",
-                           "Deferred"]) == ["Deferred", "Cancelled", "On Hold",
-                                            "Status not stated"]
+    assert set(status.index[status["blocked"]]) == {"B", "K", "L", "N", "Q"}
+    assert status.loc["Q", "fdo_state"] == "Blocked - Partner / ISD"
+    assert kpi.NON_BLOCKING_STATES == ("On Track", "Done",
+                                       "Waiting action on follow up date")
 
 
 def test_azure_native_customers_count_from_their_first_nomination_in_july_2025():
@@ -3492,26 +3497,27 @@ def test_the_eos_report_opens_on_the_programme_summary():
     eos = segments.population(ctx.fact, segments.CAT_EOS_ALL)
     native = segments.population(ctx.fact, segments.CAT_AVS_NATIVE)
     s = _exp().programme_summary(eos, native)
-    assert (s.eos.customers, s.eos.completed, s.eos.in_progress, s.eos.planning) == (5, 1, 0, 3)
+    assert ((s.eos.customers, s.eos.completed, s.eos.in_progress, s.eos.planning,
+             s.eos.blocked) == (5, 1, 0, 3, 1))
     assert (s.gen1, s.gen2, s.native) == (3, 2, 5)
     # Ticked, the native customers are added in — each customer once.
     assert s.with_native.customers == 10
     eos_line = _exp().summary_sentence(s.eos)
     all_line = _exp().summary_sentence(s.with_native)
-    # A flat list: the phases, then everyone else by FDO Migration Status, and
-    # the blocked customers named beside it (they are in the list already).
+    # A flat list of the four buckets, which add up to the customers.
     assert eos_line == ("To date, 5 customers are participating in factory-driven "
                         "migrations: 1 completed, 0 in progress, 3 in planning, "
-                        "1 cancelled (1 of them blocked).")
+                        "1 blocked.")
     # Gen1 to Azure Native is listed only once its customers are included, and
     # every line carries its own completed / in progress / in planning split.
     lines = _exp().summary_lines(s, True)
     assert lines == [
         "3 customers from Gen1 to Gen1 — 0 completed, 0 in progress, 2 in planning, "
-        "1 cancelled (1 of them blocked)",
-        "2 customers from Gen1 to Gen2 — 1 completed, 0 in progress, 1 in planning",
+        "1 blocked",
+        "2 customers from Gen1 to Gen2 — 1 completed, 0 in progress, 1 in planning, "
+        "0 blocked",
         "5 customers from Gen1 to Azure Native — 3 completed, 0 in progress, 1 in "
-        "planning, 1 deferred (1 of them blocked)"]
+        "planning, 1 blocked"]
     assert not any("Azure Native" in line for line in _exp().summary_lines(s))
     # The EOS lines' splits add up to the sentence above them.
     for field in ("completed", "in_progress", "planning"):
@@ -3533,7 +3539,7 @@ def test_the_eos_report_opens_on_the_programme_summary():
     pdf = _pdf_text(ctx, reports=["eos"], drilldown=False)
     assert "Programme summary" in pdf and eos_line in pdf
     assert "With the Azure Native customers added:" in pdf
-    assert "Leaving out the 1 customer with a blocked wave:" in pdf
+    assert "Leaving out the 1 blocked customer:" in pdf
     eos_part = pdf.split("EOS Migrations", 2)[-1]
     assert eos_part.index(eos_line) < eos_part.index("Executive summary")
     # Only the EOS report opens this way.
@@ -3866,22 +3872,22 @@ def test_every_summary_line_adds_up_and_each_number_opens_its_customers():
     lean = s.reading(False)
     for t in (s.eos, s.with_native, s.gen1_split, s.gen2_split, s.native_split,
               lean.eos, lean.with_native, lean.gen1_split, lean.native_split):
-        assert t.completed + t.in_progress + t.planning + t.others == t.customers
+        assert t.completed + t.in_progress + t.planning + t.blocked == t.customers
     rows = s.rows
     # Each bucket names exactly the customers its number counts — in both
     # readings, the one without blocked accounts carrying its own scopes.
     for bucket, expected in (("eos:total", s.eos.customers), ("all:total", s.with_native.customers),
-                             ("gen1:total", s.gen1), ("gen1:cancelled", 1),
-                             ("native:deferred", 1), ("native:blocked_wave", 1),
-                             ("all:blocked_wave", s.with_native.blocked),
+                             ("gen1:total", s.gen1), ("gen1:blocked", 1),
+                             ("native:blocked", 1),
+                             ("all:blocked", s.with_native.blocked),
                              ("eos-nb:total", lean.eos.customers),
                              ("all-nb:total", lean.with_native.customers),
-                             ("all-nb:blocked_wave", 0)):
+                             ("all-nb:blocked", 0)):
         hit = rows[[bucket in b.split("|") for b in rows["_buckets"]]]
         assert hit["tpid_key"].nunique() == expected, bucket
     doc = _main(html_report.build_html_report(ctx, reports=["eos"]).decode())
     picks = re.findall(r'class="sum-num"[^>]*data-pick-for="([^"]+)" data-pick="([^"]+)"', doc)
-    assert ("sum-acc", "gen1:cancelled") in picks and ("sum-acc", "all:blocked_wave") in picks
+    assert ("sum-acc", "gen1:blocked") in picks and ("sum-acc", "all:blocked") in picks
     assert ("sum-acc", "eos-nb:total") in picks
     assert 'id="sum-acc"' in doc
 
@@ -3915,19 +3921,24 @@ def test_the_summary_can_leave_the_blocked_accounts_out():
 
 
 def test_the_status_summary_comes_from_the_blocked_wave():
-    """The blocked wave's Status Summary says why; the latest wave's may not."""
+    """A blocked account's note comes from its blocked wave — the one saying why."""
     frame = pd.DataFrame({
-        "tpid_key": ["a", "a", "a", "b", "b"], "tpid": ["a", "a", "a", "b", "b"],
-        "wave_num": [1, 2, 3, 1, 2],
-        "fdo_current_state": ["Done", "Blocked - Customer", "On Track",
+        "tpid_key": ["a", "a", "a", "b", "b", "c", "c"],
+        "tpid": ["a", "a", "a", "b", "b", "c", "c"],
+        "wave_num": [1, 2, 3, 1, 2, 1, 2],
+        "fdo_current_state": ["Done", "Blocked - Customer", "Blocked",
+                              "Blocked - Customer", "On Track",
                               "On Track", "On Track"],
         "status_summary": ["Old note", "Waiting on the customer's firewall change",
-                           "Kick-off held", "First note", None],
+                           None, "Blocked note", "Kick-off held", "First note", None],
     })
     got = kpi.status_summary_by_account(frame)
+    # Blocked now; the latest blocked wave with a note says why.
     assert got["a"] == "Waiting on the customer's firewall change"
-    # No blocked wave: the latest Status Summary anyone wrote.
-    assert got["b"] == "First note"
+    # Moving again: its latest note, not the old blocked one.
+    assert got["b"] == "Kick-off held"
+    # Never blocked: the latest Status Summary anyone wrote.
+    assert got["c"] == "First note"
     # The customers behind the summary and the blocked section both carry it.
     assert "status_summary" in _exp().SUMMARY_COLUMNS
     assert "status_summary" in kpi.BLOCKED_DRILLDOWN_COLUMNS
@@ -3964,7 +3975,10 @@ def test_the_programme_summary_rule_is_documented_as_implemented():
         if isinstance(d, glossary.Definition) and d.title == "Programme summary"))
     for code in kpi.IN_PROGRESS_CODES + kpi.PLANNING_CODES:
         assert f"**{code} - " in text, code
-    for needle in ("**7 - Completed**", "FDO export", "**Migration Status** alone",
-                   "**Current State**", "Include blocked accounts"):
+    for needle in ("**7 - Completed**", "FDO export", "**Current State**",
+                   "Include blocked accounts", "**5 - Deferred By Customer**",
+                   "**6 - Cancelled / Archived**"):
         assert needle in text, needle
+    for state in kpi.NON_BLOCKING_STATES:
+        assert f"**{state}**" in text, state
     assert "FDO export" in glossary.PROGRAMME_SUMMARY

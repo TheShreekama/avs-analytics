@@ -270,10 +270,11 @@ table.data td.cell-drill.picked {{ background: var(--primary); color: #fff;
 table.data td.blank {{ background: repeating-linear-gradient(
     -45deg, #FAFBFD, #FAFBFD 5px, #F2F4F8 5px, #F2F4F8 10px); }}
 table.data .fytot {{ background: #EAF3FC; font-weight: 700; }}
-/* Free text (Status Summary) wraps in a readable column instead of stretching
-   the table into one very long line. */
-table.data td.wrap {{ white-space: normal; min-width: 16rem; max-width: 34rem;
-                      line-height: 1.4; }}
+/* Free text (Status Summary) stays on one line in a wide column, so every row
+   is the same height; the full note shows on hover, and Copy / CSV carry it
+   whole. */
+table.data td.note-cell {{ width: 56rem; min-width: 56rem; max-width: 56rem;
+                           overflow: hidden; text-overflow: ellipsis; }}
 
 /* Copy / CSV on every table. */
 .tbl-actions {{ display: flex; justify-content: flex-end; gap: .35rem;
