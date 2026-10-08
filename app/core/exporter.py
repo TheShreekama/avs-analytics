@@ -27,7 +27,7 @@ a bundled browser.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 import pandas as pd
@@ -885,6 +885,13 @@ class SummaryTotals:
     completed: int = 0
     in_progress: int = 0
     planning: int = 0
+    #: Everyone else, by where they stand (kpi.REST_ORDER), non-zero only — so
+    #: the phases and these always add up to ``customers``.
+    rest: tuple = ()
+
+    @property
+    def others(self) -> int:
+        return int(sum(n for _label, n in self.rest))
 
 
 @dataclass(frozen=True)
@@ -906,6 +913,9 @@ class ProgrammeSummary:
     gen2_split: SummaryTotals = SummaryTotals()
     no_generation_split: SummaryTotals = SummaryTotals()
     native_split: SummaryTotals = SummaryTotals()
+    #: One row per customer per line, with the buckets each number opens
+    #: (``_buckets``) — the HTML report's clickable summary reads it.
+    rows: pd.DataFrame = field(default_factory=pd.DataFrame, compare=False)
 
     def totals(self, include_native: bool) -> SummaryTotals:
         return self.with_native if include_native else self.eos
@@ -924,7 +934,7 @@ def _totals(*populations: pd.DataFrame) -> SummaryTotals:
     From AVS waves as one account would let an on-track native wave turn a
     completed EOS migration back into "in progress".
     """
-    phases = [kpi.account_phase(rows) for rows in populations if not rows.empty]
+    phases = [kpi.account_phase_detail(rows) for rows in populations if not rows.empty]
     if not phases:
         return SummaryTotals()
     phase = phases[0]
@@ -933,7 +943,10 @@ def _totals(*populations: pd.DataFrame) -> SummaryTotals:
     return SummaryTotals(customers=int(len(phase)),
                          completed=int(phase.eq(kpi.PHASE_COMPLETED).sum()),
                          in_progress=int(phase.eq(kpi.PHASE_IN_PROGRESS).sum()),
-                         planning=int(phase.eq(kpi.PHASE_PLANNING).sum()))
+                         planning=int(phase.eq(kpi.PHASE_PLANNING).sum()),
+                         rest=tuple((label, int(phase.eq(label).sum()))
+                                    for label in kpi.REST_ORDER
+                                    if int(phase.eq(label).sum())))
 
 
 def programme_summary(eos: pd.DataFrame, native: pd.DataFrame) -> ProgrammeSummary:
@@ -954,6 +967,7 @@ def programme_summary(eos: pd.DataFrame, native: pd.DataFrame) -> ProgrammeSumma
     in_gen = (eos["generation"].isin((segments.GEN_1, segments.GEN_2))
               if not eos.empty else pd.Series(dtype=bool))
     return ProgrammeSummary(
+        rows=_summary_rows(eos, native),
         gen1_split=split(eos[eos["generation"] == segments.GEN_1] if not eos.empty else eos),
         gen2_split=split(eos[eos["generation"] == segments.GEN_2] if not eos.empty else eos),
         no_generation_split=split(eos[~in_gen] if not eos.empty else eos),
@@ -967,36 +981,139 @@ def programme_summary(eos: pd.DataFrame, native: pd.DataFrame) -> ProgrammeSumma
                  if not eos.empty and not native.empty else 0))
 
 
-def _customers(n: int) -> str:
-    return f"{fmt_int(n)} customer{'' if n == 1 else 's'}"
+#: The summary's numbers, by what they count — the bucket keys the HTML
+#: report's clickable numbers carry, and the words its filter note uses.
+SUMMARY_SCOPES = {"eos": "EOS customers", "all": "All customers",
+                  "gen1": "Gen1 to Gen1", "gen2": "Gen1 to Gen2",
+                  "nogen": "No generation stated", "native": "Gen1 to Azure Native"}
+_PHASE_KEYS = {kpi.PHASE_COMPLETED: "completed", kpi.PHASE_IN_PROGRESS: "in_progress",
+               kpi.PHASE_PLANNING: "planning"}
 
 
-def summary_sentence(t: SummaryTotals) -> str:
+def summary_key(phase: str) -> str:
+    """The bucket key for a phase or a rest label ("On hold" becomes "on_hold")."""
+    return _PHASE_KEYS.get(phase) or re.sub(r"[^a-z0-9]+", "_", str(phase).lower()).strip("_")
+
+
+def summary_bucket_label(bucket: str) -> str:
+    """"gen1:blocked" becomes "Gen1 to Gen1 · blocked", for the filter note."""
+    scope, _, key = bucket.partition(":")
+    words = {"total": "all", "others": "the others", "in_progress": "in progress"}
+    return f"{SUMMARY_SCOPES.get(scope, scope)} · {words.get(key, key.replace('_', ' '))}"
+
+
+def _plain(value: int, _bucket: str) -> str:
+    return fmt_int(value)
+
+
+def _customers(n: int, num=_plain, bucket: str = "") -> str:
+    return f"{num(n, bucket)} customer{'' if n == 1 else 's'}"
+
+
+def _join(parts: list[str]) -> str:
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+
+
+def _rest_text(t: SummaryTotals, scope: str, num=_plain) -> str:
+    """"; the other 4: 2 blocked, 1 deferred and 1 on hold" (or "; the other 1
+    is on hold") — empty when the three phases already account for everyone."""
+    if not t.rest:
+        return ""
+    if len(t.rest) == 1:
+        (label, n), = t.rest
+        return (f"; the other {num(n, f'{scope}:{summary_key(label)}')} "
+                f"{'is' if n == 1 else 'are'} {label.lower()}")
+    parts = [f"{num(n, f'{scope}:{summary_key(label)}')} {label.lower()}"
+             for label, n in t.rest]
+    return f"; the other {num(t.others, f'{scope}:others')}: {_join(parts)}"
+
+
+def summary_sentence(t: SummaryTotals, num=_plain, scope: str = "eos") -> str:
+    """The opening sentence.  ``num(value, bucket)`` renders each number — plain
+    text by default; the HTML report makes each one a link to its customers."""
     verb = "is" if t.customers == 1 else "are"
-    return (f"To date, {_customers(t.customers)} {verb} participating in "
-            f"factory-driven migrations, including {fmt_int(t.completed)} completed "
-            f"migration{'' if t.completed == 1 else 's'}, {fmt_int(t.in_progress)} "
-            f"currently in progress and {fmt_int(t.planning)} in planning.")
+    return (f"To date, {_customers(t.customers, num, f'{scope}:total')} {verb} "
+            f"participating in factory-driven migrations, including "
+            f"{num(t.completed, f'{scope}:completed')} completed "
+            f"migration{'' if t.completed == 1 else 's'}, "
+            f"{num(t.in_progress, f'{scope}:in_progress')} currently in progress and "
+            f"{num(t.planning, f'{scope}:planning')} in planning"
+            f"{_rest_text(t, scope, num)}.")
 
 
-def _split_text(t: SummaryTotals) -> str:
-    return (f"{fmt_int(t.completed)} completed, {fmt_int(t.in_progress)} in "
-            f"progress, {fmt_int(t.planning)} in planning")
+def _split_text(t: SummaryTotals, scope: str, num=_plain) -> str:
+    return (f"{num(t.completed, f'{scope}:completed')} completed, "
+            f"{num(t.in_progress, f'{scope}:in_progress')} in progress, "
+            f"{num(t.planning, f'{scope}:planning')} in planning"
+            f"{_rest_text(t, scope, num)}")
 
 
-def summary_lines(s: ProgrammeSummary, include_native: bool = False) -> list[str]:
-    """The per-destination lines, each with its own completed / in progress /
-    in planning split.  Gen1 to Azure Native appears only when the Azure Native
+def summary_lines(s: ProgrammeSummary, include_native: bool = False,
+                  num=_plain) -> list[str]:
+    """The per-destination lines, each with its own split that adds up to the
+    line's customers.  Gen1 to Azure Native appears only when the Azure Native
     customers are included in the totals above it."""
-    lines = [f"{_customers(s.gen1)} from Gen1 to Gen1 — {_split_text(s.gen1_split)}",
-             f"{_customers(s.gen2)} from Gen1 to Gen2 — {_split_text(s.gen2_split)}"]
+    lines = [f"{_customers(s.gen1, num, 'gen1:total')} from Gen1 to Gen1 — "
+             f"{_split_text(s.gen1_split, 'gen1', num)}",
+             f"{_customers(s.gen2, num, 'gen2:total')} from Gen1 to Gen2 — "
+             f"{_split_text(s.gen2_split, 'gen2', num)}"]
     if s.no_generation:
-        lines.append(f"{_customers(s.no_generation)} with no generation stated — "
-                     f"{_split_text(s.no_generation_split)}")
+        lines.append(f"{_customers(s.no_generation, num, 'nogen:total')} with no "
+                     f"generation stated — {_split_text(s.no_generation_split, 'nogen', num)}")
     if include_native:
-        lines.append(f"{_customers(s.native)} from Gen1 to Azure Native — "
-                     f"{_split_text(s.native_split)}")
+        lines.append(f"{_customers(s.native, num, 'native:total')} from Gen1 to Azure "
+                     f"Native — {_split_text(s.native_split, 'native', num)}")
     return lines
+
+
+#: The columns the summary's customers are listed with in the HTML report.
+SUMMARY_COLUMNS = ["tpid", "customer_name", "summary_line", "summary_phase",
+                   "migration_status_label", "current_state", "region_geo"]
+
+
+def _summary_rows(eos: pd.DataFrame, native: pd.DataFrame) -> pd.DataFrame:
+    """One row per customer per summary line, carrying every bucket it counts
+    in: its line's total and phase, and the sentence's (the EOS one, and the one
+    with Azure Native added — where a customer on both lines counts once, on
+    its EOS row, exactly as the totals do)."""
+    parts = []
+    eos_keys: set = set()
+    for pop, motion in ((eos, "eos"), (native, "native")):
+        if pop.empty:
+            continue
+        detail = kpi.account_phase_detail(pop)
+        lasts = kpi.latest_wave(pop).set_index("tpid_key")
+        rows = lasts.reindex(detail.index).reset_index().rename(
+            columns={"index": "tpid_key"})
+        rows["summary_phase"] = detail.to_numpy()
+        if motion == "eos":
+            gen = rows["generation"]
+            rows["_line"] = ["gen1" if g == segments.GEN_1 else
+                             "gen2" if g == segments.GEN_2 else "nogen" for g in gen]
+            eos_keys = set(rows["tpid_key"])
+        else:
+            rows["_line"] = "native"
+        rows["summary_line"] = [SUMMARY_SCOPES[k] for k in rows["_line"]]
+        buckets = []
+        for key, line, phase in zip(rows["tpid_key"], rows["_line"], rows["summary_phase"]):
+            pk = summary_key(phase)
+            rest = phase in kpi.REST_ORDER
+            scopes = [line]
+            if motion == "eos":
+                scopes += ["eos", "all"]
+            elif key not in eos_keys:
+                scopes += ["all"]
+            out = []
+            for scope in scopes:
+                out += [f"{scope}:total", f"{scope}:{pk}"]
+                if rest:
+                    out.append(f"{scope}:others")
+            buckets.append("|".join(out))
+        rows["_buckets"] = buckets
+        parts.append(rows)
+    if not parts:
+        return pd.DataFrame(columns=SUMMARY_COLUMNS + ["_buckets"])
+    return pd.concat(parts, ignore_index=True)
 
 
 def summary_overlap_note(s: ProgrammeSummary) -> str:
@@ -1024,8 +1141,10 @@ def summary_note(include_native: bool) -> str:
            if include_native else "Totals cover the EOS customers only")
     return (f"{who}. Azure Native = Primary Migration Path contains (From AVS), "
             f"first nominated on or after {start:%d %b %Y}. In progress = stage 4 "
-            f"Executing Migration; in planning = stage 2 Executing Pre-requisites "
-            f"or stage 3 Finalize Scope. All time.")
+            f"Executing Migration; in planning = stage 1 Validating Commitment, "
+            f"stage 2 Executing Pre-requisites or stage 3 Finalize Scope. Everyone "
+            f"else is named by state (blocked, deferred, on hold, cancelled). All "
+            f"time.")
 
 
 #: The matrix block that adds every other block together.

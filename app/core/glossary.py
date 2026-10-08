@@ -29,8 +29,11 @@ PROGRAMME_SUMMARY = (
     "• Completed = account state Completed.\n"
     "• In progress = any wave at stage 4 Executing Migration (sheet: Executing "
     "Migration or Sign-off Pending).\n"
-    "• In planning = any wave at stage 2 Executing Pre-requisites or 3 Finalize "
-    "Scope (sheet: Planning & Prerequisites or Ready for Migration).\n"
+    "• In planning = any wave at stage 1 Validating Commitment, 2 Executing "
+    "Pre-requisites or 3 Finalize Scope (sheet: Kick-Off Awaited, Planning & "
+    "Prerequisites or Ready for Migration).\n"
+    "• Everyone else is named by state — blocked, deferred, on hold, cancelled "
+    "or status not stated — so the numbers always add up.\n"
     "• Gen1 to Azure Native = customers whose Primary Migration Path contains "
     "(From AVS), first nominated on or after 1 July 2025.\n"
     "Tick 'Include Azure Native customers' to add those to the totals."
@@ -810,12 +813,14 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "In progress: any wave's **Migration Status** is **4 - Executing "
             "Migration**, or the sheet's **Executing Migration** or **Sign-off "
             "Pending**.",
-            "In planning: any wave at **2 - Executing Pre-requisites** or **3 - "
-            "Finalize Scope**, or the sheet's **Planning & Prerequisites** or "
+            "In planning: any wave at **1 - Validating Commitment & Initial "
+            "Scope**, **2 - Executing Pre-requisites** or **3 - Finalize Scope**, "
+            "or the sheet's **Kick-Off Awaited**, **Planning & Prerequisites** or "
             "**Ready for Migration**.",
-            "Each customer takes the first of those three that holds; "
-            "**Current State** plays no part, and stage 1, deferred, on hold "
-            "and cancelled accounts take none.",
+            "Each customer takes the first of those three that holds, "
+            "**Current State** playing no part; anyone else is named by account "
+            "state (blocked, deferred, on hold, cancelled), else status not "
+            "stated — so every line adds up.",
             "Gen1 to Gen1 and Gen1 to Gen2 count the customers by generation, "
             "each line with its own completed, in progress and in planning "
             "split.",

@@ -101,6 +101,7 @@ _COLUMN_LABELS.update({
     "blocked_state": "Current State", "phase": kpi.LATEST_WAVE_COLUMN,
     "reported_end_date": "End date used", "end_date_source": "End date read from",
     "matrix_measure": "Measure", "matrix_month": "Month",
+    "summary_line": "Summary line", "summary_phase": "Where it stands",
     "matrix_date": "Date counted", "date_source": "Date read from",
 })
 
@@ -1226,17 +1227,36 @@ def _programme_summary(doc: _Builder, summary) -> None:
     asks for — no script, so it works in a file opened offline.  The box is the
     reader's: it starts unticked (EOS customers only).
     """
+    panel = _slug("sum-acc")
+    rows = summary.rows
+
+    def num(value: int, bucket: str) -> str:
+        # A number with customers behind it opens them in the panel below.
+        if not value or rows is None or rows.empty:
+            return fmt_int(value)
+        return (f'<a class="sum-num" role="button" tabindex="0" '
+                f'data-pick-for="{panel}" data-pick="{esc(bucket)}" '
+                f'data-pick-label="{esc(exporter.summary_bucket_label(bucket))}">'
+                f"{fmt_int(value)}</a>")
+
     def sentence(flag: bool, cls: str) -> str:
         return (f'<p class="sum-text {cls}">'
-                f"{esc(exporter.summary_sentence(summary.totals(flag)))}</p>")
+                f"{exporter.summary_sentence(summary.totals(flag), num, 'all' if flag else 'eos')}"
+                "</p>")
 
     def note(flag: bool, cls: str) -> str:
         return f'<p class="note sum-note {cls}">{esc(exporter.summary_note(flag))}</p>'
 
     def lines(flag: bool, cls: str) -> str:
-        items = "".join(f"<li>{esc(line)}</li>"
-                        for line in exporter.summary_lines(summary, flag))
+        items = "".join(f"<li>{line}</li>"
+                        for line in exporter.summary_lines(summary, flag, num))
         return f'<ul class="sum-lines {cls}">{items}</ul>'
+
+    accounts = (_accounts_panel(
+        "Customers behind these numbers", rows, panel,
+        buckets=lambda r: list(r["_buckets"]), columns=exporter.SUMMARY_COLUMNS,
+        hint="Click a number above to see the customers behind it.",
+        noun="rows") if rows is not None and not rows.empty else "")
     doc.write(f'<div class="card prog-summary">'
               f'<h3 class="block">{esc(exporter.SUMMARY_TITLE)}</h3>'
               f'<input type="checkbox" class="sum-toggle" id="sum-native">'
@@ -1247,7 +1267,7 @@ def _programme_summary(doc: _Builder, summary) -> None:
               + (f'<p class="note sum-all">{esc(exporter.summary_overlap_note(summary))}</p>'
                  if exporter.summary_overlap_note(summary) else "")
               + f'<p class="sum-caveat sum-all">{esc(exporter.NATIVE_CAVEAT)}</p>'
-              + note(False, "sum-eos") + note(True, "sum-all") + "</div>")
+              + note(False, "sum-eos") + note(True, "sum-all") + accounts + "</div>")
 
 
 # --------------------------------------------------------------------------- #
