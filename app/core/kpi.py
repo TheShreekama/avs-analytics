@@ -1873,7 +1873,8 @@ def status_summary_by_account(fact: pd.DataFrame) -> pd.Series:
     """
     if fact.empty or "status_summary" not in fact.columns:
         return pd.Series(dtype="string")
-    ordered = _ordered(_narrow(fact, "status_summary"))
+    ordered = _ordered(_narrow(fact, "fdo_current_state", "current_state",
+                               "status_summary"))
     text = ordered["status_summary"].astype("string").str.strip()
     text = text.mask(text.eq(""))
     keys = ordered["tpid_key"]
