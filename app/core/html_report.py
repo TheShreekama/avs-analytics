@@ -145,6 +145,8 @@ class _Builder:
     scripts: list[str]
     toc: list[tuple[str, str, bool]]      # (anchor, label, is_sub)
     figures: int = 0
+    #: Whether the Methodology & logic section was written (the footer says so).
+    methodology: bool = False
 
     def write(self, markup: str) -> None:
         self.body.append(markup)
@@ -1506,7 +1508,7 @@ def build_html_report(ctx, where: str = "", scope_label: str = "All data",
         _report(doc, ctx, fact, all_time, spec, views, sections)
         if spec.key == "eos" and exporter.shows_programme(ctx, specs, sections):
             _programme(doc, ctx)
-    if specs:
+    if specs and sections.methodology:
         _methodology(doc)
     if "inconsistency" in chosen:
         _inconsistency(doc, ctx)
@@ -1518,6 +1520,7 @@ def build_html_report(ctx, where: str = "", scope_label: str = "All data",
     # Scope, as-of, dataset, account count and generation time all appear
     # elsewhere in the report or in the file name.
     shown = next(v for v in views if v.key == default)
+    doc.methodology = bool(specs and sections.methodology)
     chips = [f'Period: <b data-period-chip>{esc(shown.label)}</b>']
     switch = _period_switch(views, default) if specs else ""
     return _document(title, subtitle, chips, doc, switch, default).encode("utf-8")
@@ -1557,6 +1560,8 @@ def _document(title: str, subtitle: str, chips: list[str], doc: _Builder,
            '<button class="btn" id="toggle-width" type="button" '
            'aria-pressed="false">Wide</button>'
            "</div></nav>") if doc.toc else ""
+    method_note = ("; the Methodology &amp; logic section states each rule in full"
+                   if doc.methodology else "")
     return f"""<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -1578,9 +1583,8 @@ def _document(title: str, subtitle: str, chips: list[str], doc: _Builder,
 </main>
 </div>
 <footer class="report-foot">
-  Every figure is counted per account across all of its waves; the
-  Methodology &amp; logic section states each rule in full. This file is
-  self-contained — charts, styles and data are all inside it.
+  Every figure is counted per account across all of its waves{method_note}. This
+  file is self-contained — charts, styles and data are all inside it.
 </footer>
 <script>{get_plotlyjs()}</script>
 <script>{chr(10).join(doc.scripts)}</script>

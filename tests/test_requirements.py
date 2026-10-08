@@ -2305,9 +2305,10 @@ def state_ctx(state_fact):
 
 @pytest.fixture(scope="module")
 def state_doc(state_ctx):
-    from app.core import html_report
+    from app.core import exporter as exp, html_report
     return html_report.build_html_report(
-        state_ctx, reports=["avs", "eos"], appendices=["inconsistency"]).decode("utf-8")
+        state_ctx, reports=["avs", "eos"], appendices=["inconsistency"],
+        sections=exp.ReportSections(methodology=True)).decode("utf-8")
 
 
 def _main(doc: str) -> str:
@@ -3469,9 +3470,18 @@ def test_the_eos_report_opens_on_the_programme_summary():
     assert eos_line.startswith("To date, 5 customers are participating in "
                                "factory-driven migrations, including 1 completed "
                                "migration, 2 currently in progress and 1 in planning")
-    # Gen1 to Azure Native is listed only once its customers are included.
-    assert "5 customers from Gen1 to Azure Native" in _exp().summary_lines(s, True)
+    # Gen1 to Azure Native is listed only once its customers are included, and
+    # every line carries its own completed / in progress / in planning split.
+    lines = _exp().summary_lines(s, True)
+    assert lines == [
+        "3 customers from Gen1 to Gen1 — 0 completed, 2 in progress, 0 in planning",
+        "2 customers from Gen1 to Gen2 — 1 completed, 0 in progress, 1 in planning",
+        "5 customers from Gen1 to Azure Native — 3 completed, 0 in progress, 1 in planning"]
     assert not any("Azure Native" in line for line in _exp().summary_lines(s))
+    # The EOS lines' splits add up to the sentence above them.
+    for field in ("completed", "in_progress", "planning"):
+        assert (getattr(s.gen1_split, field) + getattr(s.gen2_split, field)
+                + getattr(s.no_generation_split, field)) == getattr(s.eos, field)
 
     # The HTML report carries both readings behind the reader's own checkbox,
     # unticked, ahead of the executive summary.
@@ -3791,3 +3801,17 @@ def test_a_customer_on_two_summary_lines_is_counted_once_and_explained():
     assert (s.gen1, s.native, s.overlap, s.with_native.customers) == (2, 1, 1, 2)
     note = _exp().summary_overlap_note(s)
     assert "add up to 3" in note and "counted once in the total of 2" in note
+
+
+def test_the_methodology_is_in_a_report_only_when_asked_for(state_ctx):
+    from app.core import exporter as exp, html_report
+    plain = _main(html_report.build_html_report(state_ctx, reports=["avs"]).decode())
+    assert 'id="methodology"' not in plain and 'id="opt-methodology"' not in plain
+    assert "Methodology & Logic" not in _pdf_text(state_ctx, reports=["avs"],
+                                                    drilldown=False)
+    on = exp.ReportSections(methodology=True)
+    asked = _main(html_report.build_html_report(state_ctx, reports=["avs"],
+                                                sections=on).decode())
+    assert 'id="opt-methodology"' in asked
+    assert "Methodology & Logic" in _pdf_text(state_ctx, reports=["avs"],
+                                              drilldown=False, sections=on)

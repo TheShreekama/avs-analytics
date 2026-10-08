@@ -229,6 +229,10 @@ under Streamlit's AppTest in both counting modes.
   Current State plays no part. X = every EOS (All) account, so X ≥ Y+Z+U. Azure Native =
   `avs_native` accounts whose first `cleaning.nomination_date` ≥ 1 Jul 2025
   (`kpi.nominated_since`, `exporter.summary_native_start` = `EOS_MATRIX_START_FY`).
+  **Every line carries its own split** — "23 customers from Gen1 to Gen1 — 10 completed,
+  2 in progress, 3 in planning" (`ProgrammeSummary.gen1_split` / `gen2_split` /
+  `no_generation_split` / `native_split`, same `kpi.account_phase` rule; the EOS lines'
+  splits add up to the sentence).
   A customer on an EOS line *and* the Azure Native line is counted once in the total;
   `ProgrammeSummary.overlap` / `exporter.summary_overlap_note` says so whenever the
   lines add up to more than the total.
@@ -527,8 +531,10 @@ under Streamlit's AppTest in both counting modes.
   Plotly on reveal (a chart laid out hidden is zero wide). Default unticked, and the
   methodology carries no `doc.anchor`, so it stays out of the contents list.
 - **Which sections a report carries** is `exporter.ReportSections(blocked=True,
-  insights=False)` — the defaults the Reports page offers — passed to `build_report` and
-  `build_html_report` alike. Inclusion (build time) and visibility (the reader's checkbox)
+  insights=False, programme=True, methodology=False)` — the defaults the Reports page
+  offers — passed to `build_report` and `build_html_report` alike. **The Methodology &
+  logic section is opt-in** (Reports page checkbox, off by default) in both formats; when
+  included, the HTML keeps it behind the reader's own "Show methodology & logic" box. Inclusion (build time) and visibility (the reader's checkbox)
   are separate questions.
 - **The This-FY row** (`html_report._this_fy`) sits above the selected period's row
   whenever the two differ, mirroring the dashboards — **including over "All time"**, which

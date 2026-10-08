@@ -95,9 +95,15 @@ def render() -> None:
              "Migration Status and Current State, SDDC progress, timeline and "
              "the accounts that need attention. Follows the EOS report; needs a "
              "tracking sheet loaded on Data & Upload.")
+    include_methodology = st.checkbox(
+        "Methodology & logic section", value=False, key="rep_methodology",
+        help="Closes the report with every rule each figure is worked out by — "
+             "the same text as the Methodology page. Leave it out for a "
+             "shorter document.")
     sections = exporter.ReportSections(blocked=include_blocked,
                                        insights=include_insights,
-                                       programme=include_programme)
+                                       programme=include_programme,
+                                       methodology=include_methodology)
 
     subheading("Appendix")
     appendices: list[str] = []
@@ -120,7 +126,8 @@ def render() -> None:
     section("3 · Generate")
     extras = ", ".join(name for name, on in
                        ((exporter.BLOCKED_TITLE.lower(), include_blocked),
-                        ("insights", include_insights)) if on) or "none"
+                        ("insights", include_insights),
+                        ("methodology", include_methodology)) if on) or "none"
     st.caption(f"**{scope_label}** · **{fmt_int(n)}** {unit.lower()} · period "
                f"**{period_label}** · as-of {ctx.as_of:%d %b %Y} · "
                f"{len(selected)} report(s)"
@@ -128,9 +135,9 @@ def render() -> None:
                f"optional sections: {extras}.")
     st.caption("Every figure is counted per account, read across all of its "
                "waves, exactly as the Status Report pages count it — the "
-               "sidebar's counting mode does not change the report. Each report "
-               "closes with a **Methodology & logic** section stating every rule "
-               "it applied.")
+               "sidebar's counting mode does not change the report. Tick "
+               "**Methodology & logic section** to close it with every rule it "
+               "applied.")
     if ctx.has_tracker:
         st.caption(f"The **manual EOS tracking sheet** ({ctx.tracker_filename}) is "
                    f"loaded, so the EOS generations and the programme matrix's "

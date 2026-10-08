@@ -94,6 +94,9 @@ class ReportSections:
     #: The EOS Programme Tracker — the tracking sheet reported on its own —
     #: after the EOS report, whenever a sheet is loaded and EOS is chosen.
     programme: bool = True
+    #: The Methodology & logic section, closing both formats.  Off unless the
+    #: Reports page asks for it.
+    methodology: bool = False
 
 
 #: What a report calls itself when the caller says nothing.  Deliberately about
@@ -897,6 +900,12 @@ class ProgrammeSummary:
     #: Customers on an EOS line *and* the Azure Native line — counted once in
     #: the total, so the lines add up to more than it by exactly this many.
     overlap: int = 0
+    #: Each line's own completed / in progress / in planning split, by the same
+    #: phase rule as the sentence above it.
+    gen1_split: SummaryTotals = SummaryTotals()
+    gen2_split: SummaryTotals = SummaryTotals()
+    no_generation_split: SummaryTotals = SummaryTotals()
+    native_split: SummaryTotals = SummaryTotals()
 
     def totals(self, include_native: bool) -> SummaryTotals:
         return self.with_native if include_native else self.eos
@@ -938,7 +947,17 @@ def programme_summary(eos: pd.DataFrame, native: pd.DataFrame) -> ProgrammeSumma
     native = kpi.nominated_since(native, summary_native_start())
     gens = (eos.drop_duplicates("tpid_key")["generation"]
             if not eos.empty else pd.Series(dtype="object"))
+
+    def split(rows: pd.DataFrame) -> SummaryTotals:
+        return _totals(rows) if not rows.empty else SummaryTotals()
+
+    in_gen = (eos["generation"].isin((segments.GEN_1, segments.GEN_2))
+              if not eos.empty else pd.Series(dtype=bool))
     return ProgrammeSummary(
+        gen1_split=split(eos[eos["generation"] == segments.GEN_1] if not eos.empty else eos),
+        gen2_split=split(eos[eos["generation"] == segments.GEN_2] if not eos.empty else eos),
+        no_generation_split=split(eos[~in_gen] if not eos.empty else eos),
+        native_split=split(native),
         eos=_totals(eos), with_native=_totals(eos, native),
         gen1=int(gens.eq(segments.GEN_1).sum()),
         gen2=int(gens.eq(segments.GEN_2).sum()),
@@ -960,15 +979,23 @@ def summary_sentence(t: SummaryTotals) -> str:
             f"currently in progress and {fmt_int(t.planning)} in planning.")
 
 
+def _split_text(t: SummaryTotals) -> str:
+    return (f"{fmt_int(t.completed)} completed, {fmt_int(t.in_progress)} in "
+            f"progress, {fmt_int(t.planning)} in planning")
+
+
 def summary_lines(s: ProgrammeSummary, include_native: bool = False) -> list[str]:
-    """The per-destination lines.  Gen1 to Azure Native appears only when the
-    Azure Native customers are included in the totals above it."""
-    lines = [f"{_customers(s.gen1)} from Gen1 to Gen1",
-             f"{_customers(s.gen2)} from Gen1 to Gen2"]
+    """The per-destination lines, each with its own completed / in progress /
+    in planning split.  Gen1 to Azure Native appears only when the Azure Native
+    customers are included in the totals above it."""
+    lines = [f"{_customers(s.gen1)} from Gen1 to Gen1 — {_split_text(s.gen1_split)}",
+             f"{_customers(s.gen2)} from Gen1 to Gen2 — {_split_text(s.gen2_split)}"]
     if s.no_generation:
-        lines.append(f"{_customers(s.no_generation)} with no generation stated")
+        lines.append(f"{_customers(s.no_generation)} with no generation stated — "
+                     f"{_split_text(s.no_generation_split)}")
     if include_native:
-        lines.append(f"{_customers(s.native)} from Gen1 to Azure Native")
+        lines.append(f"{_customers(s.native)} from Gen1 to Azure Native — "
+                     f"{_split_text(s.native_split)}")
     return lines
 
 
@@ -2068,9 +2095,10 @@ def build_story(ctx, where: str = "", scope_label: str = "All data",
         # them reads as portrait like the rest of the report.
         if drilldown:
             story += kit.turn(kit.PORTRAIT)
-        story += _part("part_method", "Methodology & Logic",
-                       "The rules behind every number above.", ss)
-        story += _methodology(ss)
+        if sections.methodology:
+            story += _part("part_method", "Methodology & Logic",
+                           "The rules behind every number above.", ss)
+            story += _methodology(ss)
 
     if chosen:
         # The methodology above already turned the document back to portrait.
