@@ -221,26 +221,42 @@ under Streamlit's AppTest in both counting modes.
 - **Programme summary** (opens the EOS report, before the executive summary — dashboard
   EOS (All) page, PDF and HTML;
   `exporter.programme_summary` → `ProgrammeSummary`, text via `summary_sentence` /
-  `summary_lines` / `summary_note`): "To date, X customers … Y completed, Z in progress, U
-  in planning" + Gen1→Gen1 / Gen1→Gen2 / Gen1→Azure Native lines. Per account
-  (`kpi.account_phase`, first match): Completed = `account_state` Completed; In progress =
-  any in-flight wave at stage 4 (sheet: Executing Migration / Sign-off Pending); In
-  planning = stage **1**, 2 or 3 (sheet: Kick-Off Awaited / Planning & Prerequisites /
-  Ready for Migration); Current State plays no part. **Everyone else is named**
-  (`kpi.account_phase_detail`, `kpi.REST_ORDER`: blocked / deferred / on hold /
-  cancelled by account state, else status not stated) — "; the other 4: 2 blocked, 1
-  deferred and 1 on hold" — so the sentence and **every line add up** to their
-  customers (`SummaryTotals.rest`). **In the HTML every number is clickable**
-  (`summary_sentence(…, num=…)` / `summary_lines(…, num=…)` render numbers through a
-  callback; `ProgrammeSummary.rows` — one row per customer per line, `_buckets` like
-  `gen1:blocked|eos:blocked|all:others` — feeds the "Customers behind these numbers"
-  panel; the script's generic `[data-pick-for]` handler filters it). Azure Native =
+  `summary_lines` / `summary_note`): "To date, X customers are participating in
+  factory-driven migrations: Y completed, Z in progress, U in planning, 1 deferred, 1
+  cancelled (2 of them blocked)." — **a flat list, never "; the other N: …"** — +
+  Gen1→Gen1 / Gen1→Gen2 / Gen1→Azure Native lines in the same shape.
+  **Read from the FDO export's Migration Status alone** (`kpi.programme_status`, via
+  `kpi.fdo_migration_status` = `fdo_migration_status`, the export's value before the
+  sheet writes over it): **the EOS tracking sheet and Current State play no part**,
+  unlike every other EOS figure (a stakeholder decision). Per account, first match: In
+  progress = any wave at **4**; In planning = any wave at **1**, 2 or 3; Completed =
+  latest wave **7** (so no wave still at a stage); everyone else by the **latest real
+  row's** FDO status — Deferred (5), Cancelled (6), any other value **as the export words
+  it**, else "Status not stated" (`kpi.REST_*`, ordered by `kpi.rest_order`) — so the
+  sentence and **every line add up** to their customers (`SummaryTotals.rest`).
+  **Blocked is not a Migration Status**, so it is not a phase: a customer is *blocked*
+  when **any** wave's FDO Current State reads Blocked (`kpi.is_fdo_blocked`,
+  `fdo_current_state`); it stays in its phase and is named beside the list
+  (`SummaryTotals.blocked`, "(2 of them blocked)"). **"Include blocked accounts"**
+  (ticked by default) — unticked, those customers leave every number and line:
+  `programme_summary` builds the whole summary twice and `ProgrammeSummary.reading(False)`
+  (`excluding_blocked`) is the lean one, blocked judged within each motion.
+  **In the HTML every number is clickable** (`summary_sentence(…, num=…)` /
+  `summary_lines(…, num=…, tag=…)` render numbers through a callback;
+  `ProgrammeSummary.rows` — one row per customer per line, `_buckets` like
+  `gen1:cancelled|gen1:blocked|eos:total|…|eos-nb:total` (the lean reading's scopes carry
+  `exporter.NO_BLOCKED`), `_left_out` marking rows the lean reading drops — feeds the
+  "Customers behind these numbers" panel, columns `exporter.SUMMARY_COLUMNS`: FDO
+  Migration Status, the blocked wave's Current State and **Status Summary**). The four
+  readings (native × blocked) are all written out and shown by CSS sibling rules on
+  `.sum-toggle` / `.sum-blk-toggle`; rows carry `data-left-out` and the table
+  `data-lean-toggle`, so the unticked box hides them (CSS) and `apply()` counts them out;
+  `input[data-resets]` clears a pick when a box changes. Azure Native =
   `avs_native` accounts whose first `cleaning.nomination_date` ≥ 1 Jul 2025
   (`kpi.nominated_since`, `exporter.summary_native_start` = `EOS_MATRIX_START_FY`).
-  **Every line carries its own split** — "23 customers from Gen1 to Gen1 — 10 completed,
-  2 in progress, 3 in planning" (`ProgrammeSummary.gen1_split` / `gen2_split` /
-  `no_generation_split` / `native_split`, same `kpi.account_phase` rule; the EOS lines'
-  splits add up to the sentence).
+  **Every line carries its own split** (`ProgrammeSummary.gen1_split` / `gen2_split` /
+  `no_generation_split` / `native_split`, same rule; the EOS lines' splits add up to the
+  sentence).
   A customer on an EOS line *and* the Azure Native line is counted once in the total;
   `ProgrammeSummary.overlap` / `exporter.summary_overlap_note` says so whenever the
   lines add up to more than the total.
@@ -249,9 +265,21 @@ under Streamlit's AppTest in both counting modes.
   to Azure Native is often modernisation, not an EOS exit).
   "Include Azure Native customers" adds them (unique TPIDs) to every total — each customer
   classified within its own motion, EOS phase winning (`exporter._totals`): a
-  `st.checkbox` on the page and a CSS-only `.sum-toggle` in the HTML (both readings written
-  out, always unticked — a reader's choice, never a generation option). The PDF prints the
-  EOS reading and the with-native one underneath. All time, never the period.
+  `st.checkbox` on the page (beside "Include blocked accounts") and a CSS-only
+  `.sum-toggle` in the HTML (always unticked — a reader's choice, never a generation
+  option). The PDF prints the EOS reading, the one leaving the blocked customers out, and
+  the with-native one underneath. All time, never the period.
+- **Status Summary comes from the blocked wave** (`kpi.status_summary_by_account`): the
+  account's latest wave whose FDO Current State reads Blocked and has a Status Summary,
+  else its latest written one — that wave's note is the one saying *why*. Used by the
+  summary's customers panel and the blocked-accounts rows (`kpi.blocked_accounts`).
+- **Copy and CSV on every HTML table** (`html_report._table_tools`, written by `_table`, or
+  into the search row by `_accounts_panel` / `_accounts_body` / `_rows_panel` /
+  `_searchable_table` with `actions=False`): Copy puts the **rows as shown** (search,
+  chart pick, sort, the blocked box) on the clipboard as TSV + HTML through a `copy`
+  event (`navigator.clipboard` fallback); CSV saves a UTF-8 (BOM) file via a Blob,
+  named from the section and panel title, formula-looking cells prefixed `'`. No
+  network, so it works offline. "Status Summary" cells wrap (`_WRAP_COLUMNS`).
 - **Report periods in the exports** (`exporter.period_population`, `report_views`): both
   renderers build every report from `all_time_where` (filters minus the period). Dated
   headline tiles and trends read the **whole** category windowed by their own dates (as

@@ -169,13 +169,13 @@ h4.sub {{ font-size: .95rem; margin: 1rem 0 .4rem; color: var(--ink); }}
 .opt-toggle:focus-visible + .opt-label {{ outline: 2px solid var(--primary);
                                           outline-offset: 3px; border-radius: 4px; }}
 
-/* The EOS programme summary: one checkbox, two pre-written sentences. */
-.prog-summary .sum-toggle {{
+/* The EOS programme summary: two checkboxes, four pre-written readings. */
+.prog-summary .sum-toggle, .prog-summary .sum-blk-toggle {{
   width: 1rem; height: 1rem; margin: 0 .55rem 0 0; vertical-align: -2px;
   accent-color: var(--primary); cursor: pointer;
 }}
 .prog-summary .sum-label {{ font-size: .88rem; font-weight: 600; cursor: pointer;
-                            user-select: none; }}
+                            user-select: none; margin-right: 1.4rem; }}
 .prog-summary .sum-text {{ font-size: 1.02rem; line-height: 1.5; margin: .8rem 0 .3rem; }}
 .prog-summary .sum-lines {{ margin: .4rem 0 .8rem 1.2rem; }}
 .prog-summary a.sum-num {{ color: var(--primary-dark); font-weight: 700;
@@ -187,6 +187,10 @@ h4.sub {{ font-size: .95rem; margin: 1rem 0 .4rem; color: var(--ink); }}
   border-left: 3px solid var(--warn); padding: .2rem 0 .2rem .6rem; margin: .2rem 0 .6rem; }}
 .sum-toggle:checked ~ .sum-eos {{ display: none; }}
 .sum-toggle:not(:checked) ~ .sum-all {{ display: none; }}
+.sum-blk-toggle:checked ~ .sum-nb {{ display: none; }}
+.sum-blk-toggle:not(:checked) ~ .sum-wb {{ display: none; }}
+/* Unticked, the blocked customers leave the panel of customers too. */
+.sum-blk-toggle:not(:checked) ~ details.acc tr[data-left-out] {{ display: none; }}
 
 .grid2 {{ display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 1rem; }}
 @media (max-width: 820px) {{ .grid2 {{ grid-template-columns: 1fr; }} }}
@@ -266,6 +270,19 @@ table.data td.cell-drill.picked {{ background: var(--primary); color: #fff;
 table.data td.blank {{ background: repeating-linear-gradient(
     -45deg, #FAFBFD, #FAFBFD 5px, #F2F4F8 5px, #F2F4F8 10px); }}
 table.data .fytot {{ background: #EAF3FC; font-weight: 700; }}
+/* Free text (Status Summary) wraps in a readable column instead of stretching
+   the table into one very long line. */
+table.data td.wrap {{ white-space: normal; min-width: 16rem; max-width: 34rem;
+                      line-height: 1.4; }}
+
+/* Copy / CSV on every table. */
+.tbl-actions {{ display: flex; justify-content: flex-end; gap: .35rem;
+                margin: 0 0 .35rem; }}
+.tools .tbl-actions {{ margin: 0; }}
+button.btn.tbl-btn {{ font-size: .74rem; padding: .16rem .55rem; color: var(--muted); }}
+button.btn.tbl-btn:hover {{ color: var(--primary-dark); }}
+button.btn.tbl-btn.done {{ border-color: var(--good); color: var(--good); }}
+button.btn.tbl-btn.fail {{ border-color: var(--bad); color: var(--bad); }}
 table.data thead th.fytot {{ background: #DCEAF8; color: var(--primary-dark); }}
 
 .tools {{ display: flex; gap: .5rem; align-items: center; margin: 0 0 .6rem;
@@ -341,7 +358,7 @@ footer.report-foot {{
 @media print {{
   body {{ background: #fff; }}
   .shell {{ display: block; padding: 0; }}
-  nav.toc, .tools, .toc-tools, button.btn {{ display: none !important; }}
+  nav.toc, .tools, .toc-tools, .tbl-actions, button.btn {{ display: none !important; }}
   .card.optional .opt-toggle {{ display: none; }}
   .card, .kpi, .report-head, .table-wrap {{ box-shadow: none; break-inside: avoid; }}
   section.report {{ break-before: page; }}
@@ -456,16 +473,22 @@ def script() -> str:
     if (!table) return;
     var body = table.tBodies[0];
     if (!body) return;
-    var st = slot(id), shown = 0;
+    var st = slot(id), shown = 0, total = 0;
+    // A table tied to a checkbox (the summary's "Include blocked accounts")
+    // drops its marked rows while the box is unticked.
+    var leanBox = document.getElementById(table.getAttribute('data-lean-toggle') || '');
+    var lean = !!(leanBox && !leanBox.checked);
     Array.prototype.forEach.call(body.rows, function (row) {
+      var out = lean && row.hasAttribute('data-left-out');
       var okBucket = !st.bucket || inBucket(row, st.bucket);
       var okQuery = !st.query || row.textContent.toLowerCase().indexOf(st.query) !== -1;
-      var hit = okBucket && okQuery;
+      var hit = okBucket && okQuery && !out;
       row.style.display = hit ? '' : 'none';
       if (hit) shown++;
+      if (!out) total++;
     });
     var count = document.querySelector('[data-count-for="' + id + '"]');
-    if (count) count.textContent = shown + ' of ' + body.rows.length + ' rows';
+    if (count) count.textContent = shown + ' of ' + total + ' rows';
     var note = document.querySelector('[data-drill-note="' + id + '"]');
     if (note) {
       var shown = (st.labels && st.labels[st.bucket]) || st.bucket;
@@ -556,6 +579,18 @@ def script() -> str:
     });
   });
 
+  // A checkbox that changes which numbers are shown (the summary's two boxes)
+  // clears the selection they opened: the number picked is no longer on screen.
+  document.querySelectorAll('input[data-resets]').forEach(function (box) {
+    box.addEventListener('change', function () {
+      var id = box.getAttribute('data-resets');
+      slot(id).bucket = null;
+      document.querySelectorAll('[data-pick-for="' + id + '"].picked')
+        .forEach(function (el) { el.classList.remove('picked'); });
+      apply(id);
+    });
+  });
+
   // ---- matrix cells ------------------------------------------------------
   // A number in the monthly programme matrix opens the accounts that make it
   // up: its table names the accounts panel, the cell carries its bucket
@@ -593,6 +628,137 @@ def script() -> str:
     input.addEventListener('input', function () {
       slot(id).query = input.value.toLowerCase();
       apply(id);
+    });
+  });
+
+  // ---- copy / CSV ---------------------------------------------------------
+  // Every table carries both buttons.  They take the rows as shown — a search,
+  // a chart selection, a sort or the summary's blocked box carries through —
+  // and need nothing from a network: the clipboard and a Blob are the
+  // browser's own, so this works in a file opened offline.
+  function text(cell) {
+    return (cell.textContent || '').replace(/\\s+/g, ' ').trim();
+  }
+  function shownRows(table) {
+    var body = table.tBodies[0];
+    if (!body) return [];
+    return Array.prototype.filter.call(body.rows, function (row) {
+      return row.style.display !== 'none'
+        && window.getComputedStyle(row).display !== 'none';
+    });
+  }
+  function grid(table) {
+    var out = [];
+    if (table.tHead && table.tHead.rows.length) {
+      out.push(Array.prototype.map.call(table.tHead.rows[0].cells, text));
+    }
+    shownRows(table).forEach(function (row) {
+      out.push(Array.prototype.map.call(row.cells, text));
+    });
+    return out;
+  }
+  function escHtml(v) {
+    return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  // A cell a spreadsheet would read as a formula ("=…", "+…", "@…", "- Met
+  // with…") is written as text, so opening the CSV runs nothing.
+  function csvCell(v) {
+    v = String(v);
+    if (/^[=+@\\t\\r]/.test(v) || /^-(?![\\d.])/.test(v)) v = "'" + v;
+    return /[",\\r\\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  }
+  function titleOf(table) {
+    var parts = [];
+    var section = table.closest('section.report');
+    var head = section && section.querySelector('.report-head h2');
+    if (head) parts.push(text(head));
+    var box = table.closest('details');
+    var summary = box && box.querySelector('summary');
+    if (summary) {
+      var copy = summary.cloneNode(true);
+      copy.querySelectorAll('.badge').forEach(function (b) { b.remove(); });
+      parts.push(text(copy));
+    } else {
+      var card = table.closest('.card');
+      var title = card && card.querySelector('h3.block, h4.sub');
+      if (title) parts.push(text(title));
+    }
+    return parts.join(' - ') || table.id;
+  }
+  function flash(btn, label, ok) {
+    var was = btn.getAttribute('data-label') || btn.textContent;
+    btn.setAttribute('data-label', was);
+    btn.textContent = label;
+    btn.classList.add(ok ? 'done' : 'fail');
+    clearTimeout(btn._flash);
+    btn._flash = setTimeout(function () {
+      btn.textContent = was;
+      btn.classList.remove('done', 'fail');
+    }, 1600);
+  }
+  function copyTable(table, btn) {
+    var rows = grid(table);
+    var tsv = rows.map(function (r) { return r.join('\\t'); }).join('\\r\\n');
+    var html = '<table>' + rows.map(function (r, i) {
+      var tag = i === 0 ? 'th' : 'td';
+      return '<tr>' + r.map(function (v) {
+        return '<' + tag + '>' + escHtml(v) + '</' + tag + '>';
+      }).join('') + '</tr>';
+    }).join('') + '</table>';
+    var n = Math.max(rows.length - 1, 0);
+    function done() { flash(btn, 'Copied ' + n + ' row' + (n === 1 ? '' : 's'), true); }
+    function failed() { flash(btn, 'Copy failed', false); }
+    // The copy event carries both flavours, so the table pastes into Excel
+    // or an email as a table and into a text editor as tab-separated text.
+    var ok = false;
+    function onCopy(ev) {
+      ev.clipboardData.setData('text/plain', tsv);
+      ev.clipboardData.setData('text/html', html);
+      ev.preventDefault();
+      ok = true;
+    }
+    document.addEventListener('copy', onCopy);
+    try { document.execCommand('copy'); } catch (e) { ok = false; }
+    document.removeEventListener('copy', onCopy);
+    if (ok) { done(); return; }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(tsv).then(done, failed);
+    } else {
+      failed();
+    }
+  }
+  function csvTable(table, btn) {
+    var rows = grid(table);
+    var csv = rows.map(function (r) { return r.map(csvCell).join(','); })
+      .join('\\r\\n');
+    var name = titleOf(table).replace(/[^A-Za-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '').slice(0, 90) || 'table';
+    // The byte-order mark makes Excel read the file as UTF-8 ("—", "·").
+    var blob = new Blob(['\\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+    if (window.navigator && window.navigator.msSaveOrOpenBlob) {
+      window.navigator.msSaveOrOpenBlob(blob, name + '.csv');
+    } else {
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url; a.download = name + '.csv'; a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 0);
+    }
+    var n = Math.max(rows.length - 1, 0);
+    flash(btn, 'Saved ' + n + ' row' + (n === 1 ? '' : 's'), true);
+  }
+  document.querySelectorAll('[data-copy-table]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var table = document.getElementById(btn.getAttribute('data-copy-table'));
+      if (table) copyTable(table, btn);
+    });
+  });
+  document.querySelectorAll('[data-csv-table]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var table = document.getElementById(btn.getAttribute('data-csv-table'));
+      if (table) csvTable(table, btn);
     });
   });
 

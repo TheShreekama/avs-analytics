@@ -3419,7 +3419,9 @@ def _phase_frame(rows):
     })
 
 
-def test_each_account_takes_one_phase_by_its_waves_stages():
+def test_each_account_takes_one_phase_from_the_fdo_migration_status_alone():
+    """The summary reads the FDO export's Migration Status and nothing else —
+    not the tracking sheet's status written over it, and not Current State."""
     from app.core import statuses as st_
     fdo, sheet = st_.SOURCE_FDO, st_.SOURCE_TRACKER
     nan = float("nan")
@@ -3432,20 +3434,45 @@ def test_each_account_takes_one_phase_by_its_waves_stages():
         ("F", 1, 7, "Completed", fdo, "Done", st_.COMPLETED),
         ("G", 1, 2, "Executing Pre-requisites", fdo, "On Track", st_.IN_FLIGHT),
         ("G", 2, 4, "Executing Migration", fdo, "On Track", st_.IN_FLIGHT),  # 4 beats 2
-        ("H", 1, nan, "Sign-off Pending", sheet, "On Track", st_.IN_FLIGHT),
-        ("I", 1, nan, "Ready for Migration", sheet, "On Track", st_.IN_FLIGHT),
-        ("J", 1, nan, "Kick-Off Awaited", sheet, "On Track", st_.IN_FLIGHT),
         ("K", 1, 5, "Deferred By Customer", fdo, "On Track", st_.DEFERRED),
+        ("L", 1, 6, "Cancelled / Archived", fdo, "Blocked - Customer", st_.CANCELLED),
+        # A latest wave completed while an earlier one is still at a stage:
+        # the FDO export says work is still in planning.
+        ("M", 1, 2, "Executing Pre-requisites", fdo, "Waiting", st_.IN_FLIGHT),
+        ("M", 2, 7, "Completed", fdo, "Done", st_.COMPLETED),
+        ("N", 1, nan, "Unknown", fdo, "On Track", st_.UNKNOWN),
+        ("O", 1, nan, "On Hold", fdo, "On Track", st_.UNKNOWN),
+        # The tracking sheet wrote over these two; the export's value decides.
+        ("P", 1, nan, "Executing Migration", sheet, "On Track", st_.IN_FLIGHT),
+        ("Q", 1, nan, "On Hold", sheet, "Blocked", st_.ON_HOLD),
     ])
+    frame["migration_status"] = frame["migration_status"].mask(
+        frame["tpid_key"].eq("N"))
+    frame["fdo_migration_status"] = frame["migration_status"]
+    frame.loc[frame["tpid_key"].eq("P"), "fdo_migration_status"] = \
+        "2 - Executing Pre-Requisites"
+    frame.loc[frame["tpid_key"].eq("Q"), "fdo_migration_status"] = \
+        "6 - Cancelled / Archived"
     phase = kpi.account_phase(frame).to_dict()
-    assert phase["A"] == phase["B"] == phase["G"] == phase["H"] == kpi.PHASE_IN_PROGRESS
-    # Stage 1 (and the sheet's Kick-Off Awaited) is planning too.
-    assert (phase["C"] == phase["D"] == phase["I"] == phase["E"] == phase["J"]
+    assert phase["A"] == phase["B"] == phase["G"] == kpi.PHASE_IN_PROGRESS
+    assert (phase["C"] == phase["D"] == phase["E"] == phase["M"] == phase["P"]
             == kpi.PHASE_PLANNING)
     assert phase["F"] == kpi.PHASE_COMPLETED
     assert pd.isna(phase["K"])
-    # …and the detail names everyone the three phases do not cover.
-    assert kpi.account_phase_detail(frame)["K"] == kpi.REST_DEFERRED
+    # …and the detail names everyone the three phases do not cover, by the
+    # latest wave's FDO Migration Status — in its own words when it is neither.
+    detail = kpi.account_phase_detail(frame).to_dict()
+    assert detail["K"] == kpi.REST_DEFERRED
+    assert detail["L"] == detail["Q"] == kpi.REST_CANCELLED
+    assert detail["N"] == kpi.REST_NOT_STATED
+    assert detail["O"] == "On Hold"
+    # Blocked is a Current State, not a phase: flagged, never reclassified.
+    status = kpi.programme_status(frame)
+    assert set(status.index[status["blocked"]]) == {"B", "L", "Q"}
+    assert status.loc["L", "blocked_state"] == "Blocked - Customer"
+    assert kpi.rest_order(["Status not stated", "On Hold", "Cancelled",
+                           "Deferred"]) == ["Deferred", "Cancelled", "On Hold",
+                                            "Status not stated"]
 
 
 def test_azure_native_customers_count_from_their_first_nomination_in_july_2025():
@@ -3465,43 +3492,48 @@ def test_the_eos_report_opens_on_the_programme_summary():
     eos = segments.population(ctx.fact, segments.CAT_EOS_ALL)
     native = segments.population(ctx.fact, segments.CAT_AVS_NATIVE)
     s = _exp().programme_summary(eos, native)
-    assert (s.eos.customers, s.eos.completed, s.eos.in_progress, s.eos.planning) == (5, 1, 2, 1)
+    assert (s.eos.customers, s.eos.completed, s.eos.in_progress, s.eos.planning) == (5, 1, 0, 3)
     assert (s.gen1, s.gen2, s.native) == (3, 2, 5)
     # Ticked, the native customers are added in — each customer once.
     assert s.with_native.customers == 10
     eos_line = _exp().summary_sentence(s.eos)
     all_line = _exp().summary_sentence(s.with_native)
+    # A flat list: the phases, then everyone else by FDO Migration Status, and
+    # the blocked customers named beside it (they are in the list already).
     assert eos_line == ("To date, 5 customers are participating in factory-driven "
-                        "migrations, including 1 completed migration, 2 currently in "
-                        "progress and 1 in planning; the other 1 is on hold.")
+                        "migrations: 1 completed, 0 in progress, 3 in planning, "
+                        "1 cancelled (1 of them blocked).")
     # Gen1 to Azure Native is listed only once its customers are included, and
     # every line carries its own completed / in progress / in planning split.
     lines = _exp().summary_lines(s, True)
     assert lines == [
-        "3 customers from Gen1 to Gen1 — 0 completed, 2 in progress, 0 in planning; "
-        "the other 1 is on hold",
+        "3 customers from Gen1 to Gen1 — 0 completed, 0 in progress, 2 in planning, "
+        "1 cancelled (1 of them blocked)",
         "2 customers from Gen1 to Gen2 — 1 completed, 0 in progress, 1 in planning",
         "5 customers from Gen1 to Azure Native — 3 completed, 0 in progress, 1 in "
-        "planning; the other 1 is blocked"]
+        "planning, 1 deferred (1 of them blocked)"]
     assert not any("Azure Native" in line for line in _exp().summary_lines(s))
     # The EOS lines' splits add up to the sentence above them.
     for field in ("completed", "in_progress", "planning"):
         assert (getattr(s.gen1_split, field) + getattr(s.gen2_split, field)
                 + getattr(s.no_generation_split, field)) == getattr(s.eos, field)
 
-    # The HTML report carries both readings behind the reader's own checkbox,
-    # unticked, ahead of the executive summary — every number a link.
+    # The HTML report carries every reading behind the reader's own two
+    # checkboxes — Azure Native unticked, blocked accounts ticked — ahead of
+    # the executive summary, every number a link.
     html = _main(html_report.build_html_report(ctx, reports=["eos"]).decode())
     import re
     plain = re.sub(r"<[^>]+>", "", html)
     assert eos_line in plain and all_line in plain
-    assert 'id="sum-native">' in html
+    assert re.search(r'id="sum-native"[^>]*>', html).group(0).count("checked") == 0
+    assert "checked" in re.search(r'id="sum-blocked"[^>]*>', html).group(0)
     assert html.index("prog-summary") < html.index("kpis-eos")
     # The PDF prints the EOS reading first, the other underneath, before the
     # executive summary.
     pdf = _pdf_text(ctx, reports=["eos"], drilldown=False)
     assert "Programme summary" in pdf and eos_line in pdf
     assert "With the Azure Native customers added:" in pdf
+    assert "Leaving out the 1 customer with a blocked wave:" in pdf
     eos_part = pdf.split("EOS Migrations", 2)[-1]
     assert eos_part.index(eos_line) < eos_part.index("Executive summary")
     # Only the EOS report opens this way.
@@ -3831,16 +3863,108 @@ def test_every_summary_line_adds_up_and_each_number_opens_its_customers():
     ctx = _sample_with_sheet()
     s = _exp().programme_summary(segments.population(ctx.fact, segments.CAT_EOS_ALL),
                                  segments.population(ctx.fact, segments.CAT_AVS_NATIVE))
-    for t in (s.eos, s.with_native, s.gen1_split, s.gen2_split, s.native_split):
+    lean = s.reading(False)
+    for t in (s.eos, s.with_native, s.gen1_split, s.gen2_split, s.native_split,
+              lean.eos, lean.with_native, lean.gen1_split, lean.native_split):
         assert t.completed + t.in_progress + t.planning + t.others == t.customers
     rows = s.rows
-    # Each bucket names exactly the customers its number counts.
+    # Each bucket names exactly the customers its number counts — in both
+    # readings, the one without blocked accounts carrying its own scopes.
     for bucket, expected in (("eos:total", s.eos.customers), ("all:total", s.with_native.customers),
-                             ("gen1:total", s.gen1), ("gen1:on_hold", 1),
-                             ("native:blocked", 1), ("all:others", s.with_native.others)):
+                             ("gen1:total", s.gen1), ("gen1:cancelled", 1),
+                             ("native:deferred", 1), ("native:blocked_wave", 1),
+                             ("all:blocked_wave", s.with_native.blocked),
+                             ("eos-nb:total", lean.eos.customers),
+                             ("all-nb:total", lean.with_native.customers),
+                             ("all-nb:blocked_wave", 0)):
         hit = rows[[bucket in b.split("|") for b in rows["_buckets"]]]
         assert hit["tpid_key"].nunique() == expected, bucket
     doc = _main(html_report.build_html_report(ctx, reports=["eos"]).decode())
     picks = re.findall(r'class="sum-num"[^>]*data-pick-for="([^"]+)" data-pick="([^"]+)"', doc)
-    assert ("sum-acc", "gen1:on_hold") in picks and ("sum-acc", "all:others") in picks
+    assert ("sum-acc", "gen1:cancelled") in picks and ("sum-acc", "all:blocked_wave") in picks
+    assert ("sum-acc", "eos-nb:total") in picks
     assert 'id="sum-acc"' in doc
+
+
+def test_the_summary_can_leave_the_blocked_accounts_out():
+    """"Include blocked accounts", ticked by default: unticked, every customer
+    with a wave the FDO export calls Blocked leaves every number and line."""
+    import re
+    from app.core import html_report
+    ctx = _sample_with_sheet()
+    s = _exp().programme_summary(segments.population(ctx.fact, segments.CAT_EOS_ALL),
+                                 segments.population(ctx.fact, segments.CAT_AVS_NATIVE))
+    lean = s.reading(False)
+    assert s.reading(True) is s
+    assert (s.blocked_eos, s.blocked_all) == (1, 2)
+    assert (s.eos.blocked, s.with_native.blocked) == (1, 2)
+    assert lean.eos.customers == s.eos.customers - 1
+    assert lean.with_native.customers == s.with_native.customers - 2
+    assert lean.eos.blocked == lean.with_native.blocked == 0
+    assert "blocked" not in _exp().summary_sentence(lean.with_native)
+    # The customers it leaves out are the ones the FDO export calls blocked.
+    left = set(s.rows.loc[s.rows["_left_out"], "tpid_key"])
+    assert left == {"645306", "905077"}
+    assert "left out" in _exp().summary_note(False, False)
+    # In the HTML, those rows are marked so the unticked box hides them too.
+    doc = _main(html_report.build_html_report(ctx, reports=["eos"]).decode())
+    panel = doc.split('id="sum-acc"', 1)[1].split("</table>", 1)[0]
+    assert panel.count("data-left-out") == 2
+    assert 'data-lean-toggle="sum-blocked"' in doc
+    assert re.search(r'<p class="sum-text sum-eos sum-nb">', doc)
+
+
+def test_the_status_summary_comes_from_the_blocked_wave():
+    """The blocked wave's Status Summary says why; the latest wave's may not."""
+    frame = pd.DataFrame({
+        "tpid_key": ["a", "a", "a", "b", "b"], "tpid": ["a", "a", "a", "b", "b"],
+        "wave_num": [1, 2, 3, 1, 2],
+        "fdo_current_state": ["Done", "Blocked - Customer", "On Track",
+                              "On Track", "On Track"],
+        "status_summary": ["Old note", "Waiting on the customer's firewall change",
+                           "Kick-off held", "First note", None],
+    })
+    got = kpi.status_summary_by_account(frame)
+    assert got["a"] == "Waiting on the customer's firewall change"
+    # No blocked wave: the latest Status Summary anyone wrote.
+    assert got["b"] == "First note"
+    # The customers behind the summary and the blocked section both carry it.
+    assert "status_summary" in _exp().SUMMARY_COLUMNS
+    assert "status_summary" in kpi.BLOCKED_DRILLDOWN_COLUMNS
+    ctx = _sample_with_sheet()
+    eos = segments.population(ctx.fact, segments.CAT_EOS_ALL)
+    _summary, rows = kpi.blocked_accounts(eos)
+    expected = kpi.status_summary_by_account(eos)
+    for key, text in zip(rows["tpid_key"], rows["status_summary"]):
+        assert text == expected[key]
+
+
+def test_every_table_in_the_html_report_can_be_copied_and_downloaded():
+    """One click copies a table, another saves it as CSV — every table."""
+    import re
+    from app.core import html_report, html_style
+    ctx = _sample_with_sheet()
+    doc = _main(html_report.build_html_report(
+        ctx, reports=["avs", "eos", "native"],
+        sections=_exp().ReportSections(insights=True, methodology=True)).decode())
+    tables = re.findall(r'<table class="data[^"]*" id="([^"]+)"', doc)
+    copies = re.findall(r'data-copy-table="([^"]+)"', doc)
+    csvs = re.findall(r'data-csv-table="([^"]+)"', doc)
+    assert tables and sorted(tables) == sorted(copies) == sorted(csvs)
+    script = html_style.script()
+    for needle in ("function copyTable", "function csvTable", "text/html",
+                   "text/csv", "createObjectURL"):
+        assert needle in script, needle
+
+
+def test_the_programme_summary_rule_is_documented_as_implemented():
+    """The methodology names the very stages the code reads, and its source."""
+    text = " ".join(next(
+        d.body for _h, items in glossary.REPORT_METHODOLOGY for d in items
+        if isinstance(d, glossary.Definition) and d.title == "Programme summary"))
+    for code in kpi.IN_PROGRESS_CODES + kpi.PLANNING_CODES:
+        assert f"**{code} - " in text, code
+    for needle in ("**7 - Completed**", "FDO export", "**Migration Status** alone",
+                   "**Current State**", "Include blocked accounts"):
+        assert needle in text, needle
+    assert "FDO export" in glossary.PROGRAMME_SUMMARY

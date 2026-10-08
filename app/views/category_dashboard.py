@@ -129,17 +129,23 @@ def _programme_summary(ctx, fact: pd.DataFrame, key: str) -> None:
     section(exporter.SUMMARY_TITLE, help=glossary.PROGRAMME_SUMMARY)
     summary = exporter.programme_summary(
         fact, segments.population(ctx.fact, segments.CAT_AVS_NATIVE))
-    include = st.checkbox(exporter.SUMMARY_NATIVE_LABEL, value=False,
-                          key=f"{key}_summary_native")
-    st.markdown(f"**{exporter.summary_sentence(summary.totals(include))}**")
+    left, right = st.columns(2)
+    with left:
+        include = st.checkbox(exporter.SUMMARY_NATIVE_LABEL, value=False,
+                              key=f"{key}_summary_native")
+    with right:
+        blocked = st.checkbox(exporter.SUMMARY_BLOCKED_LABEL, value=True,
+                              key=f"{key}_summary_blocked")
+    reading = summary.reading(blocked)
+    st.markdown(f"**{exporter.summary_sentence(reading.totals(include))}**")
     st.markdown("\n".join(f"- {line}"
-                          for line in exporter.summary_lines(summary, include)))
+                          for line in exporter.summary_lines(reading, include)))
     if include:
-        overlap = exporter.summary_overlap_note(summary)
+        overlap = exporter.summary_overlap_note(reading)
         if overlap:
             st.caption(overlap)
         st.caption("⚠︎ " + exporter.NATIVE_CAVEAT)
-    st.caption(exporter.summary_note(include))
+    st.caption(exporter.summary_note(include, blocked))
 
 # --------------------------------------------------------------------------- #
 def _generation_matrix(ctx, fact: pd.DataFrame, key: str) -> None:
