@@ -816,7 +816,9 @@ REPORT_METHODOLOGY: tuple[tuple[str, tuple], ...] = (
             "Each customer takes the first of those three that holds; "
             "**Current State** plays no part, and stage 1, deferred, on hold "
             "and cancelled accounts take none.",
-            "Gen1 to Gen1 and Gen1 to Gen2 count the customers by generation.",
+            "Gen1 to Gen1 and Gen1 to Gen2 count the customers by generation, "
+            "each line with its own completed, in progress and in planning "
+            "split.",
             "Gen1 to Azure Native counts customers whose **Primary Migration "
             "Path** contains **(From AVS)**, whose first **Nom. Approval "
             "Date**, else **Nom. Created Date**, is 1 July 2025 or later and, "
