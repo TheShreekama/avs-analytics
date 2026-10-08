@@ -1789,16 +1789,17 @@ PHASE_IN_PROGRESS = "In progress"
 PHASE_PLANNING = "In planning"
 
 #: FDO Migration Status codes, by phase: stage 4 "Executing Migration" is in
-#: progress; stage 2 "Executing Pre-requisites" and stage 3 "Finalize Scope" are
-#: planning.  Stage 1 is neither.
+#: progress; stage 1 "Validating Commitment & Initial Scope", stage 2
+#: "Executing Pre-requisites" and stage 3 "Finalize Scope" are planning.
 IN_PROGRESS_CODES = (4,)
-PLANNING_CODES = (2, 3)
+PLANNING_CODES = (1, 2, 3)
 #: The EOS tracking sheet's own statuses, by the same phases.  Its stages carry
 #: no number, so they are read by name: "Executing Migration" is the export's
 #: stage 4 and "Sign-off Pending" follows it (the move is done, the sign-off is
 #: not); "Planning & Prerequisites" and "Ready for Migration" come before it.
 IN_PROGRESS_SHEET_STATUSES = ("Executing Migration", "Sign-off Pending")
-PLANNING_SHEET_STATUSES = ("Planning & Prerequisites", "Ready for Migration")
+PLANNING_SHEET_STATUSES = ("Kick-Off Awaited", "Planning & Prerequisites",
+                           "Ready for Migration")
 
 
 def wave_phase(df: pd.DataFrame) -> pd.Series:
@@ -1834,11 +1835,11 @@ def account_phase(fact: pd.DataFrame) -> pd.Series:
     1. **Completed** — the account state is Completed (:func:`account_state`).
     2. **In progress** — any wave is at stage 4 (or the sheet's "Executing
        Migration" / "Sign-off Pending").
-    3. **In planning** — any wave is at stage 2 or 3 (or the sheet's
-       "Planning & Prerequisites" / "Ready for Migration").
+    3. **In planning** — any wave is at stage 1, 2 or 3 (or the sheet's
+       "Kick-Off Awaited", "Planning & Prerequisites" / "Ready for Migration").
 
     Current State plays no part: a Blocked wave at stage 4 is still in progress.
-    Everything else (stage 1, deferred, on hold, cancelled) has no phase.
+    Everything else (deferred, on hold, cancelled, no stage) has no phase.
     """
     if fact.empty:
         return pd.Series(dtype="object")
@@ -1854,6 +1855,45 @@ def account_phase(fact: pd.DataFrame) -> pd.Series:
     out[out.index.isin(planning)] = PHASE_PLANNING
     out[out.index.isin(progress)] = PHASE_IN_PROGRESS
     out[out.index.isin(done)] = PHASE_COMPLETED
+    return out
+
+
+#: Where a customer with none of the three phases stands, first match wins —
+#: so the summary's numbers always add up to its customer count.
+REST_BLOCKED = "Blocked"
+REST_DEFERRED = "Deferred"
+REST_ON_HOLD = "On hold"
+REST_CANCELLED = "Cancelled"
+REST_NOT_STATED = "Status not stated"
+REST_ORDER = (REST_BLOCKED, REST_DEFERRED, REST_ON_HOLD, REST_CANCELLED,
+              REST_NOT_STATED)
+_REST_BY_STATE = {STATE_BLOCKED: REST_BLOCKED, STATE_DEFERRED: REST_DEFERRED,
+                  STATE_ON_HOLD: REST_ON_HOLD, STATE_CANCELLED: REST_CANCELLED}
+
+
+def account_phase_detail(fact: pd.DataFrame) -> pd.Series:
+    """Per account (indexed by ``tpid_key``): :func:`account_phase`, and for an
+    account with none of the three phases, where it stands instead:
+
+    4. **Blocked / Deferred / On hold / Cancelled** — its account state
+       (:func:`account_state`).
+    5. **Status not stated** — anything else.
+
+    Every account gets exactly one answer, so the phases and the rest add up
+    to the customer count.
+    """
+    phase = account_phase(fact)
+    if phase.empty:
+        return phase
+    out = phase.astype("object").copy()
+    rest = out.isna().to_numpy()
+    if not rest.any():
+        return out
+    lasts = latest_wave(fact)
+    state = pd.Series(account_state(fact, lasts).to_numpy(),
+                      index=_keys(lasts).to_numpy())
+    for key in out.index[rest]:
+        out[key] = _REST_BY_STATE.get(state.get(key), REST_NOT_STATED)
     return out
 
 

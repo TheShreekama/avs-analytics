@@ -225,8 +225,16 @@ under Streamlit's AppTest in both counting modes.
   in planning" + Gen1→Gen1 / Gen1→Gen2 / Gen1→Azure Native lines. Per account
   (`kpi.account_phase`, first match): Completed = `account_state` Completed; In progress =
   any in-flight wave at stage 4 (sheet: Executing Migration / Sign-off Pending); In
-  planning = stage 2 or 3 (sheet: Planning & Prerequisites / Ready for Migration);
-  Current State plays no part. X = every EOS (All) account, so X ≥ Y+Z+U. Azure Native =
+  planning = stage **1**, 2 or 3 (sheet: Kick-Off Awaited / Planning & Prerequisites /
+  Ready for Migration); Current State plays no part. **Everyone else is named**
+  (`kpi.account_phase_detail`, `kpi.REST_ORDER`: blocked / deferred / on hold /
+  cancelled by account state, else status not stated) — "; the other 4: 2 blocked, 1
+  deferred and 1 on hold" — so the sentence and **every line add up** to their
+  customers (`SummaryTotals.rest`). **In the HTML every number is clickable**
+  (`summary_sentence(…, num=…)` / `summary_lines(…, num=…)` render numbers through a
+  callback; `ProgrammeSummary.rows` — one row per customer per line, `_buckets` like
+  `gen1:blocked|eos:blocked|all:others` — feeds the "Customers behind these numbers"
+  panel; the script's generic `[data-pick-for]` handler filters it). Azure Native =
   `avs_native` accounts whose first `cleaning.nomination_date` ≥ 1 Jul 2025
   (`kpi.nominated_since`, `exporter.summary_native_start` = `EOS_MATRIX_START_FY`).
   **Every line carries its own split** — "23 customers from Gen1 to Gen1 — 10 completed,

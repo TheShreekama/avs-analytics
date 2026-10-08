@@ -178,6 +178,11 @@ h4.sub {{ font-size: .95rem; margin: 1rem 0 .4rem; color: var(--ink); }}
                             user-select: none; }}
 .prog-summary .sum-text {{ font-size: 1.02rem; line-height: 1.5; margin: .8rem 0 .3rem; }}
 .prog-summary .sum-lines {{ margin: .4rem 0 .8rem 1.2rem; }}
+.prog-summary a.sum-num {{ color: var(--primary-dark); font-weight: 700;
+  cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }}
+.prog-summary a.sum-num:hover {{ background: #DCEBFA; border-radius: 3px; }}
+.prog-summary a.sum-num.picked {{ background: var(--primary); color: #fff;
+  border-radius: 3px; padding: 0 .2rem; text-decoration: none; }}
 .prog-summary .sum-caveat {{ font-size: .84rem; color: var(--muted);
   border-left: 3px solid var(--warn); padding: .2rem 0 .2rem .6rem; margin: .2rem 0 .6rem; }}
 .sum-toggle:checked ~ .sum-eos {{ display: none; }}
@@ -463,8 +468,9 @@ def script() -> str:
     if (count) count.textContent = shown + ' of ' + body.rows.length + ' rows';
     var note = document.querySelector('[data-drill-note="' + id + '"]');
     if (note) {
+      var shown = (st.labels && st.labels[st.bucket]) || st.bucket;
       note.textContent = st.bucket
-        ? 'Filtered to ' + st.bucket + ' — click the same point again to clear.'
+        ? 'Filtered to ' + shown + ' — click the same one again to clear.'
         : (note.getAttribute('data-hint')
            || 'Click a point on the chart above to filter these rows.');
       note.classList.toggle('on', !!st.bucket);
@@ -517,9 +523,36 @@ def script() -> str:
     btn.addEventListener('click', function () {
       var id = btn.getAttribute('data-drill-clear');
       slot(id).bucket = null;
-      document.querySelectorAll('table[data-cell-drill="' + id + '"] td.picked')
+      document.querySelectorAll('table[data-cell-drill="' + id + '"] td.picked, '
+                                + '[data-pick-for="' + id + '"].picked')
         .forEach(function (td) { td.classList.remove('picked'); });
       apply(id);
+    });
+  });
+
+  // ---- clickable numbers (the programme summary) ------------------------------
+  // Any element naming a panel (data-pick-for) and a bucket (data-pick) filters
+  // that panel to its rows; a second click on the same number clears it.
+  document.querySelectorAll('[data-pick-for]').forEach(function (el) {
+    var id = el.getAttribute('data-pick-for');
+    function pick() {
+      var st = slot(id), value = el.getAttribute('data-pick');
+      st.labels = st.labels || {};
+      st.labels[value] = el.getAttribute('data-pick-label') || value;
+      st.bucket = st.bucket === value ? null : value;
+      document.querySelectorAll('[data-pick-for="' + id + '"].picked')
+        .forEach(function (other) { other.classList.remove('picked'); });
+      if (st.bucket) el.classList.add('picked');
+      var box = document.getElementById('acc-' + id);
+      if (box && st.bucket) {
+        box.open = true;
+        box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+      apply(id);
+    }
+    el.addEventListener('click', pick);
+    el.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pick(); }
     });
   });
 

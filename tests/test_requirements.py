@@ -3439,9 +3439,13 @@ def test_each_account_takes_one_phase_by_its_waves_stages():
     ])
     phase = kpi.account_phase(frame).to_dict()
     assert phase["A"] == phase["B"] == phase["G"] == phase["H"] == kpi.PHASE_IN_PROGRESS
-    assert phase["C"] == phase["D"] == phase["I"] == kpi.PHASE_PLANNING
+    # Stage 1 (and the sheet's Kick-Off Awaited) is planning too.
+    assert (phase["C"] == phase["D"] == phase["I"] == phase["E"] == phase["J"]
+            == kpi.PHASE_PLANNING)
     assert phase["F"] == kpi.PHASE_COMPLETED
-    assert pd.isna(phase["E"]) and pd.isna(phase["J"]) and pd.isna(phase["K"])
+    assert pd.isna(phase["K"])
+    # …and the detail names everyone the three phases do not cover.
+    assert kpi.account_phase_detail(frame)["K"] == kpi.REST_DEFERRED
 
 
 def test_azure_native_customers_count_from_their_first_nomination_in_july_2025():
@@ -3467,16 +3471,18 @@ def test_the_eos_report_opens_on_the_programme_summary():
     assert s.with_native.customers == 10
     eos_line = _exp().summary_sentence(s.eos)
     all_line = _exp().summary_sentence(s.with_native)
-    assert eos_line.startswith("To date, 5 customers are participating in "
-                               "factory-driven migrations, including 1 completed "
-                               "migration, 2 currently in progress and 1 in planning")
+    assert eos_line == ("To date, 5 customers are participating in factory-driven "
+                        "migrations, including 1 completed migration, 2 currently in "
+                        "progress and 1 in planning; the other 1 is on hold.")
     # Gen1 to Azure Native is listed only once its customers are included, and
     # every line carries its own completed / in progress / in planning split.
     lines = _exp().summary_lines(s, True)
     assert lines == [
-        "3 customers from Gen1 to Gen1 — 0 completed, 2 in progress, 0 in planning",
+        "3 customers from Gen1 to Gen1 — 0 completed, 2 in progress, 0 in planning; "
+        "the other 1 is on hold",
         "2 customers from Gen1 to Gen2 — 1 completed, 0 in progress, 1 in planning",
-        "5 customers from Gen1 to Azure Native — 3 completed, 0 in progress, 1 in planning"]
+        "5 customers from Gen1 to Azure Native — 3 completed, 0 in progress, 1 in "
+        "planning; the other 1 is blocked"]
     assert not any("Azure Native" in line for line in _exp().summary_lines(s))
     # The EOS lines' splits add up to the sentence above them.
     for field in ("completed", "in_progress", "planning"):
@@ -3484,9 +3490,11 @@ def test_the_eos_report_opens_on_the_programme_summary():
                 + getattr(s.no_generation_split, field)) == getattr(s.eos, field)
 
     # The HTML report carries both readings behind the reader's own checkbox,
-    # unticked, ahead of the executive summary.
+    # unticked, ahead of the executive summary — every number a link.
     html = _main(html_report.build_html_report(ctx, reports=["eos"]).decode())
-    assert esc(eos_line) in html and esc(all_line) in html
+    import re
+    plain = re.sub(r"<[^>]+>", "", html)
+    assert eos_line in plain and all_line in plain
     assert 'id="sum-native">' in html
     assert html.index("prog-summary") < html.index("kpis-eos")
     # The PDF prints the EOS reading first, the other underneath, before the
@@ -3815,3 +3823,24 @@ def test_the_methodology_is_in_a_report_only_when_asked_for(state_ctx):
     assert 'id="opt-methodology"' in asked
     assert "Methodology & Logic" in _pdf_text(state_ctx, reports=["avs"],
                                               drilldown=False, sections=on)
+
+
+def test_every_summary_line_adds_up_and_each_number_opens_its_customers():
+    import re
+    from app.core import html_report
+    ctx = _sample_with_sheet()
+    s = _exp().programme_summary(segments.population(ctx.fact, segments.CAT_EOS_ALL),
+                                 segments.population(ctx.fact, segments.CAT_AVS_NATIVE))
+    for t in (s.eos, s.with_native, s.gen1_split, s.gen2_split, s.native_split):
+        assert t.completed + t.in_progress + t.planning + t.others == t.customers
+    rows = s.rows
+    # Each bucket names exactly the customers its number counts.
+    for bucket, expected in (("eos:total", s.eos.customers), ("all:total", s.with_native.customers),
+                             ("gen1:total", s.gen1), ("gen1:on_hold", 1),
+                             ("native:blocked", 1), ("all:others", s.with_native.others)):
+        hit = rows[[bucket in b.split("|") for b in rows["_buckets"]]]
+        assert hit["tpid_key"].nunique() == expected, bucket
+    doc = _main(html_report.build_html_report(ctx, reports=["eos"]).decode())
+    picks = re.findall(r'class="sum-num"[^>]*data-pick-for="([^"]+)" data-pick="([^"]+)"', doc)
+    assert ("sum-acc", "gen1:on_hold") in picks and ("sum-acc", "all:others") in picks
+    assert 'id="sum-acc"' in doc
